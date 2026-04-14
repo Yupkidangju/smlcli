@@ -1,0 +1,74 @@
+# Changelog
+
+모든 중요한 변경 사항은 이 문서에 기록됩니다.
+이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
+
+## [0.1.0-beta.6] - 2026-04-15
+
+### Added
+- **[Phase 7] 지능형 하이브리드 컨텍스트 압축 엔진(Intelligent Compaction) 도입**
+- 동적인 `token` 임계값(Threshold) 추정기 및 UI 모니터링 메뉴 추가 (`/tokens`)
+- `/compact` 호출 또는 한계치 돌파 시, 배경 비동기 LLM 요약기(Summarizer)를 가동해 단순 버리기가 아닌 압축 축소화(Collapse) 적용
+- 프롬프트 엔지니어링 구조가 망각되지 않도록 방어하는 Pinned 메시지(보존 지시) 메타데이터 적용
+- TUI 오버레이를 사용한 사용자 설정 종합 대시보드 (`/config` 명령어 추가)
+- `/setting`, `/status`, `/mode`, `/clear` 등 TUI 및 모델 설정 제어를 위한 슬래시 커맨드 라우팅 파이프라인
+- **[UX]** Composer 내 `@` 타이핑 시 현재 디렉터리 파일의 Fuzzy Finder 팝업 인터페이스 연동 (Enter 시 파일 참조 주입)
+- **[UX]** Inspector 패널 상단에 상태 기반 동적 탭 네비게이션([Preview], [Diff], [Search], [Logs] 등) UI 도입
+- SessionState 내에 컨텍스트 임계값을 넘지 않도록 관리하는 토큰 예산 관리 모듈
+- 슬래시 커맨드 파싱 및 처리 엔진: 상하 방향키 조작 및 엔터로 빠른 선택 지원 (`/status`, `/mode`, `/help`, `/clear` 등)
+- 컨텍스트 압축기능 추가 (`/compact`): 토큰 과소비 방지를 위해 비동기 LLM 컨덴서를 사용하여 요약 압축 수행
+
+### Changed
+- **[안정성]** `file_ops.rs`의 `write_file_commit()`이 디스크 기록 중단 시 파일 파손을 막기 위해 원자적 `.tmp` 생성 후 `rename` 하는 방식으로 개선 (Atomic Write)
+- **[안정성]** `src/tools/shell.rs`의 셸 실행(`Command::output().await`) 구문에 30초 `tokio::time::timeout` 래퍼를 씌워 좀비 프로세스 방지
+- **[보안]** Safe Command 하드코딩 탈피: OS 호스트 감지(Windows/Linux 분리) 적용 및 `PersistedSettings` 내 커스텀 `safe_commands` 지원 병합
+
+### Removed
+- 단순 배열 하드 드롭으로 장기 문맥을 파괴하던 기존 `compact_context()` 레거시 함수를 `session.rs`에서 완전 제거
+
+### Fixed
+- **[CRITICAL]** Setup Wizard 종료 시 `AppState::settings`가 즉시 갱신되지 않아 재부팅 전까지 초기 설정을 인식하지 못하던 버그 수정
+- **[SECURITY]** `PermissionEngine` 도입으로 `ShellPolicy`, `FileWritePolicy` 정책 강제 적용 (SafeOnly, Deny, Ask 모드 분기 로직 구현)
+- **[UX]** Composer `!` 접두사를 통한 직접 셸 실행 기능 추가 및 보안 정책 연동
+
+### Changed
+- `spec.md` 파일 구조를 실제 구현된 모듈 구조(session.rs, permissions.rs 등)와 일치하도록 최신화
+- `PermissionToken` 무결성 검증 및 `ChatResponseOk` 내 자동 실행/승인 대기 로직 분리
+
+## [0.1.0-beta.5] - 2026-04-14
+
+### Added
+- 대화형 TUI 마법사 고도화: 시작 화면 없이 방향키 조작만으로 Provider, API Key, Model을 끊김없이 순차적으로 선택/저장하는 자동화 플로우 도입
+- API 모델 동적 호출(`reqwest` GET): 인증키 획득 직후 비동기 방식으로 Provider별 수백 개의 모델 리스트를 불러오고 스크롤 바인딩 제공
+- 멀티플랫폼 대화형 크로스 컴파일(Linux Native/MinGW-w64)을 지원하는 컴파일 보조 셸 스크립트(`build.sh`) 작성
+
+### Changed
+- `Cargo.toml` 패키지 명칭을 `temp_scaffold`에서 `smlcli`로 공식 변경
+
+## [0.1.0-beta.4] - 2026-04-14
+
+### Added
+- `OpenRouter` 및 `Gemini` 제공자와 실시간 통신하는 비동기 이벤트 루프(`Tokio` + `reqwest`)
+- 프롬프트에 정의된 JSON Tool 포맷을 자동 파싱하여 `PendingTool` 승인 상태로 변환하는 중계기
+- `Approve(y) / Deny(n)` 인터페이스 및 `Inspector` 동적 렌더링 레이아웃 (`Ctrl+I` 토글)
+- 파일 렌더링 변경 시 출력되는 Diff 비교에 Ratatui Span 기반 초록/빨강 색상 적용
+- `OS Keyring` 및 `XChaCha20`을 결합한 보안 설정 관리자(`Setup Wizard` 적용)
+
+### Changed
+- 모든 도구(Shell, File Ops) 실행부를 `pub(crate)`로 제한하여 외부 캡슐화 및 권한 토큰 분리
+- Windows 환경에서 셸 실행 시 `cmd` 대신 `powershell -Command` 사용으로 보안/호환성 증대
+
+### Security
+- 무결성 없는 도구 접근을 막기 위한 `PermissionToken` 지연 승인 패턴 도입
+
+### Deprecated
+- 없음
+
+### Removed
+- 없음
+
+### Fixed
+- 없음
+
+### Security
+- 프로젝트 전반에 걸친 보안 검토 가이드 등록 (`audit_roadmap.md`)
