@@ -46,7 +46,7 @@ Antigravity에 맞는 문서 우선·검증 우선 워크플로를 따르며, UI
 
 ### 2.1 Grounding Rationale
 
-이 프로젝트는 Linux와 Windows를 함께 지원해야 하고, 방향키·Enter·ESC 중심의 TUI 조작이 핵심이다. 현재 설계 방향은 `ratatui` 기반 UI, `crossterm` 기반 터미널 이벤트 처리, `tokio` + `reqwest` 기반 비동기 provider 호출, `keyring` 기반 secure store, `grep` + `ignore` 기반 검색, `similar` 기반 diff로 구성한다.
+이 프로젝트는 Linux와 Windows를 함께 지원해야 하고, 방향키·Enter·ESC 중심의 TUI 조작이 핵심이다. 현재 설계 방향은 `ratatui` 기반 UI, `crossterm` 기반 터미널 이벤트 처리, `tokio` + `reqwest` 기반 비동기 provider 호출, 파일 기반 암호화 저장소 (`~/.smlcli/`, ChaCha20Poly1305), `grep` + `ignore` 기반 검색, `similar` 기반 diff로 구성한다.
 
 ### 2.2 Stack Details
 
@@ -63,7 +63,7 @@ Rust stable, edition 2024
 `reqwest`
 
 **Secret Storage / Local Encryption**
-`keyring` + `chacha20poly1305`
+`chacha20poly1305` — 파일 기반 마스터 키 (`~/.smlcli/.master_key`) + API 키 암호화 (`~/.smlcli/config.toml`)
 
 **Search / Diff**
 `grep`, `ignore`, `similar`
@@ -274,7 +274,7 @@ smlcli export-log
 
 **Step 5. 저장**
 
-* 민감정보는 keyring에 저장
+* 민감정보는 ~/.smlcli/.master_key 기반 암호화로 저장
 * 일반 설정은 암호화된 로컬 파일에 저장
 * 저장 성공 전까지 메인 대화는 비활성화
 
@@ -519,19 +519,19 @@ pub enum NetworkPolicy {
 ### Step 5: Secret Store + Encrypted Config
 
 1. 앱 최초 실행 시 32-byte master secret 생성
-2. master secret를 keyring에 저장
+2. master secret를 ~/.smlcli/.master_key 파일에 저장
 
    * service: `smlcli`
    * username: `master-key`
 3. 일반 설정은 `settings.toml` 구조체로 직렬화
 4. 직렬화 결과를 XChaCha20Poly1305로 암호화
 5. 파일에는 `version`, `nonce`, `ciphertext`만 저장
-6. provider별 실제 API key는 keyring에 별도 저장
+6. provider별 실제 API key는 config.toml의 encrypted_keys에 암호화 저장
 7. config 파일에는 `api_key_alias`만 저장
 
 **Decryption Flow**
 
-1. 시작 시 keyring에서 master secret 조회
+1. 시작 시 ~/.smlcli/.master_key에서 master secret 조회
 2. 없으면 새로 생성
 3. 암호화 파일이 존재하면 복호화
 4. 실패 시 손상 감지 모드 진입
@@ -698,9 +698,9 @@ pub trait ProviderAdapter {
 
 ### 7.2 Secret Handling
 
-* API key는 keyring에 저장한다.
+* API key는 config.toml의 encrypted_keys에 암호화 저장한다.
 * 로컬 설정은 암호화 파일로만 저장한다.
-* master secret는 keyring에 있고, 파일에는 없다.
+* master secret는 ~/.smlcli/.master_key 파일에 저장한다.
 * 따라서 “비밀번호 없이” 사용하되, 평문 key 파일 저장은 허용하지 않는다.
 
 ### 7.3 Compatibility Assurance
@@ -742,7 +742,7 @@ pub trait ProviderAdapter {
 **Expertise**
 
 * **Domain**: terminal-native AI tooling, cross-platform CLI/TUI systems, secure local agent runtimes
-* **Tech Stack Mastery**: Rust, ratatui, crossterm, tokio, reqwest, keyring, grep, diff, secure config storage
+* **Tech Stack Mastery**: Rust, ratatui, crossterm, tokio, reqwest, chacha20poly1305, grep, diff, secure config storage
 * **Coding Style**: Defensive Coding, Clean Architecture, Test-Driven Integration, Documentation First
 
 **Instruction**
@@ -794,7 +794,7 @@ pub trait ProviderAdapter {
 
 ### Phase 2
 
-`/setting` wizard, keyring 저장, encrypted config
+`/setting` wizard, 파일 기반 암호화, config.toml
 
 ### Phase 3
 

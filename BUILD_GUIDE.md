@@ -10,7 +10,7 @@
 ## 프로젝트 빌드 과정
 
 ### 1. 의존성 설치 점검 (Linux 기준)
-키링(Keyring) 및 OpenSSL이 빌드 과정 중 C-바인딩을 요구할 수 있습니다.
+OpenSSL이 빌드 과정 중 C-바인딩을 요구할 수 있습니다. (keyring 의존성은 v0.1.0-beta.14에서 제거됨)
 ```bash
 sudo apt-get update
 sudo apt-get install pkg-config libssl-dev libc++-dev

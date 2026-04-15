@@ -14,7 +14,7 @@
 ### 주요 기능
 - **터미널 중심 TUI**: 마우스 없이 모든 동작을 3단계 이내에 키보드로 처리.
 - **다중 공급자 지원**: OpenRouter, Google (Gemini) 지원 (추후 확장 가능).
-- **강력한 보안 및 검증**: 파일 쓰기, 쉘 실행 검사, API 키의 로컬 OS Keyring 암호화 보관.
+- **강력한 보안 및 검증**: 파일 쓰기, 쉘 실행 검사, API 키의 로컬 파일 기반 암호화 보관 (`~/.smlcli/config.toml`, ChaCha20Poly1305).
 - **Inspect 패널과 Diff 플로우**: 작업 승인 전에 변경될 항목 가시성 확보.
 - **지능형 컨텍스트 압축**: 장기 세션 보호를 위한 백그라운드 LLM 요약기 및 토큰 한도 제어(`/tokens`).
 - **@ 로컬 데이터 참조**: `@` 퍼지 파인터를 통해 작업 파일 경로와 컨텍스트를 빠짐없이 LLM에 자동 인라인 삽입.
@@ -47,7 +47,7 @@
 ### Key Features
 - **Keyboard-first TUI**: Reach any primary action within 3 steps without a mouse.
 - **Multi-provider**: Supports OpenRouter and Google (Gemini) initially.
-- **Security-focused**: Local OS keyring storage for API keys, explicit approval flows for file writing and shell execution.
+- **Security-focused**: Local file-based encrypted storage for API keys (~/.smlcli/config.toml), explicit approval flows for file writing and shell execution.
 - **Inspector & Diff Previews**: High visibility of what is changing before you approve it.
 - **Intelligent Compaction**: LLM-based background summarization and `/tokens` budgeting to protect long sessions.
 - **@ Context Injection**: Fuzzy search your filesystem with `@` and inline file data safely without closing Composer.
@@ -76,7 +76,7 @@
 ### 主な機能
 - **ターミナルファースト TUI**: 全ての操作をキーボードだけで迅速に行えます。
 - **マルチプロバイダー対応**: OpenAI, Anthropic, Google, OpenRouter 等をサポート。
-- **堅牢なセキュリティ**: APIキーのローカル OS Keyring 保存、安全なコマンド実行ポリシー設定。
+- **堅牢なセキュリティ**: APIキーのローカル暗号化ファイル保存 (~/.smlcli/config.toml)、安全なコマンド実行ポリシー設定。
 - **インテリジェント コンテキスト圧縮**: 長期セッション保護のためのバックグラウンド LLM 要約と `/tokens` トークン監視。
 - **@ ローカルデータ参照**: `@` ファジー検索から該当ファイルのコンテンツをAIに自動挿入。
 
@@ -103,7 +103,7 @@
 ### 核心功能
 - **全鍵盤 TUI**: 告別滑鼠，快速進行所有主要指令操作。
 - **多平台模型**: 支援 OpenAI, Anthropic, Google, OpenRouter 等平台。
-- **高規格安全**: 使用本地 Keyring 搭配本機加密，保護 API 密鑰。提供完整變更預覽與權限驗證流程。
+- **高規格安全**: 使用本地檔案加密 (~/.smlcli/config.toml) 保護 API 密鑰。提供完整變更預覽與權限驗證流程。
 - **智能上下文壓縮**: 透過後台 LLM 摘要保護長對話串並支持動態代幣(Token)管理。
 - **@ 檔案快速參照**: 輸入 `@` 即可使用 Fuzzy Finder 將本地檔案匯入 AI 記憶。
 
@@ -130,7 +130,7 @@
 ### 核心功能
 - **纯键盘 TUI**: 所有核心操作可通过键盘在3步内完成。
 - **多供应商支持**: 兼容 OpenAI, Anthropic, Google, OpenRouter 及自定义节点。
-- **安全性优先**: 在执行写入和 Shell 执行前自动生成 Diff，并要求显式权限授权；密钥均存入系统 Keyring。
+- **安全性优先**: 在执行写入和 Shell 执行前自动生成 Diff，并要求显式权限授权；密钥存入本地加密文件 (~/.smlcli/config.toml)。
 - **智能上下文压缩**: 通过后台 LLM 摘要引擎保护长期会话防止记忆丢失，包含动态 Token 管理。
 - **@ 文件快速查询**: 输入 `@` 自动使用 Fuzzy Finder 将本地文件数据嵌入 AI 记忆上下文。
 
