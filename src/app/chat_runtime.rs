@@ -40,16 +40,17 @@ impl App {
         };
 
         let alias = format!("{}_key", settings.default_provider.to_lowercase());
-        let api_key = crate::infra::secret_store::get_api_key(&alias).map_err(|e| {
+        // [v0.1.0-beta.14] keyring → config.yaml 기반 API 키 조회
+        let api_key = crate::infra::secret_store::get_api_key(settings, &alias).map_err(|e| {
             format!(
-                "[Keyring Error] API 키를 불러올 수 없습니다: {}. /setting으로 재설정하세요.",
+                "[Config Error] API 키를 불러올 수 없습니다: {}. /setting으로 재설정하세요.",
                 e
             )
         })?;
 
         if api_key.is_empty() {
             return Err(format!(
-                "[Keyring Error] {} API 키가 비어있습니다. /setting으로 재설정하세요.",
+                "[Config Error] {} API 키가 비어있습니다. /setting으로 재설정하세요.",
                 settings.default_provider
             ));
         }
@@ -82,16 +83,17 @@ impl App {
         };
 
         let alias = format!("{}_key", provider_str.to_lowercase());
-        let api_key = crate::infra::secret_store::get_api_key(&alias).map_err(|e| {
+        // [v0.1.0-beta.14] keyring → config.yaml 기반 API 키 조회
+        let api_key = crate::infra::secret_store::get_api_key(settings, &alias).map_err(|e| {
             format!(
-                "[Keyring Error] {} API 키를 불러올 수 없습니다: {}. /setting으로 재설정하세요.",
+                "[Config Error] {} API 키를 불러올 수 없습니다: {}. /setting으로 재설정하세요.",
                 provider_str, e
             )
         })?;
 
         if api_key.is_empty() {
             return Err(format!(
-                "[Keyring Error] {} API 키가 비어있습니다. /setting으로 재설정하세요.",
+                "[Config Error] {} API 키가 비어있습니다. /setting으로 재설정하세요.",
                 provider_str
             ));
         }

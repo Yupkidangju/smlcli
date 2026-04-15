@@ -65,6 +65,7 @@ fn test_network_policy_deny_blocks_chat() {
         file_write_policy: FileWritePolicy::AlwaysAsk,
         network_policy: NetworkPolicy::Deny,
         safe_commands: None,
+        encrypted_keys: std::collections::HashMap::new(),
     };
 
     // Deny 상태 확인
@@ -152,6 +153,7 @@ fn test_permission_engine_denies_shell_on_deny_policy() {
         file_write_policy: FileWritePolicy::AlwaysAsk,
         network_policy: NetworkPolicy::ProviderOnly,
         safe_commands: None,
+        encrypted_keys: std::collections::HashMap::new(),
     };
 
     let tool = ToolCall::ExecShell {

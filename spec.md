@@ -5,12 +5,6 @@
 **Priority Over Code**
 문서 업데이트는 소스코드 작성보다 우선되는 절대 규칙이다. 구현 전과 구현 후 모두 `spec.md`, `audit_roadmap.md`, `implementation_summary.md`, `designs.md`를 먼저 갱신한다.
 
-**Git Allowlist**
-Git에는 `README.md`, `CHANGELOG.md`, `BUILD_GUIDE.md`만 업로드한다.
-
-**Local Update Enforcement**
-`.gitignore`에 의해 Git에 올라가지 않는 `spec.md` 및 내부 문서도 로컬에서는 항상 최신 상태를 유지한다.
-
 **Documentation First Enforcement**
 모든 기능 작업은 아래 순서를 반드시 따른다.
 

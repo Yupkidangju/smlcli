@@ -3,6 +3,25 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [0.1.0-beta.14] - 2026-04-16
+
+### Changed (아키텍처 변경 — Credential Store 재설계)
+- **keyring 크레이트 완전 제거**: OS 의존적 gnome-keyring/secret-service/mock 백엔드 → 크로스플랫폼 파일 기반으로 교체
+- **설정 저장 경로 변경**: `~/.config/smlcli/settings.enc` (암호화 바이너리) → `~/.smlcli/config.yaml` (YAML 평문)
+- **API 키 저장 방식**: keyring Entry → `config.yaml`의 `encrypted_keys` 맵에 ChaCha20Poly1305 암호화된 값으로 저장
+- **마스터 키 저장**: keyring → `~/.smlcli/.master_key` 파일 (hex 인코딩, chmod 600)
+- `save_config()` / `load_config()` 시그니처에서 `master_key` 파라미터 제거
+- `get_api_key()` / `save_api_key()` 시그니처에 `settings` 참조 추가
+- `PersistedSettings`에 `encrypted_keys: HashMap<String, String>` 필드 추가
+
+### Removed
+- `keyring` 크레이트 의존성 (+ `dbus`, `dbus-secret-service`, `libdbus-sys` 등 transitive)
+- `chacha20poly1305` 전체 파일 암호화 (API 키 암호화에만 계속 사용)
+
+### Added
+- `serde_yml` 의존성 (YAML 직렬화/역직렬화)
+- `secret_store::encrypt_value()` / `decrypt_value()` 유틸리티 함수
+
 ## [0.1.0-beta.13] - 2026-04-15
 
 ### Fixed (Critical — 실행 불가 버그)

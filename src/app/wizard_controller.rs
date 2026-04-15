@@ -85,7 +85,8 @@ impl App {
             Some(crate::domain::provider::ProviderKind::Google) => "Google".to_string(),
             _ => "OpenRouter".to_string(),
         };
-        let settings = crate::domain::settings::PersistedSettings {
+        // [v0.1.0-beta.14] encrypted_keys 필드 추가, keyring 제거
+        let mut settings = crate::domain::settings::PersistedSettings {
             version: 1,
             default_provider: provider_str,
             default_model,
@@ -93,30 +94,26 @@ impl App {
             file_write_policy: crate::domain::permissions::FileWritePolicy::AlwaysAsk,
             network_policy: crate::domain::permissions::NetworkPolicy::ProviderOnly,
             safe_commands: None,
+            encrypted_keys: std::collections::HashMap::new(),
         };
 
-        match crate::infra::secret_store::get_or_create_master_key() {
-            Ok(mk) => {
-                if !self.state.wizard.api_key_input.is_empty() {
-                    let key_alias = format!("{}_key", settings.default_provider.to_lowercase());
-                    if let Err(e) = crate::infra::secret_store::save_api_key(
-                        &key_alias,
-                        &self.state.wizard.api_key_input,
-                    ) {
-                        self.state.wizard.err_msg =
-                            Some(format!("Failed to save API key in Keyring: {}", e));
-                        return;
-                    }
-                }
-                if let Err(e) = crate::infra::config_store::save_config(&mk, &settings) {
-                    self.state.wizard.err_msg = Some(format!("Failed to save settings: {}", e));
-                    return;
-                }
-            }
-            Err(e) => {
-                self.state.wizard.err_msg = Some(format!("Failed to access Keyring: {}", e));
+        // API 키를 암호화하여 settings.encrypted_keys에 저장
+        if !self.state.wizard.api_key_input.is_empty() {
+            let key_alias = format!("{}_key", settings.default_provider.to_lowercase());
+            if let Err(e) = crate::infra::secret_store::save_api_key(
+                &mut settings,
+                &key_alias,
+                &self.state.wizard.api_key_input,
+            ) {
+                self.state.wizard.err_msg = Some(format!("API 키 암호화 실패: {}", e));
                 return;
             }
+        }
+
+        // 설정을 YAML로 디스크에 저장 (master_key 불필요)
+        if let Err(e) = crate::infra::config_store::save_config(&settings) {
+            self.state.wizard.err_msg = Some(format!("설정 저장 실패: {}", e));
+            return;
         }
 
         self.state.settings = Some(settings); // 메모리에 반영하여 앱의 구동 상태 보장
@@ -204,26 +201,15 @@ impl App {
                                     crate::domain::permissions::ShellPolicy::Ask
                                 }
                             };
-                            // save_config 실패 시 in-memory도 복구하여 디스크-메모리 불일치 방지
-                            let save_failed =
-                                match crate::infra::secret_store::get_or_create_master_key() {
-                                    Ok(mk) => {
-                                        if let Err(e) =
-                                            crate::infra::config_store::save_config(&mk, s)
-                                        {
-                                            self.state.config.err_msg =
-                                                Some(format!("설정 저장 실패: {}", e));
-                                            true
-                                        } else {
-                                            false
-                                        }
-                                    }
-                                    Err(e) => {
-                                        self.state.config.err_msg =
-                                            Some(format!("마스터 키 접근 실패: {}", e));
-                                        true
-                                    }
-                                };
+                            // [v0.1.0-beta.14] save_config에서 master_key 불필요
+                            let save_failed = if let Err(e) =
+                                crate::infra::config_store::save_config(s)
+                            {
+                                self.state.config.err_msg = Some(format!("설정 저장 실패: {}", e));
+                                true
+                            } else {
+                                false
+                            };
                             if save_failed {
                                 s.shell_policy = old_policy;
                             }
@@ -316,25 +302,14 @@ impl App {
                         let old_model = s.default_model.clone();
                         s.default_model = selected_model;
 
-                        // 이 시점에서 비로소 provider 전환이 디스크에 영속화됨 (원자성 보장).
-                        let save_failed =
-                            match crate::infra::secret_store::get_or_create_master_key() {
-                                Ok(mk) => {
-                                    if let Err(e) = crate::infra::config_store::save_config(&mk, s)
-                                    {
-                                        self.state.config.err_msg =
-                                            Some(format!("설정 저장 실패: {}", e));
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                }
-                                Err(e) => {
-                                    self.state.config.err_msg =
-                                        Some(format!("마스터 키 접근 실패: {}", e));
-                                    true
-                                }
-                            };
+                        // [v0.1.0-beta.14] 이 시점에서 비로소 provider 전환이 디스크에 영속화됨 (원자성 보장).
+                        let save_failed = if let Err(e) = crate::infra::config_store::save_config(s)
+                        {
+                            self.state.config.err_msg = Some(format!("설정 저장 실패: {}", e));
+                            true
+                        } else {
+                            false
+                        };
 
                         if save_failed {
                             // 저장 실패 시 in-memory 상태를 디스크와 일치시킴.

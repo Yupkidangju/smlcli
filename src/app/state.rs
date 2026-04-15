@@ -147,10 +147,8 @@ impl AppState {
         let mut is_wizard_open = true;
         let mut loaded_settings = None;
 
-        // MVP: 부팅 시 마스터키 확보 및 설정 로딩. 성공하면 셋업 프로세스 생략.
-        if let Ok(mk) = crate::infra::secret_store::get_or_create_master_key()
-            && let Ok(Some(settings)) = crate::infra::config_store::load_config(&mk)
-        {
+        // [v0.1.0-beta.14] YAML 기반 설정 로드. master_key 불필요.
+        if let Ok(Some(settings)) = crate::infra::config_store::load_config() {
             loaded_settings = Some(settings);
             is_wizard_open = false;
         }
