@@ -3,6 +3,26 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [0.1.0-beta.9] - 2026-04-15
+
+### Fixed (High - 5차 감사)
+- **[H-1]** 보조 경로 보안 가드 우회 차단: `resolve_credentials()` 중앙 가드를 도입하여 `/model`, `/compact`, `/provider` 전환에서도 NetworkPolicy + Keyring 검증 일관 적용
+- `/model`: `unwrap_or_default()` 제거 → `resolve_credentials()` 사전 검증
+- `/compact`: 동일 패턴 적용 → 빈 키로 LLM 호출하던 경로 차단
+- `/provider`: `resolve_credentials_for_provider()` + `validate_credentials()` 후 `fetch_models()` 순서 보장
+
+### Fixed (Medium)
+- **[M-1]** `/provider` 전환 시 `validate_credentials()` 미호출 수정: OpenRouter `/auth/key` 엔드포인트로 키 유효성을 먼저 확인
+- **[M-2]** Config Dashboard에 `err_msg` 미표시 수정: 대시보드 렌더러 하단에 에러 메시지 표시 영역 추가
+- **[M-3]** clippy `field_reassign_with_default` 경고 해소: 구조체 리터럴 + `..Default` 패턴으로 변경
+
+### Fixed (Low)
+- **[L-1]** Saving 단계 문구 불일치 수정: "saved successfully" → "Press Enter to save" + 에러 시 `err_msg` 표시
+
+### Changed (Architecture)
+- `chat_runtime.rs`에 `resolve_credentials()` / `resolve_credentials_for_provider()` 중앙 보안 가드 메서드 도입
+- `dispatch_chat_request()`를 동기 사전 검증 → 비동기 spawn 패턴으로 리팩토링
+
 ## [0.1.0-beta.8] - 2026-04-15
 
 ### Fixed (High - 4차 감사)

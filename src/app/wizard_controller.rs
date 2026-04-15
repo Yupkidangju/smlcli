@@ -206,8 +206,19 @@ impl App {
                     "Google"
                 };
 
-                // [v0.1.0-beta.8] H-3: Provider 변경 시, 이전 provider의 default_model을 유지하면 충돌 발생.
-                // "auto"로 초기화 후, 바로 ModelList로 전이하여 키 검증 및 모델 재선택을 강제함.
+                // [v0.1.0-beta.9] 중앙 보안 가드: NetworkPolicy + Keyring 사전 검증
+                let (provider_kind, api_key) =
+                    match self.resolve_credentials_for_provider(new_provider_str) {
+                        Ok(creds) => creds,
+                        Err(err_msg) => {
+                            self.state.config.active_popup = state::ConfigPopup::Dashboard;
+                            self.state.config.cursor_index = 0;
+                            self.state.config.err_msg = Some(err_msg);
+                            return;
+                        }
+                    };
+
+                // [v0.1.0-beta.8] H-3: Provider 변경 시 default_model을 "auto"로 초기화
                 if let Some(s) = &mut self.state.settings {
                     s.default_provider = new_provider_str.to_string();
                     s.default_model = "auto".to_string();
@@ -216,36 +227,28 @@ impl App {
                     }
                 }
 
-                let api_key = crate::infra::secret_store::get_api_key(&format!(
-                    "{}_key",
-                    new_provider_str.to_lowercase()
-                ))
-                .unwrap_or_default();
-
-                if api_key.is_empty() {
-                    // 키가 없으면 대시보드로 돌아가 에러 표시
-                    self.state.config.active_popup = state::ConfigPopup::Dashboard;
-                    self.state.config.cursor_index = 0;
-                    self.state.config.err_msg = Some(format!(
-                        "API key lacking for {}. Re-run logic via /setting",
-                        new_provider_str
-                    ));
-                    return;
-                }
-
-                // 키가 있으면 자동 ModelList 진입
+                // [v0.1.0-beta.9] validate_credentials → fetch_models 순서 보장.
+                // OpenRouter /models는 공개 엔드포인트라 가짜 키도 200 반환하므로,
+                // 반드시 /auth/key로 키 유효성을 먼저 확인해야 함.
                 self.state.config.active_popup = state::ConfigPopup::ModelList;
                 self.state.config.cursor_index = 0;
                 self.state.config.is_loading = true;
 
                 let tx = self.action_tx.clone();
-                let provider_kind = match new_provider_str {
-                    "Google" => crate::domain::provider::ProviderKind::Google,
-                    _ => crate::domain::provider::ProviderKind::OpenRouter,
-                };
-
                 tokio::spawn(async move {
                     let adapter = crate::providers::registry::get_adapter(&provider_kind);
+
+                    // 1단계: 키 유효성 검증
+                    if let Err(e) = adapter.validate_credentials(&api_key).await {
+                        let _ = tx
+                            .send(event_loop::Event::Action(action::Action::ModelsFetched(
+                                Err(format!("API key validation failed: {}", e)),
+                            )))
+                            .await;
+                        return;
+                    }
+
+                    // 2단계: 모델 목록 조회
                     match adapter.fetch_models(&api_key).await {
                         Ok(models) => {
                             let _ = tx

@@ -2,6 +2,9 @@
 // 12개의 내부 명령어(/config, /setting, /provider, /model, /status, /mode, /clear, /compact, /tokens, /help, /quit)의
 // 파싱과 실행을 전담하는 모듈.
 // 이전에는 mod.rs 내 handle_slash_command 메서드에 모든 로직이 인라인되어 있었음.
+//
+// [v0.1.0-beta.9] 5차 감사: /model과 /compact가 중앙 보안 가드(resolve_credentials)를 우회하던 문제 수정.
+// unwrap_or_default()로 빈 키를 삼키던 패턴을 제거하고, NetworkPolicy + Keyring 검증을 일관 적용.
 
 use super::{App, action, event_loop, state};
 
@@ -26,33 +29,29 @@ impl App {
                 self.state.config.cursor_index = 0;
             }
             "/model" => {
-                // 모델 목록 팝업 열기 + 비동기 모델 페칭 시작
+                // [v0.1.0-beta.9] 중앙 보안 가드 적용: NetworkPolicy + Keyring 검증 후 모델 페칭
+                let (provider_kind, _model_name, api_key) = match self.resolve_credentials() {
+                    Ok(creds) => creds,
+                    Err(err_msg) => {
+                        self.state
+                            .session
+                            .add_message(crate::providers::types::ChatMessage {
+                                role: crate::providers::types::Role::System,
+                                content: err_msg,
+                                pinned: false,
+                            });
+                        return;
+                    }
+                };
+
                 self.state.config.is_open = true;
                 self.state.config.active_popup = state::ConfigPopup::ModelList;
                 self.state.config.cursor_index = 0;
-
                 self.state.config.is_loading = true;
-                let tx = self.action_tx.clone();
-                let provider = if let Some(s) = &self.state.settings {
-                    match s.default_provider.as_str() {
-                        "Google" => crate::domain::provider::ProviderKind::Google,
-                        _ => crate::domain::provider::ProviderKind::OpenRouter,
-                    }
-                } else {
-                    crate::domain::provider::ProviderKind::OpenRouter
-                };
-                let api_key = if let Some(s) = &self.state.settings {
-                    crate::infra::secret_store::get_api_key(&format!(
-                        "{}_key",
-                        s.default_provider.to_lowercase()
-                    ))
-                    .unwrap_or_default()
-                } else {
-                    "".to_string()
-                };
 
+                let tx = self.action_tx.clone();
                 tokio::spawn(async move {
-                    let adapter = crate::providers::registry::get_adapter(&provider);
+                    let adapter = crate::providers::registry::get_adapter(&provider_kind);
                     match adapter.fetch_models(&api_key).await {
                         Ok(models) => {
                             let _ = tx
@@ -145,6 +144,21 @@ impl App {
     /// /compact 커맨드의 비동기 압축 처리 전용 헬퍼.
     /// LLM을 통해 기존 대화 컨텍스트를 요약하여 토큰을 절약.
     fn handle_compact_command(&mut self) {
+        // [v0.1.0-beta.9] 중앙 보안 가드 적용: NetworkPolicy + Keyring 검증 후 압축 실행
+        let (provider_kind, model_name, api_key) = match self.resolve_credentials() {
+            Ok(creds) => creds,
+            Err(err_msg) => {
+                self.state
+                    .session
+                    .add_message(crate::providers::types::ChatMessage {
+                        role: crate::providers::types::Role::System,
+                        content: err_msg,
+                        pinned: false,
+                    });
+                return;
+            }
+        };
+
         let to_summarize = self.state.session.extract_for_summary();
         if to_summarize.is_empty() {
             self.state
@@ -156,24 +170,8 @@ impl App {
                 });
         } else {
             let tx = self.action_tx.clone();
-            let settings_clone = self.state.settings.clone();
 
             tokio::spawn(async move {
-                let (provider_kind, model_name, api_key) = if let Some(s) = &settings_clone {
-                    let provider = match s.default_provider.as_str() {
-                        "Google" => crate::domain::provider::ProviderKind::Google,
-                        _ => crate::domain::provider::ProviderKind::OpenRouter,
-                    };
-                    let key = crate::infra::secret_store::get_api_key(&format!(
-                        "{}_key",
-                        s.default_provider.to_lowercase()
-                    ))
-                    .unwrap_or_default();
-                    (provider, s.default_model.clone(), key)
-                } else {
-                    return;
-                };
-
                 let mut content = "Summarize the following chat context into a brief 3-bullet list to preserve the goals and actions:\n".to_string();
                 for m in to_summarize {
                     let r = match m.role {

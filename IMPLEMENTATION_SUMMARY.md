@@ -112,3 +112,9 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
   - [Medium-2건] 위자드 에러 Esc 복구(ProviderSelection 회귀), 회귀 테스트 10건 추가(4→14건).
   - [Low-1건] `cargo fmt --check` 게이트 통과.
   - [Quality] 전체 품질 게이트 통과: `cargo check ✓ | cargo test 14/14 ✓ | cargo clippy 0w ✓ | cargo fmt --check ✓`
+- [2026-04-15] : **[5차 AUDIT & REMEDIATION - v0.1.0-beta.9]** 외부 감사 보고서 기반 5건 수정.
+  - [High-1건] 보조 경로(/model, /compact, /provider) 보안 가드 우회 차단: `resolve_credentials()` 중앙 가드 도입으로 NetworkPolicy + Keyring 일관 적용.
+  - [Medium-3건] /provider 전환 시 validate_credentials() 추가, Dashboard err_msg 렌더링, clippy field_reassign_with_default 해소.
+  - [Low-1건] Saving 단계 UX 문구 불일치 수정.
+  - [Architecture] chat_runtime.rs에 resolve_credentials()/resolve_credentials_for_provider() 중앙 보안 가드 메서드 도입.
+  - [Quality] 전체 품질 게이트 통과: `cargo check ✓ | cargo test 14/14 ✓ | cargo clippy -D warnings ✓ | cargo fmt --check ✓`

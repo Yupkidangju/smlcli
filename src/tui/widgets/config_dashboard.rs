@@ -70,6 +70,12 @@ pub fn draw_config(f: &mut Frame, state: &AppState) {
                 }
             }
             s.push_str("\n(Up/Down to navigate, Enter to change, Esc to close)");
+
+            // [v0.1.0-beta.9] 5차 감사 M-3: err_msg가 존재하면 Dashboard 하단에 표시
+            if let Some(err) = &state.config.err_msg {
+                s.push_str(&format!("\n\n!! [Error] !!\n{}", err));
+            }
+
             s
         }
         ConfigPopup::ProviderList => {

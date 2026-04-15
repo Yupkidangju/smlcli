@@ -87,8 +87,13 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
             }
         }
         WizardStep::Saving => {
-            "Configuration saved successfully! Press Enter one more time to start smlcli."
-                .to_string()
+            // [v0.1.0-beta.9] 5차 감사 Low: 문구가 실제 동작과 일치하도록 수정.
+            // Enter를 눌러야 저장이 실행되므로, "saved" 대신 "Press Enter to save" 표현.
+            if let Some(err) = &state.wizard.err_msg {
+                format!("[Save Error]\n{}\n\nPress Esc to go back and retry.", err)
+            } else {
+                "Ready to save configuration.\nPress Enter to save and start smlcli.".to_string()
+            }
         }
     };
 

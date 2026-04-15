@@ -37,9 +37,11 @@ fn test_api_key_masking() {
 fn test_provider_switch_resets_model() {
     // Provider 전환 시 이전 provider의 모델명이 유지되면 충돌하므로,
     // "auto"로 초기화되어야 함.
-    let mut settings = PersistedSettings::default();
-    settings.default_provider = "OpenRouter".to_string();
-    settings.default_model = "gpt-4o".to_string();
+    let mut settings = PersistedSettings {
+        default_provider: "OpenRouter".to_string(),
+        default_model: "gpt-4o".to_string(),
+        ..PersistedSettings::default()
+    };
 
     // Provider 전환 시뮬레이션: wizard_controller.rs ProviderList 브랜치의 핵심 로직
     settings.default_provider = "Google".to_string();
