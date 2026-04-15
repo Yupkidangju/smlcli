@@ -1,5 +1,5 @@
+use crate::domain::permissions::{FileWritePolicy, NetworkPolicy, ShellPolicy};
 use crate::domain::settings::PersistedSettings;
-use crate::domain::permissions::{ShellPolicy, FileWritePolicy, NetworkPolicy};
 
 #[test]
 fn test_default_settings_flow() {
@@ -17,7 +17,7 @@ fn test_wizard_state_transitions() {
     use crate::app::state::{WizardState, WizardStep};
     let mut wizard = WizardState::new();
     assert_eq!(wizard.step, WizardStep::ProviderSelection);
-    
+
     wizard.step = WizardStep::ApiKeyInput;
     assert_eq!(wizard.step, WizardStep::ApiKeyInput);
 }

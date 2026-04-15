@@ -1,5 +1,5 @@
-pub mod settings;
 pub mod permissions;
 pub mod provider;
 pub mod session;
+pub mod settings;
 pub mod tool_result;

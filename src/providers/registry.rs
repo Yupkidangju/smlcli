@@ -1,18 +1,28 @@
-use anyhow::Result;
 use crate::domain::provider::ProviderKind;
+use anyhow::Result;
 use reqwest::Client;
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
 
 pub trait ProviderAdapter: Send + Sync {
     /// 해당 Provider에 대한 API 인증 정보를 최소한으로 검증하는 smoke test 함수
-    fn validate_credentials<'a>(&'a self, api_key: &'a str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
-    
+    fn validate_credentials<'a>(
+        &'a self,
+        api_key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
     /// Provider에 맞추어 채팅 요청을 전송하고 응답을 반환
-    fn chat<'a>(&'a self, api_key: &'a str, req: crate::providers::types::ChatRequest) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse>> + Send + 'a>>;
+    fn chat<'a>(
+        &'a self,
+        api_key: &'a str,
+        req: crate::providers::types::ChatRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse>> + Send + 'a>>;
 
     /// 지원하는 모델 목록을 동적으로 가져옴
-    fn fetch_models<'a>(&'a self, api_key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>>;
+    fn fetch_models<'a>(
+        &'a self,
+        api_key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>>;
 }
 
 pub struct OpenRouterAdapter {
@@ -28,14 +38,18 @@ impl OpenRouterAdapter {
 }
 
 impl ProviderAdapter for OpenRouterAdapter {
-    fn validate_credentials<'a>(&'a self, api_key: &'a str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    fn validate_credentials<'a>(
+        &'a self,
+        api_key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            let response = self.client
+            let response = self
+                .client
                 .get("https://openrouter.ai/api/v1/auth/key")
                 .header("Authorization", format!("Bearer {}", api_key))
                 .send()
                 .await?;
-            
+
             if response.status().is_success() {
                 Ok(())
             } else {
@@ -43,8 +57,13 @@ impl ProviderAdapter for OpenRouterAdapter {
             }
         })
     }
-    
-    fn chat<'a>(&'a self, api_key: &'a str, req: crate::providers::types::ChatRequest) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse>> + Send + 'a>> {
+
+    fn chat<'a>(
+        &'a self,
+        api_key: &'a str,
+        req: crate::providers::types::ChatRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse>> + Send + 'a>>
+    {
         Box::pin(async move {
             #[derive(serde::Serialize)]
             struct Payload<'a> {
@@ -56,7 +75,8 @@ impl ProviderAdapter for OpenRouterAdapter {
                 messages: &req.messages,
             };
 
-            let response = self.client
+            let response = self
+                .client
                 .post("https://openrouter.ai/api/v1/chat/completions")
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
@@ -93,8 +113,7 @@ impl ProviderAdapter for OpenRouterAdapter {
                 content: reply_content,
                 pinned: false,
             };
-            
-            
+
             Ok(crate::providers::types::ChatResponse {
                 message: reply,
                 input_tokens: 0,
@@ -103,9 +122,13 @@ impl ProviderAdapter for OpenRouterAdapter {
         })
     }
 
-    fn fetch_models<'a>(&'a self, api_key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
+    fn fetch_models<'a>(
+        &'a self,
+        api_key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
         Box::pin(async move {
-            let response = self.client
+            let response = self
+                .client
                 .get("https://openrouter.ai/api/v1/models")
                 .header("Authorization", format!("Bearer {}", api_key))
                 .send()
@@ -114,10 +137,14 @@ impl ProviderAdapter for OpenRouterAdapter {
                 return Err(anyhow::anyhow!("Failed to fetch OpenRouter models"));
             }
             #[derive(serde::Deserialize)]
-            struct ModelObj { id: String }
+            struct ModelObj {
+                id: String,
+            }
             #[derive(serde::Deserialize)]
-            struct ModelRes { data: Vec<ModelObj> }
-            
+            struct ModelRes {
+                data: Vec<ModelObj>,
+            }
+
             let parsed: ModelRes = response.json().await?;
             Ok(parsed.data.into_iter().map(|m| m.id).collect())
         })
@@ -137,9 +164,15 @@ impl GeminiAdapter {
 }
 
 impl ProviderAdapter for GeminiAdapter {
-    fn validate_credentials<'a>(&'a self, api_key: &'a str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    fn validate_credentials<'a>(
+        &'a self,
+        api_key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            let url = format!("https://generativelanguage.googleapis.com/v1beta/models?key={}", api_key);
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models?key={}",
+                api_key
+            );
             let response = self.client.get(&url).send().await?;
 
             if response.status().is_success() {
@@ -149,8 +182,13 @@ impl ProviderAdapter for GeminiAdapter {
             }
         })
     }
-    
-    fn chat<'a>(&'a self, api_key: &'a str, req: crate::providers::types::ChatRequest) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse>> + Send + 'a>> {
+
+    fn chat<'a>(
+        &'a self,
+        api_key: &'a str,
+        req: crate::providers::types::ChatRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse>> + Send + 'a>>
+    {
         Box::pin(async move {
             // Gemini의 OpenAI 호환 엔드포인트를 사용하여 완벽한 구조체 호환 통신 수행
             #[derive(serde::Serialize)]
@@ -163,7 +201,8 @@ impl ProviderAdapter for GeminiAdapter {
                 messages: &req.messages,
             };
 
-            let response = self.client
+            let response = self
+                .client
                 .post("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
@@ -176,11 +215,17 @@ impl ProviderAdapter for GeminiAdapter {
             }
 
             #[derive(serde::Deserialize)]
-            struct GeminiRes { choices: Vec<Choice> }
+            struct GeminiRes {
+                choices: Vec<Choice>,
+            }
             #[derive(serde::Deserialize)]
-            struct Choice { message: Message }
+            struct Choice {
+                message: Message,
+            }
             #[derive(serde::Deserialize)]
-            struct Message { content: String }
+            struct Message {
+                content: String,
+            }
 
             let mut parsed: GeminiRes = response.json().await?;
             let reply_content = if !parsed.choices.is_empty() {
@@ -194,7 +239,7 @@ impl ProviderAdapter for GeminiAdapter {
                 content: reply_content,
                 pinned: false,
             };
-            
+
             Ok(crate::providers::types::ChatResponse {
                 message: reply,
                 input_tokens: 0,
@@ -203,21 +248,43 @@ impl ProviderAdapter for GeminiAdapter {
         })
     }
 
-    fn fetch_models<'a>(&'a self, api_key: &'a str) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
+    fn fetch_models<'a>(
+        &'a self,
+        api_key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
         Box::pin(async move {
-            let url = format!("https://generativelanguage.googleapis.com/v1beta/models?key={}", api_key);
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models?key={}",
+                api_key
+            );
             let response = self.client.get(&url).send().await?;
             if !response.status().is_success() {
                 return Err(anyhow::anyhow!("Failed to fetch Gemini models"));
             }
             #[derive(serde::Deserialize)]
-            struct ModelObj { name: String }
+            struct ModelObj {
+                name: String,
+            }
             #[derive(serde::Deserialize)]
-            struct ModelRes { models: Vec<ModelObj> }
-            
+            struct ModelRes {
+                models: Vec<ModelObj>,
+            }
+
             let parsed: ModelRes = response.json().await?;
-            // Gemini API 리턴은 "models/gemini-1.5-pro" 형태
-            Ok(parsed.models.into_iter().map(|m| m.name).collect())
+            // [v0.1.0-beta.7] Gemini API는 name을 "models/gemini-..." 형태로 반환하지만,
+            // OpenAI 호환 엔드포인트의 chat/completions는 bare model id (예: "gemini-2.0-flash")를 요구함.
+            // 공식 문서(https://ai.google.dev/gemini-api/docs/openai)의 예시: model="gemini-3-flash-preview"
+            // 따라서 "models/" 프리픽스를 반드시 제거해야 채팅 요청 시 정상 동작함.
+            Ok(parsed
+                .models
+                .into_iter()
+                .map(|m| {
+                    m.name
+                        .strip_prefix("models/")
+                        .unwrap_or(&m.name)
+                        .to_string()
+                })
+                .collect())
         })
     }
 }

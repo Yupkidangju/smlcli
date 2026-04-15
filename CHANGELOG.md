@@ -3,6 +3,30 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [0.1.0-beta.7] - 2026-04-15
+
+### Fixed (Critical)
+- **[C-1]** OpenRouter API 키 검증 우회 수정: 위자드에서 `validate_credentials()` 호출 후에만 모델 목록 진행
+- **[C-2]** Gemini 모델 식별자 불일치 수정: `models/` 프리픽스를 strip하여 bare model id로 저장 (공식 문서 대조 확인)
+- **[C-3]** `dummy_key` 무음 대체 제거: Keyring 조회 실패 시 명시적 에러 메시지 표시 및 채팅 요청 중단
+- **[C-4]** 시스템 프롬프트 타임라인 노출 수정: `pinned System` 메시지를 렌더링에서 필터링
+
+### Fixed (High)
+- **[H-1]** `/config`, `/provider`, `/model` 팝업에 Up/Down/Enter 키 핸들러 구현 (설정 변경 및 즉시 저장)
+- **[H-2]** `/clear` 명령이 시스템 프롬프트까지 삭제하던 버그 수정: `pinned` 메시지 보존
+- **[H-3]** `ReplaceFileContent` 도구 실행기 구현: read → string replace → atomic write 패턴
+- **[H-4]** `ChatMessage.pinned` 필드가 Provider API 페이로드에 포함되던 문제 수정 (`skip_serializing`)
+- **[H-6]** 상태바 하드코딩(`/workspace`, `Shell Ask`) 제거: 실제 CWD 및 정책 동적 표시
+
+### Changed (Architecture - Phase 3)
+- **[리팩토링]** `src/app/mod.rs` God Object(773줄) 분해:
+  - `command_router.rs` 신규: 슬래시 커맨드 엔진 (12개 커맨드 파싱/실행) 분리
+  - `chat_runtime.rs` 신규: LLM 요청 조립, API 키 조회, Provider 디스패치 분리
+  - `mod.rs`는 이벤트 루프와 최상위 디스패치 + Fuzzy Finder로 축소
+- **[M-1]** WizardStep::Home, PermissionPreset 미사용 variant 제거
+- **[M-5]** `cargo fmt` 적용으로 전체 코드 포매팅 통일
+- `CredentialValidated` 이벤트를 Action enum에 추가하여 비동기 인증 흐름 구현
+
 ## [0.1.0-beta.6] - 2026-04-15
 
 ### Added

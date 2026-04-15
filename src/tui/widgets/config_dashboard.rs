@@ -1,14 +1,14 @@
+use crate::app::state::{AppState, ConfigPopup};
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
-use crate::app::state::{AppState, ConfigPopup};
 
 pub fn draw_config(f: &mut Frame, state: &AppState) {
     let size = f.area();
-    
+
     // Create a centered popup area
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -18,7 +18,7 @@ pub fn draw_config(f: &mut Frame, state: &AppState) {
             Constraint::Percentage(20),
         ])
         .split(size);
-        
+
     let area = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
@@ -27,26 +27,41 @@ pub fn draw_config(f: &mut Frame, state: &AppState) {
             Constraint::Percentage(20),
         ])
         .split(popup_layout[1])[1];
-        
+
     f.render_widget(Clear, area); // Clear background
-    
-    let block = Block::default().title(" Configuration ").borders(Borders::ALL).style(Style::default().fg(Color::Yellow));
+
+    let block = Block::default()
+        .title(" Configuration ")
+        .borders(Borders::ALL)
+        .style(Style::default().fg(Color::Yellow));
     let inner_area = block.inner(area);
     f.render_widget(block, area);
 
     let content = match state.config.active_popup {
         ConfigPopup::Dashboard => {
             let mut s = "Master Settings Dashboard\n\n".to_string();
-            let provider = state.settings.as_ref().map(|st| st.default_provider.as_str()).unwrap_or("None");
-            let model = state.settings.as_ref().map(|st| st.default_model.as_str()).unwrap_or("None");
-            let shell_policy = state.settings.as_ref().map(|st| format!("{:?}", st.shell_policy)).unwrap_or("None".to_string());
-            
+            let provider = state
+                .settings
+                .as_ref()
+                .map(|st| st.default_provider.as_str())
+                .unwrap_or("None");
+            let model = state
+                .settings
+                .as_ref()
+                .map(|st| st.default_model.as_str())
+                .unwrap_or("None");
+            let shell_policy = state
+                .settings
+                .as_ref()
+                .map(|st| format!("{:?}", st.shell_policy))
+                .unwrap_or("None".to_string());
+
             let items = [
                 format!("Provider: {}", provider),
                 format!("Model: {}", model),
                 format!("Shell Policy: {}", shell_policy),
             ];
-            
+
             for (i, item) in items.iter().enumerate() {
                 if i == state.config.cursor_index {
                     s.push_str(&format!(" > {}\n", item));
@@ -78,7 +93,10 @@ pub fn draw_config(f: &mut Frame, state: &AppState) {
                 let mut s = "Select Model\n\n".to_string();
                 let start_idx = state.config.cursor_index.saturating_sub(5);
                 let end_idx = (start_idx + 10).min(state.config.available_models.len());
-                for (i, m) in state.config.available_models[start_idx..end_idx].iter().enumerate() {
+                for (i, m) in state.config.available_models[start_idx..end_idx]
+                    .iter()
+                    .enumerate()
+                {
                     let real_i = start_idx + i;
                     if real_i == state.config.cursor_index {
                         s.push_str(&format!(" > {}\n", m));
@@ -90,7 +108,7 @@ pub fn draw_config(f: &mut Frame, state: &AppState) {
             }
         }
     };
-    
+
     let paragraph = Paragraph::new(content).style(Style::default().fg(Color::Yellow));
     f.render_widget(paragraph, inner_area);
 }

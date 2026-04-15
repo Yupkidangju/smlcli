@@ -116,10 +116,12 @@ smlcli/
 ├── src/
 │   ├── main.rs
 │   ├── app/
-│   │   ├── mod.rs (Router & Event Handling)
+│   │   ├── mod.rs (Event Loop & Top-level Dispatch)
 │   │   ├── state.rs
 │   │   ├── event_loop.rs
-│   │   └── action.rs
+│   │   ├── action.rs
+│   │   ├── command_router.rs (슬래시 커맨드 엔진)
+│   │   └── chat_runtime.rs (LLM 요청 조립 & Provider 디스패치)
 │   ├── tui/
 │   │   ├── mod.rs
 │   │   ├── terminal.rs

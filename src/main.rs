@@ -3,19 +3,19 @@
 #![allow(unused_variables)]
 
 mod app;
-mod tui;
+mod commands;
 mod domain;
+mod infra;
 mod providers;
 mod tools;
-mod infra;
-mod commands;
+mod tui;
 mod types;
 
 #[cfg(test)]
 mod tests;
 
-use app::App;
 use anyhow::Result;
+use app::App;
 
 #[tokio::main]
 async fn main() -> Result<()> {

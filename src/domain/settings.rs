@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::permissions::{FileWritePolicy, NetworkPolicy, ShellPolicy};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PersistedSettings {

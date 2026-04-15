@@ -9,9 +9,7 @@ pub fn get_or_create_master_key() -> Result<Vec<u8>> {
         .context("Failed to connect to credential manager")?;
 
     match entry.get_password() {
-        Ok(encoded) => {
-            Ok(hex::decode(encoded)?)
-        }
+        Ok(encoded) => Ok(hex::decode(encoded)?),
         Err(_) => {
             let mut key = vec![0u8; 32];
             getrandom::fill(&mut key).map_err(|e| anyhow::anyhow!("RNG failed: {}", e))?;

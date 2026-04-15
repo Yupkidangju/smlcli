@@ -20,7 +20,7 @@ impl EventLoop {
         let (tx, rx) = mpsc::channel(100);
         let tick_tx = tx.clone();
         let app_tx = tx.clone();
-        
+
         // Timer Task
         task::spawn(async move {
             let mut interval = tokio::time::interval(tick_rate);
@@ -38,7 +38,8 @@ impl EventLoop {
                 if event::poll(Duration::from_millis(50)).unwrap_or(false)
                     && let Ok(CrosstermEvent::Key(key)) = event::read()
                     && key.kind == KeyEventKind::Press
-                    && tx.blocking_send(Event::Input(key)).is_err() {
+                    && tx.blocking_send(Event::Input(key)).is_err()
+                {
                     break;
                 }
             }
@@ -48,6 +49,9 @@ impl EventLoop {
     }
 
     pub async fn next(&mut self) -> Result<Event> {
-        self.rx.recv().await.ok_or_else(|| anyhow::anyhow!("Event channel closed"))
+        self.rx
+            .recv()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Event channel closed"))
     }
 }

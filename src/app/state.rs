@@ -1,10 +1,12 @@
+// [v0.1.0-beta.7] M-1: Home과 PermissionPreset은 미구현 상태로 enum에만 존재했으므로 제거.
+// 삭제된 기능: Home(시작 화면), PermissionPreset(권한 프리셋 선택)
+// 삭제 사유: 실제 렌더링과 로직 없이 enum만 있어 코드 혼선 야기
+// 삭제 버전: v0.1.0-beta.7
 #[derive(Debug, Clone, PartialEq)]
 pub enum WizardStep {
-    Home,
     ProviderSelection,
     ApiKeyInput,
     ModelSelection,
-    PermissionPreset,
     Saving,
 }
 
@@ -13,7 +15,7 @@ pub struct WizardState {
     pub selected_provider: Option<crate::domain::provider::ProviderKind>,
     pub api_key_input: String,
     pub selected_model: String,
-    
+
     // 화면 네비게이션 상태
     pub cursor_index: usize,
     pub available_models: Vec<String>,
@@ -138,10 +140,11 @@ impl AppState {
     pub fn new() -> Self {
         let mut is_wizard_open = true;
         let mut loaded_settings = None;
-        
+
         // MVP: 부팅 시 마스터키 확보 및 설정 로딩. 성공하면 셋업 프로세스 생략.
         if let Ok(mk) = crate::infra::secret_store::get_or_create_master_key()
-            && let Ok(Some(settings)) = crate::infra::config_store::load_config(&mk) {
+            && let Ok(Some(settings)) = crate::infra::config_store::load_config(&mk)
+        {
             loaded_settings = Some(settings);
             is_wizard_open = false;
         }

@@ -101,3 +101,8 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
   - `session.rs`의 하드드롭 레거시(`compact_context()`) 파괴 및 지능형 요약기 엔진 백그라운드 파이프라인 단일화 완료.
   - `shell.rs`의 무한 스레드 행 차단을 위해 `tokio::time::timeout` (30초) 적용.
   - Input Parser에 `@` 파일 퍼지 파인더 모드 연동 및 `layout.rs` 인스펙터 패널 상단 상태 기반 동적 탭 네비게이션 설계 도입.
+- [2026-04-15] : **[3차 AUDIT & REMEDIATION - v0.1.0-beta.7]** 외부 감사 보고서 기반 16건 전수 교차검증 및 수정.
+  - [Critical-4건] OpenRouter API 키 검증 우회, Gemini 모델 ID 불일치, dummy_key 무음 대체, 시스템 프롬프트 노출 수정.
+  - [High-6건] Config 팝업 키 핸들러 구현, /clear 시스템 프롬프트 보존, ReplaceFileContent 실행기 구현, pinned 직렬화 제외, 상태바 동적화.
+  - [Architecture] `mod.rs` God Object(773줄)를 `command_router.rs`, `chat_runtime.rs`로 분해. WizardStep 미사용 variant 제거.
+  - [Quality] `cargo fmt` 전체 적용. `cargo check && cargo test && cargo clippy` 전수 통과.
