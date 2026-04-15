@@ -114,9 +114,11 @@ Accepted
 
 ### Decision
 `mod.rs`를 책임 단위로 분해하여 다음 모듈로 분리:
-- `command_router.rs`: 12개 슬래시 커맨드의 파싱과 실행 (165줄)
-- `chat_runtime.rs`: LLM 요청 조립, API 키 조회, Provider 디스패치 (78줄)
-- `mod.rs`: 이벤트 루프, 최상위 디스패치, Fuzzy Finder만 보유 (~530줄→실행 흐름만)
+- `command_router.rs` (215줄): 12개 슬래시 커맨드의 파싱과 실행
+- `chat_runtime.rs` (90줄): LLM 요청 조립, API 키 조회, Provider 디스패치
+- `tool_runtime.rs` (173줄): 도구 JSON 파싱, 권한 검사, 비동기 실행, 승인 y/n, 직접 셸 실행
+- `wizard_controller.rs` (222줄): Setup Wizard 상태 전이, Config 팝업 Enter 처리
+- `mod.rs` (422줄): 이벤트 루프 오케스트레이터, 입력 핸들러(키별 소형 메서드), Fuzzy Finder
 
 각 모듈은 `impl App` 블록을 분산 구현하는 Rust 패턴을 사용하여, `App` 구조체 정의 변경 없이 메서드를 물리적으로 분리했습니다.
 

@@ -18,11 +18,13 @@
 - **[H-4]** `ChatMessage.pinned` 필드가 Provider API 페이로드에 포함되던 문제 수정 (`skip_serializing`)
 - **[H-6]** 상태바 하드코딩(`/workspace`, `Shell Ask`) 제거: 실제 CWD 및 정책 동적 표시
 
-### Changed (Architecture - Phase 3)
-- **[리팩토링]** `src/app/mod.rs` God Object(773줄) 분해:
-  - `command_router.rs` 신규: 슬래시 커맨드 엔진 (12개 커맨드 파싱/실행) 분리
-  - `chat_runtime.rs` 신규: LLM 요청 조립, API 키 조회, Provider 디스패치 분리
-  - `mod.rs`는 이벤트 루프와 최상위 디스패치 + Fuzzy Finder로 축소
+### Changed (Architecture - Phase 3 Complete)
+- **[리팩토링]** `src/app/mod.rs` God Object(773줄 → 422줄) 5개 모듈 완전 분해:
+  - `command_router.rs` (215줄): 슬래시 커맨드 엔진 (12개 커맨드 파싱/실행)
+  - `chat_runtime.rs` (90줄): LLM 요청 조립, API 키 조회, Provider 디스패치
+  - `tool_runtime.rs` (173줄): 도구 JSON 파싱, 권한 검사(PermissionEngine), 비동기 실행, 승인 y/n, 직접 셸 실행
+  - `wizard_controller.rs` (222줄): Setup Wizard 상태 전이(Provider→Key→Model→Save), Config 팝업 Enter 처리
+  - `mod.rs` (422줄): 이벤트 루프 오케스트레이터 + 입력 핸들러(키별 소형 메서드) + Fuzzy Finder
 - **[M-1]** WizardStep::Home, PermissionPreset 미사용 variant 제거
 - **[M-5]** `cargo fmt` 적용으로 전체 코드 포매팅 통일
 - `CredentialValidated` 이벤트를 Action enum에 추가하여 비동기 인증 흐름 구현

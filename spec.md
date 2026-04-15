@@ -116,12 +116,14 @@ smlcli/
 ├── src/
 │   ├── main.rs
 │   ├── app/
-│   │   ├── mod.rs (Event Loop & Top-level Dispatch)
-│   │   ├── state.rs
-│   │   ├── event_loop.rs
-│   │   ├── action.rs
-│   │   ├── command_router.rs (슬래시 커맨드 엔진)
-│   │   └── chat_runtime.rs (LLM 요청 조립 & Provider 디스패치)
+│   │   ├── mod.rs (Event Loop & Top-level Dispatch, ~420줄)
+│   │   ├── state.rs (AppState, WizardState, ConfigState, FuzzyState)
+│   │   ├── event_loop.rs (Crossterm 이벤트 + Action 채널 수신)
+│   │   ├── action.rs (비동기 이벤트 타입 정의)
+│   │   ├── command_router.rs (슬래시 커맨드 엔진, 12개 커맨드)
+│   │   ├── chat_runtime.rs (LLM 요청 조립 & Provider 디스패치)
+│   │   ├── tool_runtime.rs (도구 JSON 파싱, 권한 검사, 비동기 실행)
+│   │   └── wizard_controller.rs (Setup Wizard 상태 전이 & Config 팝업)
 │   ├── tui/
 │   │   ├── mod.rs
 │   │   ├── terminal.rs
