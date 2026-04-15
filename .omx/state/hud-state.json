@@ -1,6 +1,6 @@
 {
-  "last_turn_at": "2026-04-15T07:32:25.609Z",
-  "turn_count": 7,
-  "last_progress_at": "2026-04-15T07:32:25.609Z",
-  "last_agent_output": "**Findings**\n1. **High:** `/config -> Model` 경로가 아직 중앙 credential/network 가드를 우회합니다. 대시보드에서 모델 변경으로 "
+  "last_turn_at": "2026-04-15T13:06:11.905Z",
+  "turn_count": 8,
+  "last_progress_at": "2026-04-15T13:06:11.905Z",
+  "last_agent_output": "**Findings**\n- **High:** provider 전환의 취소 원자성이 아직 완전히 보장되지 않습니다. `ProviderList`에서 새 provider를 고르면 현재 "
 }

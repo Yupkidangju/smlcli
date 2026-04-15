@@ -155,9 +155,9 @@ impl App {
                         self.state.config.available_models = models;
                         self.state.config.cursor_index = 0;
                         self.state.config.err_msg = None;
-                        // rollback 스냅샷 해제 (검증 성공)
-                        self.state.config.rollback_provider = None;
-                        self.state.config.rollback_model = None;
+                        // [v0.1.0-beta.12] 8차 감사 H-1: rollback 스냅샷을 여기서 해제하면 안 됨.
+                        // 모델 목록 로드 성공 ≠ 사용자 선택 완료. Esc 취소가 가능하므로
+                        // rollback은 ModelList 선택이 완료되는 시점까지 유지해야 함.
                     }
                     Err(e) => {
                         self.state.config.err_msg = Some(e);

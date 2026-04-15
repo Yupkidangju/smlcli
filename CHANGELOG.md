@@ -3,6 +3,20 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [0.1.0-beta.12] - 2026-04-15
+
+### Fixed (High - 8차 감사)
+- **[H-1]** Provider 전환 취소 시 rollback 스냅샷 조기 해제: `handle_models_fetched` 성공 시 rollback을 해제하던 것을 제거. 모델 목록 로드 성공 ≠ 사용자 선택 완료이므로, `ModelList` 선택이 완료되고 `save_config`가 성공한 시점에서만 해제.
+
+### Fixed (Medium)
+- **[M-1]** `save_config()` 실패 후 메모리-디스크 불일치 수정:
+  - **ShellPolicy 토글**: 실패 시 이전 정책으로 in-memory 복구
+  - **ModelList 저장**: 실패 시 rollback 스냅샷이 있으면 provider+model 전체 복구, 없으면 이전 model만 복구
+
+### Changed
+- `handle_models_fetched` Config 성공 분기에서 rollback 해제 제거
+- `ModelList` 저장/`ShellPolicy` 토글에 save 실패 시 in-memory 롤백 로직 추가
+
 ## [0.1.0-beta.11] - 2026-04-15
 
 ### Fixed (High - 7차 감사)

@@ -191,6 +191,8 @@ impl App {
                     2 => {
                         // ShellPolicy 토글: Ask → SafeOnly → Deny → Ask
                         if let Some(s) = &mut self.state.settings {
+                            // [v0.1.0-beta.12] 8차 감사 M-1: 실패 시 복구를 위해 이전 값 보존
+                            let old_policy = s.shell_policy.clone();
                             s.shell_policy = match s.shell_policy {
                                 crate::domain::permissions::ShellPolicy::Ask => {
                                     crate::domain::permissions::ShellPolicy::SafeOnly
@@ -202,19 +204,28 @@ impl App {
                                     crate::domain::permissions::ShellPolicy::Ask
                                 }
                             };
-                            // [v0.1.0-beta.11] 7차 감사 M-1: save_config 실패 시 err_msg 표시.
-                            match crate::infra::secret_store::get_or_create_master_key() {
-                                Ok(mk) => {
-                                    if let Err(e) = crate::infra::config_store::save_config(&mk, s)
-                                    {
-                                        self.state.config.err_msg =
-                                            Some(format!("설정 저장 실패: {}", e));
+                            // save_config 실패 시 in-memory도 복구하여 디스크-메모리 불일치 방지
+                            let save_failed =
+                                match crate::infra::secret_store::get_or_create_master_key() {
+                                    Ok(mk) => {
+                                        if let Err(e) =
+                                            crate::infra::config_store::save_config(&mk, s)
+                                        {
+                                            self.state.config.err_msg =
+                                                Some(format!("설정 저장 실패: {}", e));
+                                            true
+                                        } else {
+                                            false
+                                        }
                                     }
-                                }
-                                Err(e) => {
-                                    self.state.config.err_msg =
-                                        Some(format!("마스터 키 접근 실패: {}", e));
-                                }
+                                    Err(e) => {
+                                        self.state.config.err_msg =
+                                            Some(format!("마스터 키 접근 실패: {}", e));
+                                        true
+                                    }
+                                };
+                            if save_failed {
+                                s.shell_policy = old_policy;
                             }
                         }
                     }
@@ -301,23 +312,44 @@ impl App {
                     let selected_model =
                         self.state.config.available_models[self.state.config.cursor_index].clone();
                     if let Some(s) = &mut self.state.settings {
+                        // [v0.1.0-beta.12] 8차 감사 M-1: 저장 실패 시 복구를 위해 이전 model 보존
+                        let old_model = s.default_model.clone();
                         s.default_model = selected_model;
-                        // [v0.1.0-beta.11] 7차 감사 M-1: save_config 실패 시 err_msg 표시.
+
                         // 이 시점에서 비로소 provider 전환이 디스크에 영속화됨 (원자성 보장).
-                        match crate::infra::secret_store::get_or_create_master_key() {
-                            Ok(mk) => {
-                                if let Err(e) = crate::infra::config_store::save_config(&mk, s) {
-                                    self.state.config.err_msg =
-                                        Some(format!("설정 저장 실패: {}", e));
+                        let save_failed =
+                            match crate::infra::secret_store::get_or_create_master_key() {
+                                Ok(mk) => {
+                                    if let Err(e) = crate::infra::config_store::save_config(&mk, s)
+                                    {
+                                        self.state.config.err_msg =
+                                            Some(format!("설정 저장 실패: {}", e));
+                                        true
+                                    } else {
+                                        false
+                                    }
                                 }
+                                Err(e) => {
+                                    self.state.config.err_msg =
+                                        Some(format!("마스터 키 접근 실패: {}", e));
+                                    true
+                                }
+                            };
+
+                        if save_failed {
+                            // 저장 실패 시 in-memory 상태를 디스크와 일치시킴.
+                            // rollback이 있으면 provider까지 전부 복구.
+                            if let (Some(old_p), Some(old_m)) = (
+                                self.state.config.rollback_provider.take(),
+                                self.state.config.rollback_model.take(),
+                            ) {
+                                s.default_provider = old_p;
+                                s.default_model = old_m;
+                            } else {
+                                s.default_model = old_model;
                             }
-                            Err(e) => {
-                                self.state.config.err_msg =
-                                    Some(format!("마스터 키 접근 실패: {}", e));
-                            }
-                        }
-                        // 저장 성공 시 롤백 스냅샷 해제
-                        if self.state.config.err_msg.is_none() {
+                        } else {
+                            // 저장 성공: rollback 스냅샷 해제
                             self.state.config.rollback_provider = None;
                             self.state.config.rollback_model = None;
                         }
