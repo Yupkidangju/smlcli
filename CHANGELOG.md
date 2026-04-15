@@ -3,6 +3,18 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [0.1.0-beta.13] - 2026-04-15
+
+### Fixed (Critical — 실행 불가 버그)
+- **keyring 백엔드 미설정**: `keyring = "3.6.3"` feature 미지정으로 mock credential store(비영속 메모리)가 사용됨.
+  - **증상**: Wizard에서 API 키 입력 → 같은 세션 또는 재시작 후 채팅 시 `[Keyring Error] No matching entry found in secure storage`
+  - **원인**: keyring v3.x는 `default-features = false`이므로 feature를 명시하지 않으면 어떤 OS 백엔드도 컴파일되지 않고 mock store만 사용
+  - **수정**: `features = ["sync-secret-service"]` 추가 → D-Bus Secret Service(gnome-keyring) 백엔드 활성화
+  - **영향**: 기존 mock master-key로 암호화된 `settings.enc` 복호화 불가 → 앱 재시작 시 Wizard 재설정 필요
+
+### Changed
+- `dbus`, `dbus-secret-service`, `libdbus-sys` 의존성 자동 추가 (keyring feature에 의해)
+
 ## [0.1.0-beta.12] - 2026-04-15
 
 ### Fixed (High - 8차 감사)
