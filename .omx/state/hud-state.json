@@ -1,6 +1,6 @@
 {
-  "last_turn_at": "2026-04-15T06:53:59.337Z",
-  "turn_count": 6,
-  "last_progress_at": "2026-04-15T06:53:59.337Z",
-  "last_agent_output": "**Findings**\n- **High:** `/provider` 전환은 여전히 실패 시 깨진 설정을 영구 저장할 수 있습니다. 새 provider의 키 존재 여부만 확인한 뒤 곧"
+  "last_turn_at": "2026-04-15T07:32:25.609Z",
+  "turn_count": 7,
+  "last_progress_at": "2026-04-15T07:32:25.609Z",
+  "last_agent_output": "**Findings**\n1. **High:** `/config -> Model` 경로가 아직 중앙 credential/network 가드를 우회합니다. 대시보드에서 모델 변경으로 "
 }

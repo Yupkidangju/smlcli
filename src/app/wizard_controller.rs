@@ -134,30 +134,36 @@ impl App {
                         self.state.config.cursor_index = 0;
                     }
                     1 => {
-                        // Model 변경 진입 (모델 목록 로딩)
+                        // [v0.1.0-beta.10] 자체 감사: 중앙 보안 가드 적용.
+                        // 이전에는 unwrap_or_default()로 빈 키를 삼키고 NetworkPolicy 검사 없이 fetch 수행.
+                        let (provider_kind, _model_name, api_key) = match self.resolve_credentials()
+                        {
+                            Ok(creds) => creds,
+                            Err(err_msg) => {
+                                self.state.config.err_msg = Some(err_msg);
+                                return;
+                            }
+                        };
+
                         self.state.config.active_popup = state::ConfigPopup::ModelList;
                         self.state.config.cursor_index = 0;
                         self.state.config.is_loading = true;
                         let tx = self.action_tx.clone();
-                        let provider = if let Some(s) = &self.state.settings {
-                            match s.default_provider.as_str() {
-                                "Google" => crate::domain::provider::ProviderKind::Google,
-                                _ => crate::domain::provider::ProviderKind::OpenRouter,
-                            }
-                        } else {
-                            crate::domain::provider::ProviderKind::OpenRouter
-                        };
-                        let api_key = if let Some(s) = &self.state.settings {
-                            crate::infra::secret_store::get_api_key(&format!(
-                                "{}_key",
-                                s.default_provider.to_lowercase()
-                            ))
-                            .unwrap_or_default()
-                        } else {
-                            String::new()
-                        };
+
                         tokio::spawn(async move {
-                            let adapter = crate::providers::registry::get_adapter(&provider);
+                            let adapter = crate::providers::registry::get_adapter(&provider_kind);
+
+                            // validate_credentials 선행 검증
+                            if let Err(e) = adapter.validate_credentials(&api_key).await {
+                                let _ = tx
+                                    .send(event_loop::Event::Action(action::Action::ModelsFetched(
+                                        Err(format!("API key validation failed: {}", e)),
+                                        action::FetchSource::Config,
+                                    )))
+                                    .await;
+                                return;
+                            }
+
                             match adapter.fetch_models(&api_key).await {
                                 Ok(models) => {
                                     let _ = tx
