@@ -3,6 +3,19 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [0.1.0-beta.11] - 2026-04-15
+
+### Fixed (High - 7차 감사)
+- **[H-1]** `/config → Model` 경로 보안 가드 우회 차단: `resolve_credentials()` + `validate_credentials()` 적용 (6차 후반 자체 감사에서 수정)
+- **[H-2]** Provider 전환 사용자 취소 시 롤백 누락: ModelList/ProviderList에서 Esc로 빠져나올 때 `rollback_provider/rollback_model` 스냅샷에서 이전 provider/model로 in-memory 복구
+
+### Fixed (Medium)
+- **[M-1]** `save_config()` 실패 묵살 수정: ShellPolicy 토글과 ModelList 저장에서 `let _` 대신 에러를 `err_msg`로 표시하여 사용자에게 저장 실패 가시화
+
+### Changed
+- ModelList 선택 완료 시 rollback 스냅샷 해제 (저장 성공 시에만)
+- Config Esc 핸들러에서 err_msg 초기화 추가
+
 ## [0.1.0-beta.10] - 2026-04-15
 
 ### Fixed (High - 6차 감사)

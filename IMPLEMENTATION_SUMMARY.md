@@ -123,3 +123,8 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
   - [Medium-3건] /model에 validate_credentials 선행 검증 추가, FetchSource enum으로 비동기 라우팅 출처 의존성 해소, clippy collapsible_if 해소.
   - [Architecture] Action::ModelsFetched에 FetchSource(Config|Wizard) 태그 도입, ConfigState에 rollback 필드 추가.
   - [Quality] 전체 품질 게이트 통과: `cargo check ✓ | cargo test 14/14 ✓ | cargo clippy -D warnings ✓ | cargo fmt --check ✓`
+- [2026-04-15] : **[7차 AUDIT & REMEDIATION - v0.1.0-beta.11]** 외부 감사 보고서 기반 3건 수정.
+  - [High-1건] /config→Model 경로 보안 가드 우회 차단 (6차 자체 감사에서 이미 수정 확인).
+  - [High-1건] Provider 전환 사용자 취소(Esc) 시 rollback 누락: Esc 핸들러에 롤백 스냅샷 복구 로직 추가.
+  - [Medium-1건] save_config() 실패 묵살 수정: ShellPolicy 토글 + ModelList 저장에서 에러를 err_msg로 사용자 가시화.
+  - [Quality] 전체 품질 게이트 통과: `cargo check ✓ | cargo test 14/14 ✓ | cargo clippy -D warnings ✓ | cargo fmt --check ✓`

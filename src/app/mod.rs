@@ -257,9 +257,22 @@ impl App {
                     self.state.fuzzy.is_open = false;
                 } else if self.state.config.is_open {
                     if self.state.config.active_popup != state::ConfigPopup::Dashboard {
+                        // [v0.1.0-beta.11] 7차 감사 H-2: 사용자 취소 시 롤백.
+                        // ProviderList→ModelList 진행 중 Esc로 돌아오면,
+                        // in-memory settings를 이전 provider/model로 복구해야 함.
+                        if let (Some(old_p), Some(old_m)) = (
+                            self.state.config.rollback_provider.take(),
+                            self.state.config.rollback_model.take(),
+                        ) && let Some(s) = &mut self.state.settings
+                        {
+                            s.default_provider = old_p;
+                            s.default_model = old_m;
+                        }
+                        self.state.config.err_msg = None;
                         self.state.config.active_popup = state::ConfigPopup::Dashboard;
                     } else {
                         self.state.config.is_open = false;
+                        self.state.config.err_msg = None;
                     }
                 } else if self.state.is_wizard_open && self.state.wizard.err_msg.is_some() {
                     // [v0.1.0-beta.8] M-1: Error state에서 Esc 시 Wizard 홈으로 회귀
