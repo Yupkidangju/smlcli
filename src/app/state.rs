@@ -64,6 +64,10 @@ pub struct ConfigState {
     pub available_models: Vec<String>,
     pub is_loading: bool,
     pub err_msg: Option<String>,
+    // [v0.1.0-beta.10] 6차 감사: provider 전환 원자성 보장을 위한 복구 스냅샷.
+    // 비동기 검증 실패 시 이전 provider/model로 in-memory 상태를 되돌림.
+    pub rollback_provider: Option<String>,
+    pub rollback_model: Option<String>,
 }
 
 impl ConfigState {
@@ -75,6 +79,8 @@ impl ConfigState {
             available_models: Vec::new(),
             is_loading: false,
             err_msg: None,
+            rollback_provider: None,
+            rollback_model: None,
         }
     }
 }

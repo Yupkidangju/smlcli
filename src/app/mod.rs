@@ -123,8 +123,8 @@ impl App {
                         pinned: false,
                     });
             }
-            action::Action::ModelsFetched(res) => {
-                self.handle_models_fetched(res);
+            action::Action::ModelsFetched(res, source) => {
+                self.handle_models_fetched(res, source);
             }
             action::Action::CredentialValidated(res) => {
                 self.handle_credential_validated(res);
@@ -140,30 +140,51 @@ impl App {
         }
     }
 
-    /// ModelsFetched 이벤트 처리: Config 팝업 또는 위자드에 모델 목록 반영.
-    fn handle_models_fetched(&mut self, res: Result<Vec<String>, String>) {
-        if self.state.config.is_open {
-            self.state.config.is_loading = false;
-            match res {
-                Ok(models) => {
-                    self.state.config.available_models = models;
-                    self.state.config.cursor_index = 0;
-                    self.state.config.err_msg = None;
-                }
-                Err(e) => {
-                    self.state.config.err_msg = Some(e);
+    /// [v0.1.0-beta.10] ModelsFetched 이벤트 처리: FetchSource에 따라 정확한 상태 슬롯으로 라우팅.
+    /// 이전에는 config.is_open으로 판별하여, 팝업을 닫으면 결과가 wizard로 잘못 흐르는 결함이 있었음.
+    fn handle_models_fetched(
+        &mut self,
+        res: Result<Vec<String>, String>,
+        source: action::FetchSource,
+    ) {
+        match source {
+            action::FetchSource::Config => {
+                self.state.config.is_loading = false;
+                match res {
+                    Ok(models) => {
+                        self.state.config.available_models = models;
+                        self.state.config.cursor_index = 0;
+                        self.state.config.err_msg = None;
+                        // rollback 스냅샷 해제 (검증 성공)
+                        self.state.config.rollback_provider = None;
+                        self.state.config.rollback_model = None;
+                    }
+                    Err(e) => {
+                        self.state.config.err_msg = Some(e);
+                        // [v0.1.0-beta.10] 6차 감사 H-1: 검증 실패 시 in-memory 설정 롤백
+                        if let (Some(old_p), Some(old_m)) = (
+                            self.state.config.rollback_provider.take(),
+                            self.state.config.rollback_model.take(),
+                        ) && let Some(s) = &mut self.state.settings
+                        {
+                            s.default_provider = old_p;
+                            s.default_model = old_m;
+                        }
+                        self.state.config.active_popup = state::ConfigPopup::Dashboard;
+                    }
                 }
             }
-        } else {
-            self.state.wizard.is_loading_models = false;
-            match res {
-                Ok(models) => {
-                    self.state.wizard.available_models = models;
-                    self.state.wizard.cursor_index = 0;
-                    self.state.wizard.err_msg = None;
-                }
-                Err(e) => {
-                    self.state.wizard.err_msg = Some(e);
+            action::FetchSource::Wizard => {
+                self.state.wizard.is_loading_models = false;
+                match res {
+                    Ok(models) => {
+                        self.state.wizard.available_models = models;
+                        self.state.wizard.cursor_index = 0;
+                        self.state.wizard.err_msg = None;
+                    }
+                    Err(e) => {
+                        self.state.wizard.err_msg = Some(e);
+                    }
                 }
             }
         }
@@ -194,6 +215,7 @@ impl App {
                             let _ = tx
                                 .send(event_loop::Event::Action(action::Action::ModelsFetched(
                                     Ok(models),
+                                    action::FetchSource::Wizard,
                                 )))
                                 .await;
                         }
@@ -201,6 +223,7 @@ impl App {
                             let _ = tx
                                 .send(event_loop::Event::Action(action::Action::ModelsFetched(
                                     Err(e.to_string()),
+                                    action::FetchSource::Wizard,
                                 )))
                                 .await;
                         }

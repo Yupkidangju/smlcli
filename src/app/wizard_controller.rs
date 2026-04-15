@@ -162,14 +162,20 @@ impl App {
                                 Ok(models) => {
                                     let _ = tx
                                         .send(event_loop::Event::Action(
-                                            action::Action::ModelsFetched(Ok(models)),
+                                            action::Action::ModelsFetched(
+                                                Ok(models),
+                                                action::FetchSource::Config,
+                                            ),
                                         ))
                                         .await;
                                 }
                                 Err(e) => {
                                     let _ = tx
                                         .send(event_loop::Event::Action(
-                                            action::Action::ModelsFetched(Err(e.to_string())),
+                                            action::Action::ModelsFetched(
+                                                Err(e.to_string()),
+                                                action::FetchSource::Config,
+                                            ),
                                         ))
                                         .await;
                                 }
@@ -218,18 +224,21 @@ impl App {
                         }
                     };
 
-                // [v0.1.0-beta.8] H-3: Provider 변경 시 default_model을 "auto"로 초기화
+                // [v0.1.0-beta.10] 6차 감사 H-1: 롤백 스냅샷 저장.
+                // 비동기 validate_credentials/fetch_models 실패 시 복구에 사용.
+                if let Some(s) = &self.state.settings {
+                    self.state.config.rollback_provider = Some(s.default_provider.clone());
+                    self.state.config.rollback_model = Some(s.default_model.clone());
+                }
+
+                // In-memory만 변경, 디스크 저장은 ModelList 선택 완료 시에만 수행.
+                // 검증 실패 시 handle_models_fetched에서 rollback으로 복구됨.
                 if let Some(s) = &mut self.state.settings {
                     s.default_provider = new_provider_str.to_string();
                     s.default_model = "auto".to_string();
-                    if let Ok(mk) = crate::infra::secret_store::get_or_create_master_key() {
-                        let _ = crate::infra::config_store::save_config(&mk, s);
-                    }
                 }
 
                 // [v0.1.0-beta.9] validate_credentials → fetch_models 순서 보장.
-                // OpenRouter /models는 공개 엔드포인트라 가짜 키도 200 반환하므로,
-                // 반드시 /auth/key로 키 유효성을 먼저 확인해야 함.
                 self.state.config.active_popup = state::ConfigPopup::ModelList;
                 self.state.config.cursor_index = 0;
                 self.state.config.is_loading = true;
@@ -243,6 +252,7 @@ impl App {
                         let _ = tx
                             .send(event_loop::Event::Action(action::Action::ModelsFetched(
                                 Err(format!("API key validation failed: {}", e)),
+                                action::FetchSource::Config,
                             )))
                             .await;
                         return;
@@ -254,6 +264,7 @@ impl App {
                             let _ = tx
                                 .send(event_loop::Event::Action(action::Action::ModelsFetched(
                                     Ok(models),
+                                    action::FetchSource::Config,
                                 )))
                                 .await;
                         }
@@ -261,6 +272,7 @@ impl App {
                             let _ = tx
                                 .send(event_loop::Event::Action(action::Action::ModelsFetched(
                                     Err(e.to_string()),
+                                    action::FetchSource::Config,
                                 )))
                                 .await;
                         }

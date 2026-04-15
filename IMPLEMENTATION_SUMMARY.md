@@ -118,3 +118,8 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
   - [Low-1건] Saving 단계 UX 문구 불일치 수정.
   - [Architecture] chat_runtime.rs에 resolve_credentials()/resolve_credentials_for_provider() 중앙 보안 가드 메서드 도입.
   - [Quality] 전체 품질 게이트 통과: `cargo check ✓ | cargo test 14/14 ✓ | cargo clippy -D warnings ✓ | cargo fmt --check ✓`
+- [2026-04-15] : **[6차 AUDIT & REMEDIATION - v0.1.0-beta.10]** 외부 감사 보고서 기반 4건 수정.
+  - [High-1건] /provider 전환 원자성: 검증 전 save_config 제거 → 롤백 스냅샷 + ModelList 선택 시에만 디스크 저장.
+  - [Medium-3건] /model에 validate_credentials 선행 검증 추가, FetchSource enum으로 비동기 라우팅 출처 의존성 해소, clippy collapsible_if 해소.
+  - [Architecture] Action::ModelsFetched에 FetchSource(Config|Wizard) 태그 도입, ConfigState에 rollback 필드 추가.
+  - [Quality] 전체 품질 게이트 통과: `cargo check ✓ | cargo test 14/14 ✓ | cargo clippy -D warnings ✓ | cargo fmt --check ✓`

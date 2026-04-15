@@ -52,11 +52,26 @@ impl App {
                 let tx = self.action_tx.clone();
                 tokio::spawn(async move {
                     let adapter = crate::providers::registry::get_adapter(&provider_kind);
+
+                    // [v0.1.0-beta.10] 6차 감사 M-1: validate_credentials 선행 검증.
+                    // OpenRouter /models는 공개 엔드포인트라 가짜 키도 200 반환하므로,
+                    // /auth/key로 키 유효성을 먼저 확인해야 함.
+                    if let Err(e) = adapter.validate_credentials(&api_key).await {
+                        let _ = tx
+                            .send(event_loop::Event::Action(action::Action::ModelsFetched(
+                                Err(format!("API key validation failed: {}", e)),
+                                action::FetchSource::Config,
+                            )))
+                            .await;
+                        return;
+                    }
+
                     match adapter.fetch_models(&api_key).await {
                         Ok(models) => {
                             let _ = tx
                                 .send(event_loop::Event::Action(action::Action::ModelsFetched(
                                     Ok(models),
+                                    action::FetchSource::Config,
                                 )))
                                 .await;
                         }
@@ -64,6 +79,7 @@ impl App {
                             let _ = tx
                                 .send(event_loop::Event::Action(action::Action::ModelsFetched(
                                     Err(e.to_string()),
+                                    action::FetchSource::Config,
                                 )))
                                 .await;
                         }

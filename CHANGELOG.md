@@ -3,6 +3,21 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [0.1.0-beta.10] - 2026-04-15
+
+### Fixed (High - 6차 감사)
+- **[H-1]** `/provider` 전환 원자성 보장: 비동기 검증 전 `save_config()` 제거 → in-memory만 변경, 검증 실패 시 롤백 스냅샷으로 이전 provider/model 복구. 디스크 저장은 ModelList 선택 완료 시에만 수행.
+
+### Fixed (Medium)
+- **[M-1]** `/model` 경로에 `validate_credentials()` 선행 검증 추가: `/provider`와 동일한 검증 일관성 확보
+- **[M-2]** 비동기 `ModelsFetched` 라우팅 결함 수정: `FetchSource` enum 도입으로 요청 출처(Config/Wizard) 기반 정확한 상태 슬롯 라우팅 (UI 상태 의존 제거)
+- **[M-3]** clippy `collapsible_if` 해소
+
+### Changed (Architecture)
+- `Action::ModelsFetched`에 `FetchSource` 태그 추가 (Config | Wizard)
+- `ConfigState`에 `rollback_provider`/`rollback_model` 필드 추가
+- `handle_models_fetched()`가 source 기반 분기 + 실패 시 롤백 수행
+
 ## [0.1.0-beta.9] - 2026-04-15
 
 ### Fixed (High - 5차 감사)
