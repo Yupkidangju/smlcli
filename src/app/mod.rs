@@ -238,6 +238,12 @@ impl App {
                     } else {
                         self.state.config.is_open = false;
                     }
+                } else if self.state.is_wizard_open && self.state.wizard.err_msg.is_some() {
+                    // [v0.1.0-beta.8] M-1: Error state에서 Esc 시 Wizard 홈으로 회귀
+                    self.state.wizard.step = state::WizardStep::ProviderSelection;
+                    self.state.wizard.err_msg = None;
+                    self.state.wizard.api_key_input.clear();
+                    self.state.wizard.cursor_index = 0;
                 } else {
                     self.state.should_quit = true;
                 }

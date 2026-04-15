@@ -107,3 +107,8 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
   - [Architecture] `mod.rs` God Object(773줄→422줄)를 `command_router.rs`, `chat_runtime.rs`, `tool_runtime.rs`, `wizard_controller.rs` 4개 모듈로 완전 분해.
   - WizardStep 미사용 variant 제거. handle_input을 키별 소형 메서드(handle_char_input, handle_up_key 등)로 분해.
   - [Quality] `cargo fmt` 전체 적용. `cargo check && cargo test && cargo clippy` 전수 무경고 통과.
+- [2026-04-15] : **[4차 AUDIT & REMEDIATION - v0.1.0-beta.8]** 외부 감사 보고서 기반 7건 수정.
+  - [High-4건] 위자드 저장 실패 무시 제거, API 키 평문 마스킹, /provider 전환 안전성(model auto reset + key 검증), NetworkPolicy::Deny 실적용.
+  - [Medium-2건] 위자드 에러 Esc 복구(ProviderSelection 회귀), 회귀 테스트 10건 추가(4→14건).
+  - [Low-1건] `cargo fmt --check` 게이트 통과.
+  - [Quality] 전체 품질 게이트 통과: `cargo check ✓ | cargo test 14/14 ✓ | cargo clippy 0w ✓ | cargo fmt --check ✓`

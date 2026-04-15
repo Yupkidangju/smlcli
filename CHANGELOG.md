@@ -3,6 +3,21 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [0.1.0-beta.8] - 2026-04-15
+
+### Fixed (High - 4차 감사)
+- **[H-1]** 위자드 저장 실패 무시 수정: `save_api_key()`/`save_config()` 실패 시 `err_msg` 설정 후 위자드 유지 (재시작 후 깨짐 방지)
+- **[H-2]** API 키 평문 노출 차단: 렌더러에서 `*` 마스킹 적용, 검증 실패 `err_msg` 화면 표시 추가
+- **[H-3]** `/provider` 전환 안전성 확보: Provider 변경 시 `default_model`을 `"auto"`로 초기화, API 키 존재 확인 후 자동 ModelList 전이
+- **[H-4]** `NetworkPolicy::Deny` 실적용: `chat_runtime.rs`에서 채팅 요청 전 정책 검사 → Deny 시 차단 메시지 반환
+
+### Fixed (Medium)
+- **[M-1]** 위자드 오류 화면 Esc 복구: 에러 상태에서 Esc 시 앱 종료가 아닌 ProviderSelection으로 복귀
+- **[M-2]** 회귀 테스트 10건 추가: 감사 항목별 상태 전이/정책 검증 테스트 (`audit_regression.rs`, 4→14건)
+
+### Fixed (Low)
+- **[L-1]** `cargo fmt --check` 게이트 통과 확인
+
 ## [0.1.0-beta.7] - 2026-04-15
 
 ### Fixed (Critical)

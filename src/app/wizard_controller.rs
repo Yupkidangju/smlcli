@@ -95,18 +95,31 @@ impl App {
             safe_commands: None,
         };
 
-        if let Ok(mk) = crate::infra::secret_store::get_or_create_master_key() {
-            if !self.state.wizard.api_key_input.is_empty() {
-                let key_alias = format!("{}_key", settings.default_provider.to_lowercase());
-                let _ = crate::infra::secret_store::save_api_key(
-                    &key_alias,
-                    &self.state.wizard.api_key_input,
-                );
+        match crate::infra::secret_store::get_or_create_master_key() {
+            Ok(mk) => {
+                if !self.state.wizard.api_key_input.is_empty() {
+                    let key_alias = format!("{}_key", settings.default_provider.to_lowercase());
+                    if let Err(e) = crate::infra::secret_store::save_api_key(
+                        &key_alias,
+                        &self.state.wizard.api_key_input,
+                    ) {
+                        self.state.wizard.err_msg =
+                            Some(format!("Failed to save API key in Keyring: {}", e));
+                        return;
+                    }
+                }
+                if let Err(e) = crate::infra::config_store::save_config(&mk, &settings) {
+                    self.state.wizard.err_msg = Some(format!("Failed to save settings: {}", e));
+                    return;
+                }
             }
-            let _ = crate::infra::config_store::save_config(&mk, &settings);
+            Err(e) => {
+                self.state.wizard.err_msg = Some(format!("Failed to access Keyring: {}", e));
+                return;
+            }
         }
-        self.state.settings = Some(settings); // 메모리에 반영하여 앱의 구동 상태 보장
 
+        self.state.settings = Some(settings); // 메모리에 반영하여 앱의 구동 상태 보장
         self.state.is_wizard_open = false;
     }
 
@@ -187,20 +200,69 @@ impl App {
                 }
             }
             state::ConfigPopup::ProviderList => {
-                // Provider 선택 및 즉시 반영
-                let new_provider = if self.state.config.cursor_index == 0 {
+                let new_provider_str = if self.state.config.cursor_index == 0 {
                     "OpenRouter"
                 } else {
                     "Google"
                 };
+
+                // [v0.1.0-beta.8] H-3: Provider 변경 시, 이전 provider의 default_model을 유지하면 충돌 발생.
+                // "auto"로 초기화 후, 바로 ModelList로 전이하여 키 검증 및 모델 재선택을 강제함.
                 if let Some(s) = &mut self.state.settings {
-                    s.default_provider = new_provider.to_string();
+                    s.default_provider = new_provider_str.to_string();
+                    s.default_model = "auto".to_string();
                     if let Ok(mk) = crate::infra::secret_store::get_or_create_master_key() {
                         let _ = crate::infra::config_store::save_config(&mk, s);
                     }
                 }
-                self.state.config.active_popup = state::ConfigPopup::Dashboard;
+
+                let api_key = crate::infra::secret_store::get_api_key(&format!(
+                    "{}_key",
+                    new_provider_str.to_lowercase()
+                ))
+                .unwrap_or_default();
+
+                if api_key.is_empty() {
+                    // 키가 없으면 대시보드로 돌아가 에러 표시
+                    self.state.config.active_popup = state::ConfigPopup::Dashboard;
+                    self.state.config.cursor_index = 0;
+                    self.state.config.err_msg = Some(format!(
+                        "API key lacking for {}. Re-run logic via /setting",
+                        new_provider_str
+                    ));
+                    return;
+                }
+
+                // 키가 있으면 자동 ModelList 진입
+                self.state.config.active_popup = state::ConfigPopup::ModelList;
                 self.state.config.cursor_index = 0;
+                self.state.config.is_loading = true;
+
+                let tx = self.action_tx.clone();
+                let provider_kind = match new_provider_str {
+                    "Google" => crate::domain::provider::ProviderKind::Google,
+                    _ => crate::domain::provider::ProviderKind::OpenRouter,
+                };
+
+                tokio::spawn(async move {
+                    let adapter = crate::providers::registry::get_adapter(&provider_kind);
+                    match adapter.fetch_models(&api_key).await {
+                        Ok(models) => {
+                            let _ = tx
+                                .send(event_loop::Event::Action(action::Action::ModelsFetched(
+                                    Ok(models),
+                                )))
+                                .await;
+                        }
+                        Err(e) => {
+                            let _ = tx
+                                .send(event_loop::Event::Action(action::Action::ModelsFetched(
+                                    Err(e.to_string()),
+                                )))
+                                .await;
+                        }
+                    }
+                });
             }
             state::ConfigPopup::ModelList => {
                 // Model 선택 및 즉시 반영

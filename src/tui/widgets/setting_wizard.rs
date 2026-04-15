@@ -25,12 +25,29 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
             list
         }
         WizardStep::ApiKeyInput => {
-            format!(
-                "[Step 2] Enter API Key\n\
-            Current buffer: {}\n\n\
-            Press Enter to submit and fetch available models.",
-                state.wizard.api_key_input
-            )
+            let masked = "*".repeat(state.wizard.api_key_input.len());
+            if state.wizard.is_loading_models {
+                format!(
+                    "[Step 2] Validating API Key...\n\
+                Current buffer: {}\n\n\
+                Please wait.",
+                    masked
+                )
+            } else {
+                let err_str = state.wizard.err_msg.as_deref().unwrap_or("");
+                let err_disp = if err_str.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n\n!! [Validation Error] !!\n{}", err_str)
+                };
+
+                format!(
+                    "[Step 2] Enter API Key\n\
+                Current buffer: {}\n\n\
+                Press Enter to submit and fetch available models.{}",
+                    masked, err_disp
+                )
+            }
         }
         WizardStep::ModelSelection => {
             if state.wizard.is_loading_models {

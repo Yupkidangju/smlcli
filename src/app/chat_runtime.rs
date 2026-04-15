@@ -40,6 +40,13 @@ impl App {
 
         tokio::spawn(async move {
             let (provider_kind, model_name, api_key) = if let Some(s) = &settings_clone {
+                if s.network_policy == crate::domain::permissions::NetworkPolicy::Deny {
+                    let _ = tx.send(event_loop::Event::Action(action::Action::ChatResponseErr(
+                        "[Security Block] Network access is blocked by policy (NetworkPolicy::Deny). Change policy to use provider API.".to_string()
+                    ))).await;
+                    return;
+                }
+
                 let provider = match s.default_provider.as_str() {
                     "Google" => crate::domain::provider::ProviderKind::Google,
                     _ => crate::domain::provider::ProviderKind::OpenRouter,
