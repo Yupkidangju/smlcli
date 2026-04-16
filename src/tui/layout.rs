@@ -98,7 +98,6 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
     let mut chat_history = String::new();
     for msg in &state.session.messages {
         // [v0.1.0-beta.7] 내부 시스템 프롬프트(pinned System)는 타임라인에서 숨김.
-        // 사용자에게 내부 도구 프로토콜 지시문이 노출되는 것을 방지함.
         if msg.role == crate::providers::types::Role::System && msg.pinned {
             continue;
         }
@@ -109,8 +108,18 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
             crate::providers::types::Role::Tool => "Tool:\n",
         };
         chat_history.push_str(role_str);
-        chat_history.push_str(&msg.content);
+
+        // [v0.1.0-beta.16] AI 응답에서 ```json ... ``` 도구 호출 블록을 필터링하여
+        // 사용자에게 원시(raw) JSON 스키마가 노출되지 않도록 처리.
+        // 도구 호출 부분은 "⚙️ 도구 호출 실행 중..." 으로 대체.
+        let display_content = filter_tool_json(&msg.content);
+        chat_history.push_str(&display_content);
         chat_history.push_str("\n\n");
+    }
+
+    // [v0.1.0-beta.16] AI 추론 중 인디케이터
+    if state.is_thinking {
+        chat_history.push_str("✨ AI가 응답을 생성하고 있습니다...\n");
     }
 
     if chat_history.is_empty() {
@@ -120,6 +129,49 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
     let block = Block::default().title("Timeline").borders(Borders::RIGHT);
     let paragraph = Paragraph::new(chat_history).block(block);
     f.render_widget(paragraph, area);
+}
+
+/// [v0.1.0-beta.16] AI 응답 텍스트에서 ```json ... ``` 도구 호출 블록을 필터링.
+/// 도구 호출 JSON을 사용자 친화적 메시지로 대체.
+fn filter_tool_json(content: &str) -> String {
+    let mut result = String::new();
+    let mut remaining = content;
+
+    while let Some(start) = remaining.find("```json") {
+        // JSON 블록 이전 텍스트 추가
+        result.push_str(&remaining[..start]);
+
+        let after_marker = &remaining[start + 7..];
+        if let Some(end) = after_marker.find("```") {
+            // JSON 블록을 사용자 친화적 메시지로 대체
+            let json_str = after_marker[..end].trim();
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(json_str) {
+                if let Some(tool_name) = parsed.get("tool").and_then(|v| v.as_str()) {
+                    result.push_str(&format!("\n⚙️  [{}] 도구 호출 실행 중...", tool_name));
+                    // 명령어나 경로 등 핵심 정보만 간략히 표시
+                    if let Some(cmd) = parsed.get("command").and_then(|v| v.as_str()) {
+                        result.push_str(&format!("\n   ↳ $ {}", cmd));
+                    }
+                    if let Some(path) = parsed.get("path").and_then(|v| v.as_str()) {
+                        result.push_str(&format!("\n   ↳ {}", path));
+                    }
+                    result.push('\n');
+                } else {
+                    result.push_str("\n⚙️  도구 호출 실행 중...\n");
+                }
+            } else {
+                // JSON 파싱 실패 시 원문 그대로 표시
+                result.push_str(&remaining[start..start + 7 + end + 3]);
+            }
+            remaining = &after_marker[end + 3..];
+        } else {
+            // 닫는 ``` 없으면 나머지 그대로
+            result.push_str(&remaining[start..]);
+            remaining = "";
+        }
+    }
+    result.push_str(remaining);
+    result
 }
 
 fn draw_inspector(f: &mut Frame, state: &AppState, area: Rect) {
@@ -241,5 +293,40 @@ fn draw_composer(f: &mut Frame, state: &AppState, area: Rect) {
         let f_para = Paragraph::new(lines).block(f_block);
         f.render_widget(ratatui::widgets::Clear, fuzzy_area);
         f.render_widget(f_para, fuzzy_area);
+    }
+
+    // [v0.1.0-beta.16] 슬래시 커맨드 자동완성 메뉴: Composer 위에 팝업으로 표시
+    if state.slash_menu.is_open {
+        let menu_height = (state.slash_menu.matches.len() as u16 + 2).min(13);
+        let menu_area = ratatui::layout::Rect {
+            x: area.x + 2,
+            y: area.y.saturating_sub(menu_height),
+            width: 35,
+            height: menu_height,
+        };
+        let menu_block = Block::default()
+            .title("Commands (/)")
+            .borders(Borders::ALL)
+            .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+
+        let mut lines = Vec::new();
+        for (i, (cmd, desc)) in state.slash_menu.matches.iter().enumerate() {
+            let line_text = format!("{:<12} {}", cmd, desc);
+            if i == state.slash_menu.cursor {
+                lines.push(ratatui::text::Line::from(vec![
+                    ratatui::text::Span::styled(
+                        format!("▶ {}", line_text),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                ]));
+            } else {
+                lines.push(ratatui::text::Line::from(vec![ratatui::text::Span::raw(
+                    format!("  {}", line_text),
+                )]));
+            }
+        }
+        let menu_para = Paragraph::new(lines).block(menu_block);
+        f.render_widget(ratatui::widgets::Clear, menu_area);
+        f.render_widget(menu_para, menu_area);
     }
 }

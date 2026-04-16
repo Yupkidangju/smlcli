@@ -3,6 +3,27 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [0.1.0-beta.16] - 2026-04-16
+
+### Added (UX 4건 — 감사 결과 반영)
+- **Tool JSON 필터링**: AI 응답에서 도구 호출 JSON 스키마가 사용자에게 직접 노출되지 않고 `⚙️ [도구명] 도구 호출 실행 중...` 형태로 표시
+- **AI 추론 인디케이터**: 프롬프트 전송 후 AI 응답 수신까지 `✨ AI가 응답을 생성하고 있습니다...` 표시
+- **슬래시 커맨드 자동완성 메뉴**: Composer에서 `/` 입력 시 사용 가능한 11개 명령어가 팝업으로 표시, 방향키+Enter로 선택, Esc로 취소
+- **에이전트 페르소나 시스템 프롬프트**: CLI 에이전트 역할 정의, 한국어 응답 지시, 도구 호출 시 자연어 설명 병행 지시 (약 1K 토큰)
+
+### Changed
+- `session.rs`: 시스템 프롬프트를 단순 도구 나열에서 전문적 페르소나 정의로 대폭 강화
+- `state.rs`: `is_thinking`, `SlashMenuState` 추가
+- `layout.rs`: `filter_tool_json()` 함수 추가, thinking indicator 렌더링, 슬래시 메뉴 팝업 렌더링
+- `mod.rs`: 슬래시 메뉴 키보드 입력 핸들링 (char, Up/Down, Enter, Backspace, Esc)
+
+## [0.1.0-beta.15] - 2026-04-16
+
+### Fixed (감사 3건 수정)
+- **[High]** `serde_yml` (RUSTSEC-2025-0067/0068) 제거 → 기존 `toml` 크레이트로 교체
+- **[Medium]** 문서-구현 불일치 해소: README/spec.md 내 keyring 참조를 파일 기반 암호화로 교체
+- **[Low]** `config.toml`에 chmod 600 권한 설정 추가 (Unix)
+
 ## [0.1.0-beta.14] - 2026-04-16
 
 ### Changed (아키텍처 변경 — Credential Store 재설계)

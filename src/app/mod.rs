@@ -107,6 +107,8 @@ impl App {
                     });
             }
             action::Action::ChatResponseOk(res) => {
+                // [v0.1.0-beta.16] 추론 완료: thinking indicator 비활성화
+                self.state.is_thinking = false;
                 // 토큰 예산 갱신
                 self.state.session.token_budget_used += res.input_tokens + res.output_tokens;
                 self.state.session.add_message(res.message.clone());
@@ -115,6 +117,8 @@ impl App {
                 self.process_tool_calls_from_response(&res.message.content);
             }
             action::Action::ChatResponseErr(e) => {
+                // [v0.1.0-beta.16] 추론 완료: thinking indicator 비활성화
+                self.state.is_thinking = false;
                 self.state
                     .session
                     .add_message(crate::providers::types::ChatMessage {
@@ -253,7 +257,11 @@ impl App {
                 self.state.show_inspector = !self.state.show_inspector;
             }
             KeyCode::Esc => {
-                if self.state.fuzzy.is_open {
+                if self.state.slash_menu.is_open {
+                    // [v0.1.0-beta.16] 슬래시 메뉴 닫기
+                    self.state.slash_menu.is_open = false;
+                    self.state.slash_menu.filter.clear();
+                } else if self.state.fuzzy.is_open {
                     self.state.fuzzy.is_open = false;
                 } else if self.state.config.is_open {
                     if self.state.config.active_popup != state::ConfigPopup::Dashboard {
@@ -312,7 +320,7 @@ impl App {
         }
     }
 
-    /// 문자 입력 처리: 승인 대기 → 위자드 → Fuzzy Finder → Composer 순으로 라우팅.
+    /// 문자 입력 처리: 승인 대기 → 위자드 → Slash Menu → Fuzzy Finder → Composer 순으로 라우팅.
     fn handle_char_input(&mut self, c: char) {
         if self.state.approval.pending_tool.is_some() {
             if c == 'y' {
@@ -324,11 +332,21 @@ impl App {
             if self.state.wizard.step == state::WizardStep::ApiKeyInput {
                 self.state.wizard.api_key_input.push(c);
             }
+        } else if self.state.slash_menu.is_open {
+            // [v0.1.0-beta.16] 슬래시 메뉴 활성 상태: 필터 문자 추가
+            self.state.slash_menu.filter.push(c);
+            self.state.slash_menu.update_matches();
         } else if self.state.fuzzy.is_open {
             self.state.fuzzy.input.push(c);
             self.update_fuzzy_matches();
         } else {
-            if c == '@' {
+            if c == '/' && self.state.composer.input_buffer.is_empty() {
+                // [v0.1.0-beta.16] 빈 Composer에서 / 입력 시 슬래시 메뉴 활성화
+                self.state.slash_menu.is_open = true;
+                self.state.slash_menu.filter.clear();
+                self.state.slash_menu.cursor = 0;
+                self.state.slash_menu.update_matches();
+            } else if c == '@' {
                 self.state.fuzzy.is_open = true;
                 self.state.fuzzy.input.clear();
                 self.state.fuzzy.matches.clear();
@@ -340,9 +358,13 @@ impl App {
         }
     }
 
-    /// Up 화살표 키 처리: Fuzzy Finder, Config, Wizard 각 모드별 커서 이동.
+    /// Up 화살표 키 처리: Slash Menu, Fuzzy Finder, Config, Wizard 각 모드별 커서 이동.
     fn handle_up_key(&mut self) {
-        if self.state.fuzzy.is_open {
+        if self.state.slash_menu.is_open {
+            if self.state.slash_menu.cursor > 0 {
+                self.state.slash_menu.cursor -= 1;
+            }
+        } else if self.state.fuzzy.is_open {
             if self.state.fuzzy.cursor > 0 {
                 self.state.fuzzy.cursor -= 1;
             }
@@ -355,7 +377,11 @@ impl App {
 
     /// Down 화살표 키 처리: 각 모드별 리스트의 최대값까지 커서 이동.
     fn handle_down_key(&mut self) {
-        if self.state.fuzzy.is_open {
+        if self.state.slash_menu.is_open {
+            if self.state.slash_menu.cursor + 1 < self.state.slash_menu.matches.len() {
+                self.state.slash_menu.cursor += 1;
+            }
+        } else if self.state.fuzzy.is_open {
             if self.state.fuzzy.cursor + 1 < self.state.fuzzy.matches.len().min(3) {
                 self.state.fuzzy.cursor += 1;
             }
@@ -384,9 +410,17 @@ impl App {
         }
     }
 
-    /// Backspace 키 처리: Fuzzy Finder, Wizard API 키, Composer 각각의 버퍼 삭제.
+    /// Backspace 키 처리: Slash Menu, Fuzzy Finder, Wizard API 키, Composer 각각의 버퍼 삭제.
     fn handle_backspace(&mut self) {
-        if self.state.fuzzy.is_open {
+        if self.state.slash_menu.is_open {
+            // [v0.1.0-beta.16] 필터가 비면 메뉴 닫기, 아니면 필터 문자 삭제
+            if self.state.slash_menu.filter.is_empty() {
+                self.state.slash_menu.is_open = false;
+            } else {
+                self.state.slash_menu.filter.pop();
+                self.state.slash_menu.update_matches();
+            }
+        } else if self.state.fuzzy.is_open {
             if self.state.fuzzy.input.is_empty() {
                 self.state.fuzzy.is_open = false;
             } else {
@@ -402,9 +436,20 @@ impl App {
         }
     }
 
-    /// Enter 키 처리: Fuzzy Finder 선택 → Config 팝업 → Wizard → Composer 제출 순으로 라우팅.
+    /// Enter 키 처리: Slash Menu 선택 → Fuzzy Finder 선택 → Config 팝업 → Wizard → Composer 제출 순으로 라우팅.
     fn handle_enter_key(&mut self) {
-        if self.state.fuzzy.is_open {
+        if self.state.slash_menu.is_open {
+            // [v0.1.0-beta.16] 슬래시 메뉴에서 명령어 선택 → 바로 실행
+            if !self.state.slash_menu.matches.is_empty() {
+                let (cmd, _) = self.state.slash_menu.matches[self.state.slash_menu.cursor];
+                let cmd_str = cmd.to_string();
+                self.state.slash_menu.is_open = false;
+                self.state.slash_menu.filter.clear();
+                self.handle_slash_command(&cmd_str);
+            } else {
+                self.state.slash_menu.is_open = false;
+            }
+        } else if self.state.fuzzy.is_open {
             // Fuzzy Finder에서 파일 선택 후 Composer에 참조 주입
             if !self.state.fuzzy.matches.is_empty() {
                 let selected = &self.state.fuzzy.matches[self.state.fuzzy.cursor];

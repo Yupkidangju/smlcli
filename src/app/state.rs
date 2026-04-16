@@ -128,6 +128,57 @@ impl FuzzyFinderState {
     }
 }
 
+/// [v0.1.0-beta.16] 슬래시 커맨드 자동완성 메뉴 상태.
+/// Composer에서 `/`를 입력하면 활성화되어 사용 가능한 명령어 목록을 부분 일치 필터링.
+pub struct SlashMenuState {
+    pub is_open: bool,
+    /// `/` 이후 입력된 검색 문자열
+    pub filter: String,
+    /// 필터에 매칭되는 명령어 목록
+    pub matches: Vec<(&'static str, &'static str)>,
+    /// 현재 커서 위치
+    pub cursor: usize,
+}
+
+/// 전체 슬래시 명령어 목록: (명령어, 설명)
+pub const SLASH_COMMANDS: &[(&str, &str)] = &[
+    ("/config", "설정 대시보드"),
+    ("/setting", "셋업 위자드 재실행"),
+    ("/provider", "공급자 전환"),
+    ("/model", "모델 전환"),
+    ("/status", "세션 상태 보기"),
+    ("/mode", "PLAN ↔ RUN 전환"),
+    ("/tokens", "토큰 사용량 보기"),
+    ("/compact", "컨텍스트 압축"),
+    ("/clear", "대화 초기화"),
+    ("/help", "명령어 도움말"),
+    ("/quit", "앱 종료"),
+];
+
+impl SlashMenuState {
+    pub fn new() -> Self {
+        Self {
+            is_open: false,
+            filter: String::new(),
+            matches: Vec::new(),
+            cursor: 0,
+        }
+    }
+
+    /// 필터 문자열로 매칭되는 명령어 갱신
+    pub fn update_matches(&mut self) {
+        let query = format!("/{}", self.filter.to_lowercase());
+        self.matches = SLASH_COMMANDS
+            .iter()
+            .filter(|(cmd, _)| cmd.starts_with(&query))
+            .copied()
+            .collect();
+        if self.cursor >= self.matches.len() {
+            self.cursor = 0;
+        }
+    }
+}
+
 pub struct AppState {
     pub should_quit: bool,
     pub is_wizard_open: bool,
@@ -140,6 +191,10 @@ pub struct AppState {
     pub config: ConfigState,
     pub composer: ComposerState,
     pub approval: ApprovalState,
+    /// [v0.1.0-beta.16] AI 추론 중 여부 (thinking indicator 렌더링용)
+    pub is_thinking: bool,
+    /// [v0.1.0-beta.16] 슬래시 명령어 자동완성 메뉴
+    pub slash_menu: SlashMenuState,
 }
 
 impl AppState {
@@ -165,6 +220,8 @@ impl AppState {
             session: crate::domain::session::SessionState::new(),
             composer: ComposerState::new(),
             approval: ApprovalState::new(),
+            is_thinking: false,
+            slash_menu: SlashMenuState::new(),
         }
     }
 }

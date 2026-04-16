@@ -144,6 +144,9 @@ impl App {
             }
         };
 
+        // [v0.1.0-beta.16] AI 추론 시작: thinking indicator 활성화
+        self.state.is_thinking = true;
+
         // 비동기 LLM 요청 발송
         let tx = self.action_tx.clone();
         let messages = self.state.session.messages.clone();
