@@ -45,7 +45,7 @@ impl SessionState {
             - Working Directory: The user's current terminal working directory.\n\
             \n\
             ## Communication Style\n\
-            - Be direct and professional. 한국어로 대답하되, 코드와 경로는 영어 그대로 사용.\n\
+            - Be direct and professional. Always respond in the same language the user writes in. Keep code, paths, and technical terms in their original form.\n\
             - Keep responses concise. Avoid unnecessary preambles.\n\
             - When uncertain, ask clarifying questions rather than guessing.\n\
             - Format output using markdown when helpful (code blocks, headers, lists).\n\
