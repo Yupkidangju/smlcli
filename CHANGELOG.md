@@ -3,6 +3,16 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [0.1.0-beta.17] - 2026-04-16
+
+### Fixed (감사 리포트 수정 3건)
+- **[M-1] 소스 코드 주석 정합성**: `Keyring`→`암호화 저장소`, `config.yaml`→`config.toml` 일괄 교체 (6개 파일 15건)
+- **[M-2] /help 다국어 병행 표기**: 영문 단독 → 한/영 병행 (예: `/config 설정 대시보드 (Settings Dashboard)`)
+- **[L-1] 테스트 코드 문구 갱신**: `Keyring`→`암호화 저장소` (audit_regression.rs 2건)
+
+### Changed
+- `session.rs`: 페르소나 언어 지시를 `한국어 고정` → `사용자 입력 언어 미러링`으로 변경
+
 ## [0.1.0-beta.16] - 2026-04-16
 
 ### Added (UX 4건 — 감사 결과 반영)

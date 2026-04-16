@@ -151,3 +151,10 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
   - 슬래시 커맨드 자동완성 메뉴: Composer에서 `/` 입력 시 11개 명령어 팝업, 방향키+Enter 선택.
   - 에이전트 페르소나 시스템 프롬프트: CLI 에이전트 역할 정의 (~1K 토큰), 사용자 입력 언어 미러링.
   - [Quality] 전체 품질 게이트 통과: `cargo check ✓ | cargo test 14/14 ✓ | cargo clippy -D warnings ✓ | cargo fmt --check ✓`
+- [2026-04-16] : **[v0.1.0-beta.17] 9차 감사 수정 3건.**
+  - [M-1] 소스 코드 주석 일괄 교체: `Keyring`→`암호화 저장소`, `config.yaml`→`config.toml` (6개 파일 15건).
+  - [M-2] `/help` 출력 한/영 병행 표기 적용 (i18n 일관성).
+  - [L-1] 테스트 코드 문구 `Keyring`→`암호화 저장소` 교체 (audit_regression.rs 2건).
+  - 페르소나 언어 지시: `한국어 고정` → `사용자 입력 언어 미러링` 변경.
+  - [Verification] keyring 잔존 grep 0건, config.yaml 잔존 grep 0건 확인.
+  - [Quality] 전체 품질 게이트 통과: `cargo check ✓ | cargo test 14/14 ✓ | cargo clippy -D warnings ✓ | cargo fmt --check ✓`
