@@ -186,16 +186,17 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
 6. ⏳ 세션 영속성 JSONL — Phase 9-C로 이관
 7. ⏳ Structured Tool Call — Phase 9-C로 이관
 
-### Phase 9-C: 품질 강화 — 대기
-1. ⏳ SSE 스트리밍 (9-A에서 이관)
-2. ⏳ CLI Entry Modes (9-B에서 이관)
-3. ⏳ 세션 영속성 JSONL (9-B에서 이관)
-4. ⏳ Shell stdout/stderr 실시간 스트리밍
-5. ⏳ Diff 접기/펼치기 UI
-6. ⏳ 테스트 확장 (22건+)
+### Phase 9-C: 품질 강화 — ✅ 부분 완료 (3/6건)
+1. ⏳ SSE 스트리밍 (9-A에서 이관) — Phase 10으로 이관
+2. ⏳ CLI Entry Modes (9-B에서 이관) — Phase 10으로 이관
+3. ⏳ 세션 영속성 JSONL (9-B에서 이관) — Phase 10으로 이관
+4. ✅ Shell stdout/stderr 실시간 스트리밍 (라인 단위 비동기 + ToolOutputChunk 이벤트)
+5. ⏳ Diff 접기/펼치기 UI — Phase 10으로 이관
+6. ✅ 테스트 확장 (14→24건): blocked_command, timeline, ToolStatus 등
+7. ✅ ListDir 재귀 트리 (├──/└── Unicode, 디렉토리 우선 정렬, 1000개 제한)
 
-### 실제 결과
-- 코드 변경량: ~600줄 추가 (10개 파일 변경, 1개 신규)
-- 테스트: 14건 → 18건, Clippy: 0 warnings
+### 실제 결과 (Phase 9 전체)
+- 코드 변경량: ~870줄 추가 (13개 파일 변경, 1개 신규)
+- 테스트: 14건 → 24건, Clippy: 0 warnings
 - 신규 파일: `tui/palette.rs`
-
+- 커밋: `b5c4612` (9-A/B), `f1c81f4` (9-C)
