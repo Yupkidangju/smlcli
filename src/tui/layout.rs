@@ -91,14 +91,21 @@ fn draw_top_bar(f: &mut Frame, state: &AppState, area: Rect) {
         pal::TEXT_SECONDARY
     };
 
-    let text = format!(
-        " smlcli · {}/{} · {} · {} · Shell {} · {}% ctx · ✓ ",
-        provider, model, cwd, mode_str, shell_policy_str, budget
+    // [v0.1.0-beta.18] Semantic Palette 적용: 상태바 배경에 BG_PANEL,
+    // 컨텍스트 사용량 비율에 따라 ctx% 텍스트 색상 차등 적용.
+    let prefix = format!(
+        " smlcli · {}/{} · {} · {} · Shell {} · ",
+        provider, model, cwd, mode_str, shell_policy_str
     );
-
-    // [v0.1.0-beta.18] Semantic Palette 적용: 상태바 배경에 BG_PANEL 사용
+    let ctx_span = format!("{}% ctx", budget);
+    let suffix = " · ✓ ";
+    let status_line = Line::from(vec![
+        Span::styled(prefix, Style::default().fg(pal::TEXT_PRIMARY)),
+        Span::styled(ctx_span, Style::default().fg(ctx_color)),
+        Span::styled(suffix, Style::default().fg(pal::TEXT_PRIMARY)),
+    ]);
     let paragraph =
-        Paragraph::new(text).style(Style::default().bg(pal::BG_PANEL).fg(pal::TEXT_PRIMARY));
+        Paragraph::new(status_line).style(Style::default().bg(pal::BG_PANEL));
     f.render_widget(paragraph, area);
 }
 

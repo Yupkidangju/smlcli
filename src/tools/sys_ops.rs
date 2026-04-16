@@ -1,7 +1,7 @@
 use crate::domain::tool_result::ToolResult;
 use anyhow::Result;
 use std::fs;
-use sysinfo::{Disks, Networks, System};
+use sysinfo::System;
 
 /// [v0.1.0-beta.18] Phase 9-C: 재귀 tree 형태 ListDir.
 /// depth 파라미터에 따라 하위 디렉토리를 트리 구조로 표시.

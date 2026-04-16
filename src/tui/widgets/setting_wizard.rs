@@ -1,9 +1,8 @@
 use crate::app::state::{AppState, WizardStep};
-use crate::domain::provider::ProviderKind;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     widgets::{Block, Borders, Paragraph},
 };
 

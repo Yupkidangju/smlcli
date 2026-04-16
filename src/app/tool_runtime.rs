@@ -118,7 +118,7 @@ impl App {
     /// 도구를 비동기로 실행하고, 완료/에러 결과를 이벤트 루프에 전송.
     pub(crate) fn execute_tool_async(&mut self, tool_call: crate::domain::tool_result::ToolCall) {
         // [v0.1.0-beta.18] Phase 9-A: ToolStarted — 타임라인 카드를 Running으로 갱신
-        let tool_name = format!("{:?}", &tool_call).chars().take(30).collect::<String>();
+        let _tool_name = format!("{:?}", &tool_call).chars().take(30).collect::<String>();
         for entry in self.state.timeline.iter_mut().rev() {
             if let crate::app::state::TimelineEntryKind::ToolCard {
                 ref mut status, ..

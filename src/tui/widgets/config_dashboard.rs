@@ -1,7 +1,7 @@
 use crate::app::state::{AppState, ConfigPopup};
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Style},
     widgets::{Block, Borders, Clear, Paragraph},
 };
