@@ -161,44 +161,41 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
 
 ---
 
-## Phase 9: UX 아키텍처 개편 계획 (v0.1.0-beta.18+)
+## Phase 9: UX 아키텍처 개편 (v0.1.0-beta.18)
 
-**상태**: 문서 반영 완료 → 구현 대기
-**승인 일시**: 2026-04-16
-**관련 문서**: spec.md §3.2, §3.9, §9 / designs.md §5.5~5.6, §6.7, §21 / audit_roadmap.md Phase 9 / DESIGN_DECISIONS.md ADR-009
+**상태**: ✅ Phase 9-A/B 구현 완료 → Phase 9-C 대기
+**완료 일시**: 2026-04-16
+**커밋**: `b5c4612`
+**관련 문서**: spec.md §3.2, §3.9, §9 / designs.md §5.5~5.6, §6.7, §21 / DESIGN_DECISIONS.md ADR-009
 
-### 개편 배경
-- 현재 `Action` 7종 + `session.messages` 단일 배열 → Codex 스타일 진행 표시 구조적 불가
-- Inspector 탭 enum만 존재, 실체 미구현
-- 색상 하드코딩 (Color::Yellow 등), 애니메이션 부재
-- 전체 응답 일괄 수신(batch), SSE 스트리밍 미지원
+### Phase 9-A: 이벤트 기반 구조 — ✅ 완료 (6/7건)
+1. ✅ Action enum 14종 확장 (ChatStarted, ChatDelta, ToolQueued, ToolStarted, ToolOutputChunk, ToolSummaryReady)
+2. ✅ TimelineEntry 모델 도입 (session.messages ↔ timeline_entries 이중 구조)
+3. ✅ Semantic Palette 도입 (tui/palette.rs — info/success/warning/danger/muted/accent + bg 3계층)
+4. ✅ tick 기반 애니메이션 (스피너 ◐◓◑◒, 배지 깜빡임 ●/○, 승인 pulse)
+5. ✅ Inspector Logs 탭 실체 구현 (logs_buffer 기반 렌더링)
+6. ✅ Tool 출력 요약 분리 (2~4줄 타임라인 + 원문 Logs 탭)
+7. ⏳ SSE 스트리밍 — Phase 9-C로 이관
 
-### Phase 9-A: 이벤트 기반 구조 (기반 작업) — 7건
-1. Action enum 14종 확장 (ChatStarted, ChatDelta, ToolQueued, ToolStarted, ToolOutputChunk, ToolSummaryReady)
-2. TimelineEntry 모델 도입 (session.messages ↔ timeline_entries 이중 구조)
-3. Semantic Palette 도입 (tui/palette.rs — info/success/warning/danger/muted + bg 3계층)
-4. tick 기반 애니메이션 (스피너 ◐◓◑◒, 배지 깜빡임, pulse, progress)
-5. Inspector 탭 실체 구현 (widgets/inspector_tabs.rs — Preview/Diff/Search/Logs/Recent)
-6. Tool 출력 요약 분리 (2~4줄 타임라인 + 원문 Logs 탭)
-7. SSE 스트리밍 (chat_stream() + ChatDelta + reqwest bytes_stream)
+### Phase 9-B: 기능 완성 — ✅ 완료 (4/7건)
+1. ✅ Blocked Command 목록 (15개 패턴 무조건 차단)
+2. ✅ File Read 안전장치 (경로 traversal 차단 + 1MB 제한 + 800줄 상한)
+3. ✅ Grep 결과 UX (context_lines + 파일별 그룹 + 결과 요약)
+4. ✅ ToolQueued/ToolStarted/ApprovalCard 이벤트 파이프라인 통합
+5. ⏳ CLI Entry Modes — Phase 9-C로 이관
+6. ⏳ 세션 영속성 JSONL — Phase 9-C로 이관
+7. ⏳ Structured Tool Call — Phase 9-C로 이관
 
-### Phase 9-B: 기능 완성 — 7건
-1. CLI Entry Modes (clap + run/doctor/export-log)
-2. 세션 영속성 (JSONL + 복원 — infra/session_log.rs)
-3. SafeOnly 화이트리스트 검증
-4. Blocked Command 목록 (sudo/rm -rf 정규식 차단)
-5. Structured Tool Call (Provider별 native tool call contract)
-6. File Read 안전장치 (경로 정규화 + 1MB 제한)
-7. Grep 결과 UX (context_lines + max_results)
+### Phase 9-C: 품질 강화 — 대기
+1. ⏳ SSE 스트리밍 (9-A에서 이관)
+2. ⏳ CLI Entry Modes (9-B에서 이관)
+3. ⏳ 세션 영속성 JSONL (9-B에서 이관)
+4. ⏳ Shell stdout/stderr 실시간 스트리밍
+5. ⏳ Diff 접기/펼치기 UI
+6. ⏳ 테스트 확장 (22건+)
 
-### Phase 9-C: 품질 단단 — 5건
-1. Shell stdout/stderr 실시간 스트리밍
-2. Diff 접기/펼치기 UI
-3. ListDir 깊이 탐색 (재귀 tree)
-4. 전역 #[allow] 제거
-5. 테스트 확장 (22건+): secret_store round-trip, provider cancel/rollback, tool lifecycle, layout snapshot
+### 실제 결과
+- 코드 변경량: ~600줄 추가 (10개 파일 변경, 1개 신규)
+- 테스트: 14건 → 18건, Clippy: 0 warnings
+- 신규 파일: `tui/palette.rs`
 
-### 예상 영향
-- 코드 변경량: ~735줄 추가 (3,909줄 → ~4,650줄)
-- 신규 파일: `tui/palette.rs`, `widgets/inspector_tabs.rs`, `infra/session_log.rs`
-- 신규 의존성: 0건
