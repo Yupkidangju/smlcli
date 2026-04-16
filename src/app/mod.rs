@@ -102,10 +102,10 @@ impl App {
             action::Action::ChatDelta(token) => {
                 // SSE 토큰 수신: 스트리밍 중간 결과에 append
                 self.state.is_thinking = false;
-                if let Some(last) = self.state.timeline.last_mut() {
-                    if let TimelineEntryKind::AssistantDelta(ref mut buf) = last.kind {
-                        buf.push_str(&token);
-                    }
+                if let Some(last) = self.state.timeline.last_mut()
+                    && let TimelineEntryKind::AssistantDelta(ref mut buf) = last.kind
+                {
+                    buf.push_str(&token);
                 }
             }
 
@@ -173,11 +173,11 @@ impl App {
             action::Action::ToolStarted(name) => {
                 // 마지막 ToolCard의 상태를 Running으로 갱신
                 for entry in self.state.timeline.iter_mut().rev() {
-                    if let TimelineEntryKind::ToolCard { ref tool_name, ref mut status, .. } = entry.kind {
-                        if *tool_name == name || *status == ToolStatus::Queued {
-                            *status = ToolStatus::Running;
-                            break;
-                        }
+                    if let TimelineEntryKind::ToolCard { ref tool_name, ref mut status, .. } = entry.kind
+                        && (*tool_name == name || *status == ToolStatus::Queued)
+                    {
+                        *status = ToolStatus::Running;
+                        break;
                     }
                 }
             }
@@ -212,13 +212,13 @@ impl App {
                 // 타임라인 ToolCard 상태를 Done/Error로 갱신
                 let final_status = if res.is_error { ToolStatus::Error } else { ToolStatus::Done };
                 for entry in self.state.timeline.iter_mut().rev() {
-                    if let TimelineEntryKind::ToolCard { ref mut status, ref mut summary, .. } = entry.kind {
-                        if *status == ToolStatus::Running || *status == ToolStatus::Queued {
-                            *status = final_status.clone();
-                            // 2~4줄 요약 생성
-                            *summary = Self::generate_tool_summary(&res);
-                            break;
-                        }
+                    if let TimelineEntryKind::ToolCard { ref mut status, ref mut summary, .. } = entry.kind
+                        && (*status == ToolStatus::Running || *status == ToolStatus::Queued)
+                    {
+                        *status = final_status.clone();
+                        // 2~4줄 요약 생성
+                        *summary = Self::generate_tool_summary(&res);
+                        break;
                     }
                 }
             }
@@ -244,12 +244,12 @@ impl App {
 
                 // 타임라인 ToolCard 상태를 Error로 갱신
                 for entry in self.state.timeline.iter_mut().rev() {
-                    if let TimelineEntryKind::ToolCard { ref mut status, ref mut summary, .. } = entry.kind {
-                        if *status == ToolStatus::Running || *status == ToolStatus::Queued {
-                            *status = ToolStatus::Error;
-                            *summary = format!("실패: {}", e.chars().take(80).collect::<String>());
-                            break;
-                        }
+                    if let TimelineEntryKind::ToolCard { ref mut status, ref mut summary, .. } = entry.kind
+                        && (*status == ToolStatus::Running || *status == ToolStatus::Queued)
+                    {
+                        *status = ToolStatus::Error;
+                        *summary = format!("실패: {}", e.chars().take(80).collect::<String>());
+                        break;
                     }
                 }
             }

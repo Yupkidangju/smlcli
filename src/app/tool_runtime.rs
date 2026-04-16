@@ -34,6 +34,19 @@ impl App {
     /// 파싱된 ToolCall에 대해 권한 검사를 수행하고, 결과에 따라 실행/승인대기/거부를 처리.
     pub(crate) fn dispatch_tool_call(&mut self, tool_call: crate::domain::tool_result::ToolCall) {
         let settings = self.state.settings.clone().unwrap_or_default();
+
+        // [v0.1.0-beta.18] Phase 9-A: ToolQueued 타임라인 엔트리 추가
+        let tool_name = format!("{:?}", &tool_call).chars().take(30).collect::<String>();
+        self.state.timeline.push(
+            crate::app::state::TimelineEntry::now(
+                crate::app::state::TimelineEntryKind::ToolCard {
+                    tool_name: tool_name.clone(),
+                    status: crate::app::state::ToolStatus::Queued,
+                    summary: "권한 검사 중...".to_string(),
+                },
+            ),
+        );
+
         let perm = crate::domain::permissions::PermissionEngine::check(&tool_call, &settings);
 
         match perm {
@@ -43,6 +56,13 @@ impl App {
             }
             crate::domain::permissions::PermissionResult::Ask => {
                 // 승인 대기: Inspector 패널 강제 오픈 + Diff Preview 자동 생성
+                // [v0.1.0-beta.18] 타임라인 ToolCard를 ApprovalCard로 대체
+                if let Some(last) = self.state.timeline.last_mut() {
+                    last.kind = crate::app::state::TimelineEntryKind::ApprovalCard {
+                        tool_name: tool_name.clone(),
+                        detail: "사용자 승인 대기 중 (y/n)".to_string(),
+                    };
+                }
                 self.state.approval.pending_tool = Some(tool_call.clone());
                 self.state.show_inspector = true;
 
@@ -69,7 +89,21 @@ impl App {
                 }
             }
             crate::domain::permissions::PermissionResult::Deny(reason) => {
-                // 거부: 보안 차단 메시지를 타임라인에 표시
+                // [v0.1.0-beta.18] 타임라인 ToolCard를 Error 상태로 갱신
+                for entry in self.state.timeline.iter_mut().rev() {
+                    if let crate::app::state::TimelineEntryKind::ToolCard {
+                        ref mut status,
+                        ref mut summary,
+                        ..
+                    } = entry.kind
+                        && *status == crate::app::state::ToolStatus::Queued
+                    {
+                        *status = crate::app::state::ToolStatus::Error;
+                        *summary = format!("🛡 {}", reason);
+                        break;
+                    }
+                }
+                // 거부: 보안 차단 메시지를 세션에 표시
                 self.state
                     .session
                     .add_message(crate::providers::types::ChatMessage {
@@ -82,7 +116,20 @@ impl App {
     }
 
     /// 도구를 비동기로 실행하고, 완료/에러 결과를 이벤트 루프에 전송.
-    pub(crate) fn execute_tool_async(&self, tool_call: crate::domain::tool_result::ToolCall) {
+    pub(crate) fn execute_tool_async(&mut self, tool_call: crate::domain::tool_result::ToolCall) {
+        // [v0.1.0-beta.18] Phase 9-A: ToolStarted — 타임라인 카드를 Running으로 갱신
+        let tool_name = format!("{:?}", &tool_call).chars().take(30).collect::<String>();
+        for entry in self.state.timeline.iter_mut().rev() {
+            if let crate::app::state::TimelineEntryKind::ToolCard {
+                ref mut status, ..
+            } = entry.kind
+                && *status == crate::app::state::ToolStatus::Queued
+            {
+                *status = crate::app::state::ToolStatus::Running;
+                break;
+            }
+        }
+
         let tx = self.action_tx.clone();
         let token = crate::domain::permissions::PermissionToken::grant();
 
@@ -111,6 +158,18 @@ impl App {
             let tool = self.state.approval.pending_tool.take().unwrap();
             self.state.approval.diff_preview = None;
 
+            // [v0.1.0-beta.18] 승인 완료: ApprovalCard를 ToolCard(Running)로 전환
+            let tool_name = format!("{:?}", &tool).chars().take(30).collect::<String>();
+            self.state.timeline.push(
+                crate::app::state::TimelineEntry::now(
+                    crate::app::state::TimelineEntryKind::ToolCard {
+                        tool_name,
+                        status: crate::app::state::ToolStatus::Running,
+                        summary: "실행 중...".to_string(),
+                    },
+                ),
+            );
+
             self.execute_tool_async(tool);
 
             self.state
@@ -123,6 +182,16 @@ impl App {
         } else {
             self.state.approval.pending_tool = None;
             self.state.approval.diff_preview = None;
+
+            // [v0.1.0-beta.18] 거부: 타임라인에 SystemNotice 추가
+            self.state.timeline.push(
+                crate::app::state::TimelineEntry::now(
+                    crate::app::state::TimelineEntryKind::SystemNotice(
+                        "사용자가 도구 실행을 거부했습니다.".to_string(),
+                    ),
+                ),
+            );
+
             self.state
                 .session
                 .add_message(crate::providers::types::ChatMessage {

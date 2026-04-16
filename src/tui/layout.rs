@@ -155,10 +155,8 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
                     let (badge, badge_color) = match status {
                         ToolStatus::Queued => ("◻", pal::MUTED),
                         ToolStatus::Running => {
-                            let frame = pal::TOOL_BADGE[(state.tick_count as usize) % 2];
-                            let s: String = frame.to_string().chars().collect();
-                            // 임시 변수로 lifetime 확보
-                            (if (state.tick_count % 2) == 0 { "●" } else { "○" }, pal::WARNING)
+                            // [v0.1.0-beta.18] tick 기반 배지 깜빡임
+                            (if state.tick_count.is_multiple_of(2) { "●" } else { "○" }, pal::WARNING)
                         }
                         ToolStatus::Done => ("✅", pal::SUCCESS),
                         ToolStatus::Error => ("❌", pal::DANGER),

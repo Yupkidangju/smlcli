@@ -78,14 +78,14 @@ impl PermissionEngine {
                     ));
                 }
                 // 파일 크기 제한 (1MB)
-                if let Ok(meta) = std::fs::metadata(canonical) {
-                    if meta.len() > Self::MAX_READ_FILE_SIZE {
-                        return PermissionResult::Deny(format!(
-                            "파일이 1MB를 초과합니다 ({} bytes): {}",
-                            meta.len(),
-                            path
-                        ));
-                    }
+                if let Ok(meta) = std::fs::metadata(canonical)
+                    && meta.len() > Self::MAX_READ_FILE_SIZE
+                {
+                    return PermissionResult::Deny(format!(
+                        "파일이 1MB를 초과합니다 ({} bytes): {}",
+                        meta.len(),
+                        path
+                    ));
                 }
                 PermissionResult::Allow
             }
