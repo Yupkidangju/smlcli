@@ -5,6 +5,11 @@
 
 ## [0.1.0-beta.18] - 2026-04-16
 
+### Added (Phase 10: 세션 영속성 — 1건)
+- **JSONL 대화 로그**: `~/.smlcli/sessions/session_{ts}.jsonl` — append-only 기록, 복원, 세션 목록 조회
+  - 사용자/AI 메시지 자동 기록 (chat_runtime.rs + mod.rs)
+  - 신규 의존성 0건 (std::time 기반)
+
 ### Added (Phase 9-A: 이벤트 아키텍처 기반 — 7건)
 - **Action enum 14종 확장**: ChatStarted, ChatDelta, ToolQueued, ToolStarted, ToolOutputChunk, ToolSummaryReady 추가
 - **TimelineEntry 이중 데이터 모델**: session.messages(LLM)와 timeline_entries(UI 카드) 분리
