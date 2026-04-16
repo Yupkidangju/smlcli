@@ -295,3 +295,98 @@ fn test_timeline_entry_creation() {
         panic!("ToolCard 엔트리여야 함");
     }
 }
+
+// --- [v0.1.0-beta.18] Phase 9-C: 확장 테스트 6건 ---
+
+#[test]
+fn test_tool_status_transition() {
+    use crate::app::state::ToolStatus;
+    // ToolStatus 전이 순서: Queued → Running → Done/Error
+    let queued = ToolStatus::Queued;
+    let running = ToolStatus::Running;
+    let done = ToolStatus::Done;
+    let error = ToolStatus::Error;
+
+    // Clone + PartialEq 검증
+    assert_eq!(queued.clone(), ToolStatus::Queued);
+    assert_ne!(queued, running);
+    assert_ne!(done, error);
+}
+
+#[test]
+fn test_blocked_command_case_insensitive() {
+    // 대소문자 혼합된 위험 명령어도 차단해야 함
+    let settings = PersistedSettings {
+        shell_policy: ShellPolicy::Ask,
+        ..PersistedSettings::default()
+    };
+    let tool = ToolCall::ExecShell {
+        command: "SUDO apt install something".to_string(),
+        cwd: None,
+        safe_to_auto_run: false,
+    };
+    let result = PermissionEngine::check(&tool, &settings);
+    assert!(
+        matches!(result, PermissionResult::Deny(_)),
+        "대소문자 혼합 SUDO도 차단이어야 함"
+    );
+}
+
+#[test]
+fn test_read_file_normal_path_allowed() {
+    // '..'이 없는 정상 경로는 Allow
+    let settings = PersistedSettings::default();
+    let tool = ToolCall::ReadFile {
+        path: "/tmp/test_file.txt".to_string(),
+        start_line: None,
+        end_line: None,
+    };
+    let result = PermissionEngine::check(&tool, &settings);
+    assert!(
+        matches!(result, PermissionResult::Allow),
+        "정상 경로 ReadFile은 Allow이어야 함"
+    );
+}
+
+#[test]
+fn test_timeline_entry_user_message() {
+    use crate::app::state::{TimelineEntry, TimelineEntryKind};
+    // UserMessage 타임라인 엔트리 생성 검증
+    let entry = TimelineEntry::now(TimelineEntryKind::UserMessage("hello".to_string()));
+    if let TimelineEntryKind::UserMessage(msg) = &entry.kind {
+        assert_eq!(msg, "hello");
+    } else {
+        panic!("UserMessage 엔트리여야 함");
+    }
+}
+
+#[test]
+fn test_timeline_entry_system_notice() {
+    use crate::app::state::{TimelineEntry, TimelineEntryKind};
+    // SystemNotice 타임라인 엔트리 생성 검증
+    let entry = TimelineEntry::now(TimelineEntryKind::SystemNotice("경고".to_string()));
+    if let TimelineEntryKind::SystemNotice(msg) = &entry.kind {
+        assert_eq!(msg, "경고");
+    } else {
+        panic!("SystemNotice 엔트리여야 함");
+    }
+}
+
+#[test]
+fn test_blocked_command_fork_bomb() {
+    // fork bomb 패턴도 차단
+    let settings = PersistedSettings {
+        shell_policy: ShellPolicy::SafeOnly,
+        ..PersistedSettings::default()
+    };
+    let tool = ToolCall::ExecShell {
+        command: ":(){ :|:& };:".to_string(),
+        cwd: None,
+        safe_to_auto_run: true,
+    };
+    let result = PermissionEngine::check(&tool, &settings);
+    assert!(
+        matches!(result, PermissionResult::Deny(_)),
+        "fork bomb은 반드시 차단이어야 함"
+    );
+}
