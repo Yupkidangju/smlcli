@@ -33,3 +33,39 @@
 
 ### Audit Trigger Command
 사용자가 명령어로 `/audit` 지정 또는 "감사 실행" 관련 지시를 내리면, AI 에이전트는 소스 루트를 탐색한 수 위 4단계의 통과/실패 항목과 진행 권고를 출력하십시오.
+
+---
+
+## Phase 9 UX 아키텍처 개편 감사 기준 (v0.1.0-beta.18+)
+
+### 9-A 이벤트 기반 구조 감사
+
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| Action enum 14종 | `action.rs` 내 variant 수 확인 | ChatStarted, ChatDelta, ToolQueued, ToolStarted, ToolOutputChunk, ToolSummaryReady 존재 |
+| TimelineEntry 분리 | `state.rs` 에 `timeline_entries` 필드 존재 | session.messages와 별도 관리, timeline 렌더링에 messages 직접 접근 없음 |
+| Semantic Palette | `tui/palette.rs` 상수 존재 | layout.rs/widgets에서 하드코딩 Color 사용 0건 |
+| tick 기반 애니메이션 | `tick_count` 기반 스피너/깜빡임 | thinking indicator가 4프레임 회전 |
+| Inspector 탭 실체 | `widgets/inspector_tabs.rs` 존재 | Preview/Diff/Search/Logs/Recent 각 탭에 실제 콘텐츠 |
+| Tool 출력 요약 분리 | ToolFinished 핸들러 검사 | 타임라인에 2~4줄 요약, logs_buffer에 원문 |
+| SSE 스트리밍 | `chat_stream()` 메서드 존재 | ChatDelta 이벤트로 토큰 단위 수신 |
+
+### 9-B 기능 완성 감사
+
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| CLI Entry Modes | `main.rs`에 clap 파싱 | `run`, `doctor`, `export-log` 서브커맨드 동작 |
+| 세션 영속성 | `session_log.rs` 존재 | JSONL 저장/복원 round-trip |
+| SafeOnly 화이트리스트 | `permissions.rs` 검사 | safe_commands 미매칭 시 Deny |
+| Blocked Command | `permissions.rs` 검사 | sudo/rm -rf 등 무조건 차단 |
+| Structured Tool Call | `registry.rs` 검사 | fenced JSON 스크래핑 외 native contract 존재 |
+| File Read 안전장치 | `file_ops.rs` 검사 | 경로 정규화 + 1MB 제한 |
+| Grep UX | `grep.rs` 검사 | context_lines + max_results |
+
+### 9-C 품질 감사
+
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| Shell 스트리밍 | `shell.rs` 검사 | spawn + BufReader + ToolOutputChunk |
+| 테스트 확장 | `cargo test` | 22건+ (secret round-trip, cancel/rollback, tool lifecycle, layout snapshot 포함) |
+| 전역 allow 제거 | `main.rs` 검사 | #[allow(dead_code)] 등 0건 |

@@ -110,28 +110,30 @@ smlcli/
 ├── src/
 │   ├── main.rs
 │   ├── app/
-│   │   ├── mod.rs (Event Loop & Top-level Dispatch, ~420줄)
-│   │   ├── state.rs (AppState, WizardState, ConfigState, FuzzyState)
+│   │   ├── mod.rs (Event Loop & Top-level Dispatch, ~510줄)
+│   │   ├── state.rs (AppState, TimelineEntry, WizardState, ConfigState, FuzzyState)
 │   │   ├── event_loop.rs (Crossterm 이벤트 + Action 채널 수신)
-│   │   ├── action.rs (비동기 이벤트 타입 정의)
-│   │   ├── command_router.rs (슬래시 커맨드 엔진, 12개 커맨드)
-│   │   ├── chat_runtime.rs (LLM 요청 조립 & Provider 디스패치)
-│   │   ├── tool_runtime.rs (도구 JSON 파싱, 권한 검사, 비동기 실행)
+│   │   ├── action.rs (14종 비동기 이벤트 타입 정의)
+│   │   ├── command_router.rs (슬래시 커맨드 엔진, 11개 커맨드)
+│   │   ├── chat_runtime.rs (LLM 요청 조립 & Provider 디스패치 & SSE 스트리밍)
+│   │   ├── tool_runtime.rs (도구 JSON 파싱, 권한 검사, 비동기 실행, 출력 요약)
 │   │   └── wizard_controller.rs (Setup Wizard 상태 전이 & Config 팝업)
 │   ├── tui/
 │   │   ├── mod.rs
 │   │   ├── terminal.rs
 │   │   ├── layout.rs
+│   │   ├── palette.rs (Semantic Palette 색상 상수)
 │   │   └── widgets/
 │   │       ├── mod.rs
 │   │       ├── config_dashboard.rs
-│   │       └── setting_wizard.rs
+│   │       ├── setting_wizard.rs
+│   │       └── inspector_tabs.rs (Preview/Diff/Search/Logs/Recent 탭 렌더링)
 │   ├── domain/
 │   │   ├── mod.rs
 │   │   ├── session.rs (Context Budget & Compaction logic)
 │   │   ├── provider.rs
 │   │   ├── settings.rs
-│   │   ├── permissions.rs (Permission Engine)
+│   │   ├── permissions.rs (Permission Engine + Blocked Command List)
 │   │   └── tool_result.rs
 │   ├── providers/
 │   │   ├── mod.rs
@@ -148,7 +150,7 @@ smlcli/
 │   │   ├── mod.rs
 │   │   ├── config_store.rs
 │   │   ├── secret_store.rs
-│   │   └── ...
+│   │   └── session_log.rs (JSONL 세션 영속성)
 │   ├── tests/
 │   └── types/
 │       └── mod.rs
@@ -160,13 +162,22 @@ smlcli/
 
 애플리케이션은 단일 `AppState`를 중심으로 동작한다. 입력 이벤트, 렌더 요청, AI 응답, 툴 결과, modal 상태를 모두 `Action` 단위로 정규화한다. 이벤트 루프는 TUI 렌더링과 비동기 작업을 분리하되, 사용자에게는 하나의 연속된 터미널 경험처럼 보이게 유지한다.
 
+**이중 데이터 모델 (Dual Data Model)**
+`session.messages`는 LLM 컨텍스트 전용이며, 사용자 화면 표시는 `timeline_entries`로 분리한다. 이 분리를 통해 도구 실행 요약 카드, 승인 카드, 실행 로그, 결과 요약을 독립적으로 관리한다.
+
+**이벤트 세분화 (14종+ Action)**
+채팅과 도구 호출의 전체 라이프사이클(시작·진행·완료·에러)을 별도 이벤트로 정규화하여 Codex 스타일 진행 표시를 구현한다.
+
+**SSE 스트리밍**
+Provider 응답을 토큰 단위로 수신하여 실시간 타임라인 렌더링에 반영한다.
+
 핵심 계층은 아래처럼 분리한다.
 
-* `tui/*`: 화면 그리기와 키 입력 해석
-* `app/*`: 라우팅, 상태 전이, context budget
-* `providers/*`: provider/model 호출 추상화
+* `tui/*`: 화면 그리기와 키 입력 해석, Semantic Palette, Inspector 탭
+* `app/*`: 라우팅, 상태 전이, context budget, timeline 관리
+* `providers/*`: provider/model 호출 추상화, SSE 스트리밍
 * `tools/*`: 파일/셸/grep/diff 등 실행 가능한 도구
-* `infra/*`: 저장소, 암호화, OS 상호작용
+* `infra/*`: 저장소, 암호화, OS 상호작용, 세션 로그
 * `domain/*`: 순수 상태 모델과 정책
 
 ### 3.3 Entry Modes
@@ -318,44 +329,87 @@ pub struct AppState {
     pub permissions: PermissionState,
     pub provider: ProviderState,
     pub tool_runtime: ToolRuntimeState,
+    // [v0.1.0-beta.18 개편] 이중 데이터 모델
+    pub timeline_entries: Vec<TimelineEntry>,
+    pub logs_buffer: Vec<String>,
+    pub tick_count: u64,
+}
+
+// [v0.1.0-beta.18 개편] 타임라인 전용 카드
+pub enum TimelineEntryKind {
+    UserMessage(String),
+    AssistantMessage(String),
+    AssistantDelta(String),          // SSE 스트리밍 중간 결과
+    SystemNotice(String),
+    ToolCard {
+        tool_name: String,
+        status: ToolStatus,          // Queued / Running / Done / Error
+        summary: String,             // 2~4줄 요약
+    },
+    ApprovalCard {
+        tool_call: ToolCall,
+        diff_preview: Option<String>,
+    },
+    CompactSummary(String),
+}
+
+pub enum ToolStatus {
+    Queued,
+    Running,
+    Done,
+    Error,
+}
+
+pub struct TimelineEntry {
+    pub kind: TimelineEntryKind,
+    pub timestamp: std::time::Instant,
+}
+
+// [v0.1.0-beta.18 개편] 14종+ Action
+pub enum Action {
+    // 채팅 라이프사이클
+    ChatStarted,
+    ChatDelta(String),
+    ChatResponseOk(ChatResponse),
+    ChatResponseErr(String),
+    // 도구 라이프사이클
+    ToolQueued(ToolCall),
+    ToolStarted(String),
+    ToolOutputChunk(String),
+    ToolFinished(ToolResult),
+    ToolSummaryReady(String),
+    ToolError(String),
+    // 기존 유지
+    ModelsFetched(Result<Vec<String>, String>, FetchSource),
+    CredentialValidated(Result<(), String>),
+    ContextSummaryOk(String),
+    ContextSummaryErr(String),
 }
 
 pub struct PersistedSettings {
     pub version: u32,
     pub default_provider: String,
     pub default_model: String,
-    pub cwd_policy: CwdPolicy,
     pub shell_policy: ShellPolicy,
     pub file_write_policy: FileWritePolicy,
     pub network_policy: NetworkPolicy,
-    pub theme: ThemeMode,
+    pub safe_commands: Option<Vec<String>>,
+    pub encrypted_keys: HashMap<String, String>,
 }
 
 pub enum ProviderKind {
-    OpenAI,
-    Anthropic,
     Google,
     OpenRouter,
-    OpenAICompatible,
-}
-
-pub struct ProviderProfile {
-    pub id: String,
-    pub kind: ProviderKind,
-    pub base_url: Option<String>,
-    pub api_key_alias: String,
-    pub model: String,
-    pub enabled: bool,
 }
 
 pub enum ToolCall {
     ReadFile { path: String },
-    WriteFile { path: String, content: String, require_diff: bool },
-    ExecShell { command: String, cwd: String, timeout_ms: u64 },
-    Grep { pattern: String, root: String, case_sensitive: bool },
-    Diff { old_text: String, new_text: String },
-    ListDir { path: String },
-    Pwd,
+    WriteFile { path: String, content: String, overwrite: bool },
+    ReplaceFileContent { path: String, target_content: String, replacement_content: String },
+    ExecShell { command: String, cwd: Option<String>, safe_to_auto_run: bool },
+    Grep { pattern: String, path: String, case_insensitive: bool },
+    ListDir { path: String, depth: Option<usize> },
+    SysInfo,
 }
 
 pub enum ShellPolicy {
@@ -819,6 +873,38 @@ context compaction / session restore / export-log
 ### Phase 8
 
 Linux QA / Windows QA / release gate
+
+### Phase 9: UX 아키텍처 개편 (v0.1.0-beta.18+)
+
+이벤트 아키텍처 개편과 UI/UX 체계 전면 업그레이드.
+
+#### Phase 9-A: 이벤트 기반 구조 (기반 작업)
+
+1. **Action enum 14종 확장**: ChatStarted/ChatDelta/ToolQueued/ToolStarted/ToolOutputChunk/ToolSummaryReady 추가
+2. **TimelineEntry 모델 도입**: session.messages(LLM 컨텍스트)와 timeline_entries(UI 카드) 이중 구조
+3. **Semantic Palette 도입**: info/success/warning/danger/muted + bg_base/bg_panel/bg_elevated 색상 체계
+4. **tick 기반 애니메이션**: thinking 스피너, 도구 실행 배지 깜빡임, diff 승인 pulse, compact progress
+5. **Inspector 탭 실체 구현**: Preview/Diff/Search/Logs/Recent 각 탭에 실제 콘텐츠 렌더링
+6. **Tool 출력 요약 분리**: raw stdout → 2~4줄 요약 타임라인, 원문 Logs 탭
+7. **SSE 스트리밍**: Provider chat_stream() 추가, reqwest bytes_stream 활용
+
+#### Phase 9-B: 기능 완성
+
+1. CLI Entry Modes: clap 파서 + run/doctor/export-log 서브커맨드
+2. 세션 영속성: JSONL 세션 로그 + 복원
+3. SafeOnly 화이트리스트 검증: safe_commands 매칭
+4. Blocked Command 목록: sudo/rm -rf 등 정규식 차단
+5. Structured Tool Call: Provider별 native tool call contract
+6. File Read 안전장치: 경로 정규화 + 1MB 제한 + chunk preview
+7. Grep 결과 UX: context_lines + max_results + case 옵션
+
+#### Phase 9-C: 품질 단단
+
+1. Shell stdout/stderr 실시간 스트리밍
+2. Diff 접기/펼치기 UI
+3. ListDir 깊이 탐색 (재귀 tree)
+4. 전역 #[allow] 제거
+5. 테스트 확장: secret_store round-trip, provider cancel/rollback, tool lifecycle, layout snapshot
 
 ---
 

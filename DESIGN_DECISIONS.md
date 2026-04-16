@@ -216,3 +216,43 @@ Accepted
 - 사용자 경험 대폭 개선: 도구 호출이 자연어로 설명되고, 추론 상태가 가시화됨.
 - 슬래시 메뉴로 명령어 진입 장벽 감소.
 - 시스템 프롬프트 토큰 소비가 ~300 → ~1K로 증가하나, 응답 품질 개선으로 총 토큰 효율은 향상.
+
+---
+
+## ADR-009: UX 아키텍처 전면 개편 (v0.1.0-beta.18 계획)
+
+**상태**: 승인됨 (구현 예정)
+**일자**: 2026-04-16
+
+### Context
+beta.17까지의 구조는 `Action` 7종 + `session.messages` 단일 배열이었다. 이 구조로는:
+- 도구/채팅의 시작·진행·완료를 구분할 수 없어 Codex 스타일 진행 표시 불가
+- LLM 컨텍스트와 UI 표시가 혼재되어 작업 카드/승인 카드/로그 분리 불가
+- Inspector가 enum만 정의되고 탭 콘텐츠 미구현
+- 색상이 하드코딩되어 UI 일관성 부재
+- 전체 응답 일괄 수신(batch)으로 긴 응답 시 무반응
+
+### Decision
+4단계 개편 (Phase 9-A/B/C/D):
+
+**Phase 9-A (기반)**:
+1. `Action` enum 7종 → 14종 확장 (ChatStarted, ChatDelta, ToolQueued, ToolStarted, ToolOutputChunk, ToolSummaryReady 추가)
+2. `timeline_entries: Vec<TimelineEntry>` 도입 — session.messages(LLM)와 분리
+3. Semantic Palette (`tui/palette.rs`) — info/success/warning/danger/muted + bg 3계층
+4. tick 기반 애니메이션 (스피너, 배지 깜빡임, pulse)
+5. Inspector 탭별 실체 구현 (`widgets/inspector_tabs.rs`)
+6. ToolFinished 출력 요약 분리 (2~4줄 타임라인 + 원문 Logs 탭)
+7. SSE 스트리밍 (`chat_stream()` + `ChatDelta`)
+
+**Phase 9-B (기능)**: CLI Entry Modes, 세션 영속성, SafeOnly, Blocked Command, Structured Tool Call, File Read 안전장치, Grep UX
+**Phase 9-C (품질)**: Shell 스트리밍, Diff UI, 테스트 22건+
+
+### Alternatives Considered
+- 기존 구조를 유지하고 UI만 리터치 → 구조적 한계로 거부
+- 별도 TUI 프레임워크 사용 → ratatui 생태계 숙련도와 기존 투자 고려하여 거부
+
+### Consequences
+- 코드베이스 ~735줄 추가 예상 (3,909줄 → ~4,650줄)
+- 신규 의존성 0건 (기존 reqwest/tokio로 충분)
+- 기존 14건 테스트 중 Action 매칭 일부 수정 필요
+- Phase 9-A 완수 후 Phase 9-B/C가 자연스럽게 구현 가능한 기반 마련
