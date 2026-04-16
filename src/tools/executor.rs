@@ -55,12 +55,49 @@ pub async fn execute_tool(call: ToolCall, _token: &PermissionToken) -> Result<To
                 is_error: true,
             }),
         },
-        _ => Ok(ToolResult {
-            tool_name: "Unknown".to_string(),
-            stdout: String::new(),
-            stderr: "Unsupported tool call".to_string(),
-            exit_code: 1,
-            is_error: true,
-        }),
+        // [v0.1.0-beta.18] Phase 10: Stat 도구 — 파일/디렉토리 메타데이터 조회.
+        // 크기, 수정일, 파일 유형(파일/디렉토리/심볼릭 링크) 반환.
+        ToolCall::Stat { path } => {
+            match std::fs::metadata(&path) {
+                Ok(meta) => {
+                    let file_type = if meta.is_dir() {
+                        "디렉토리"
+                    } else if meta.is_symlink() {
+                        "심볼릭 링크"
+                    } else {
+                        "파일"
+                    };
+                    let size = meta.len();
+                    let modified = meta.modified()
+                        .map(|t| {
+                            t.duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs()
+                        })
+                        .unwrap_or(0);
+                    let readonly = meta.permissions().readonly();
+
+                    let info = format!(
+                        "경로: {}\n유형: {}\n크기: {} bytes\n수정일: {} (UNIX epoch)\n읽기전용: {}",
+                        path, file_type, size, modified, readonly
+                    );
+
+                    Ok(ToolResult {
+                        tool_name: "Stat".to_string(),
+                        stdout: info,
+                        stderr: String::new(),
+                        exit_code: 0,
+                        is_error: false,
+                    })
+                }
+                Err(e) => Ok(ToolResult {
+                    tool_name: "Stat".to_string(),
+                    stdout: String::new(),
+                    stderr: format!("파일 정보 조회 실패: {}", e),
+                    exit_code: 1,
+                    is_error: true,
+                }),
+            }
+        }
     }
 }

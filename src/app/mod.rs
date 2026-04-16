@@ -226,6 +226,10 @@ impl App {
                         break;
                     }
                 }
+
+                // [v0.1.0-beta.18] Phase 10: 도구 결과를 LLM에 자동 재전송 (Structured Tool Loop).
+                // 도구 실행 결과를 LLM이 해석하여 후속 응답/추가 도구 호출을 자동으로 수행.
+                self.send_chat_message_internal();
             }
 
             action::Action::ToolSummaryReady(new_summary) => {

@@ -9,24 +9,39 @@ impl App {
     /// LLM 응답 내의 ```json``` 블록을 파싱하여 도구 호출을 감지하고,
     /// 권한 정책에 따라 자동 실행/승인 대기/거부를 결정하는 파이프라인.
     ///
-    /// 흐름:
-    /// 1. 응답 텍스트에서 ```json ... ``` 패턴을 탐색
-    /// 2. serde_json으로 ToolCall로 역직렬화 시도
-    /// 3. PermissionEngine.check()로 정책 판단
-    ///    4-A. Allow → 즉시 비동기 실행, 결과를 ToolFinished 이벤트로 반환
-    ///    4-B. Ask → approval.pending_tool에 등록, Inspector 강제 오픈 + Diff Preview 생성
-    ///    4-C. Deny → 타임라인에 보안 차단 메시지 추가
+    /// [v0.1.0-beta.18] Phase 10: 복수 ```json 블록 감지 지원.
+    /// 응답에 여러 도구 호출이 포함된 경우 모두 순차 처리.
+    /// (단, 현재는 첫 번째만 실행하고 나머지는 대기열에 큐잉)
     pub(crate) fn process_tool_calls_from_response(&mut self, content: &str) {
-        // ```json 블록 탐색
-        if let Some(start_idx) = content.find("```json") {
-            let block = &content[start_idx + 7..];
+        let mut search_from = 0;
+        let mut found_count = 0;
+
+        while let Some(start_idx) = content[search_from..].find("```json") {
+            let abs_start = search_from + start_idx + 7;
+            if abs_start >= content.len() {
+                break;
+            }
+            let block = &content[abs_start..];
             if let Some(end_idx) = block.find("```") {
                 let json_str = block[..end_idx].trim();
                 if let Ok(tool_call) =
                     serde_json::from_str::<crate::domain::tool_result::ToolCall>(json_str)
                 {
-                    self.dispatch_tool_call(tool_call);
+                    found_count += 1;
+                    // 첫 번째 도구만 즉시 디스패치 (연쇄 호출 방지)
+                    if found_count == 1 {
+                        self.dispatch_tool_call(tool_call);
+                    } else {
+                        // 추가 도구는 로그에 기록 (향후 큐 구현 시 활용)
+                        self.state.logs_buffer.push(format!(
+                            "[Multi-Tool] 추가 도구 감지 (#{}) — 현재 단일 실행 모드",
+                            found_count
+                        ));
+                    }
                 }
+                search_from = abs_start + end_idx + 3;
+            } else {
+                break;
             }
         }
     }

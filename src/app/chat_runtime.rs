@@ -218,4 +218,66 @@ impl App {
             }
         });
     }
+
+    /// [v0.1.0-beta.18] Phase 10: 도구 결과 후 LLM 자동 재전송 (Structured Tool Loop).
+    /// 사용자 입력 없이 현재 세션 컨텍스트를 그대로 LLM에 전송하여 후속 응답을 받음.
+    /// ToolFinished → Tool 메시지 추가 → send_chat_message_internal → LLM 응답 → 도구 감지 → 반복.
+    pub(crate) fn send_chat_message_internal(&mut self) {
+        let (provider_kind, model_name, api_key) = match self.resolve_credentials() {
+            Ok(creds) => creds,
+            Err(err_msg) => {
+                self.state.logs_buffer.push(format!(
+                    "[Tool Loop] 자격 증명 조회 실패: {}",
+                    err_msg
+                ));
+                return;
+            }
+        };
+
+        // thinking indicator + 빈 Delta 엔트리
+        self.state.is_thinking = true;
+        self.state.timeline.push(
+            crate::app::state::TimelineEntry::now(
+                crate::app::state::TimelineEntryKind::AssistantDelta(String::new()),
+            ),
+        );
+
+        let tx = self.action_tx.clone();
+        let messages = self.state.session.messages.clone();
+
+        tokio::spawn(async move {
+            let adapter = crate::providers::registry::get_adapter(&provider_kind);
+            let req = crate::providers::types::ChatRequest {
+                model: model_name,
+                messages,
+            };
+
+            let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(64);
+            let tx_delta = tx.clone();
+            let delta_forwarder = tokio::spawn(async move {
+                while let Some(delta) = delta_rx.recv().await {
+                    let _ = tx_delta
+                        .send(event_loop::Event::Action(action::Action::ChatDelta(delta)))
+                        .await;
+                }
+            });
+
+            match adapter.chat_stream(&api_key, req, delta_tx).await {
+                Ok(res) => {
+                    let _ = delta_forwarder.await;
+                    let _ = tx
+                        .send(event_loop::Event::Action(action::Action::ChatResponseOk(res)))
+                        .await;
+                }
+                Err(e) => {
+                    let _ = delta_forwarder.await;
+                    let _ = tx
+                        .send(event_loop::Event::Action(action::Action::ChatResponseErr(
+                            e.to_string(),
+                        )))
+                        .await;
+                }
+            }
+        });
+    }
 }
