@@ -218,3 +218,80 @@ fn test_read_file_always_allowed() {
         "ReadFile은 항상 Allow이어야 함"
     );
 }
+
+// --- [v0.1.0-beta.18] Phase 9-B: Blocked Command 차단 검증 ---
+// BLOCKED_PATTERNS에 해당하는 위험 명령어가 정책과 무관하게 차단되는지 확인
+
+#[test]
+fn test_blocked_command_sudo_denied() {
+    // sudo 명령어는 ShellPolicy::Ask여도 무조건 차단되어야 함
+    let settings = PersistedSettings {
+        shell_policy: ShellPolicy::Ask,
+        ..PersistedSettings::default()
+    };
+    let tool = ToolCall::ExecShell {
+        command: "sudo rm -rf /".to_string(),
+        cwd: None,
+        safe_to_auto_run: false,
+    };
+    let result = PermissionEngine::check(&tool, &settings);
+    assert!(
+        matches!(result, PermissionResult::Deny(_)),
+        "sudo 명령어는 무조건 차단이어야 함"
+    );
+}
+
+#[test]
+fn test_blocked_command_rm_rf_denied() {
+    // rm -rf는 safe_to_auto_run=true여도 무조건 차단
+    let settings = PersistedSettings {
+        shell_policy: ShellPolicy::SafeOnly,
+        ..PersistedSettings::default()
+    };
+    let tool = ToolCall::ExecShell {
+        command: "rm -rf /tmp/important".to_string(),
+        cwd: None,
+        safe_to_auto_run: true,
+    };
+    let result = PermissionEngine::check(&tool, &settings);
+    assert!(
+        matches!(result, PermissionResult::Deny(_)),
+        "rm -rf는 safe_to_auto_run이어도 차단이어야 함"
+    );
+}
+
+// --- [v0.1.0-beta.18] Phase 9-B: File Read 안전장치 검증 ---
+
+#[test]
+fn test_read_file_path_traversal_denied() {
+    // '..' 포함 경로는 차단
+    let settings = PersistedSettings::default();
+    let tool = ToolCall::ReadFile {
+        path: "../../etc/passwd".to_string(),
+        start_line: None,
+        end_line: None,
+    };
+    let result = PermissionEngine::check(&tool, &settings);
+    assert!(
+        matches!(result, PermissionResult::Deny(_)),
+        "'..' 경로 traversal은 차단이어야 함"
+    );
+}
+
+// --- [v0.1.0-beta.18] Phase 9-A: Timeline 구조 검증 ---
+
+#[test]
+fn test_timeline_entry_creation() {
+    use crate::app::state::{TimelineEntry, TimelineEntryKind, ToolStatus};
+    // TimelineEntry 생성 및 ToolStatus 전이 검증
+    let entry = TimelineEntry::now(TimelineEntryKind::ToolCard {
+        tool_name: "ExecShell".to_string(),
+        status: ToolStatus::Queued,
+        summary: String::new(),
+    });
+    if let TimelineEntryKind::ToolCard { status, .. } = &entry.kind {
+        assert_eq!(*status, ToolStatus::Queued);
+    } else {
+        panic!("ToolCard 엔트리여야 함");
+    }
+}

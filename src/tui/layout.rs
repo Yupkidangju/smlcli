@@ -1,9 +1,11 @@
-use crate::app::state::AppState;
+use crate::app::state::{AppState, TimelineEntryKind, ToolStatus};
+use crate::tui::palette as pal;
 use crate::tui::widgets::setting_wizard;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::Style,
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
 
@@ -80,12 +82,23 @@ fn draw_top_bar(f: &mut Frame, state: &AppState, area: Rect) {
         .map(|s| format!("{:?}", s.shell_policy))
         .unwrap_or_else(|| "None".to_string());
 
+    // [v0.1.0-beta.18] context budget 색상을 사용량에 따라 변경
+    let ctx_color = if budget >= 85 {
+        pal::DANGER
+    } else if budget >= 70 {
+        pal::WARNING
+    } else {
+        pal::TEXT_SECONDARY
+    };
+
     let text = format!(
         " smlcli · {}/{} · {} · {} · Shell {} · {}% ctx · ✓ ",
         provider, model, cwd, mode_str, shell_policy_str, budget
     );
+
+    // [v0.1.0-beta.18] Semantic Palette 적용: 상태바 배경에 BG_PANEL 사용
     let paragraph =
-        Paragraph::new(text).style(Style::default().bg(Color::DarkGray).fg(Color::White));
+        Paragraph::new(text).style(Style::default().bg(pal::BG_PANEL).fg(pal::TEXT_PRIMARY));
     f.render_widget(paragraph, area);
 }
 
@@ -95,39 +108,150 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
         return;
     }
 
-    let mut chat_history = String::new();
-    for msg in &state.session.messages {
-        // [v0.1.0-beta.7] 내부 시스템 프롬프트(pinned System)는 타임라인에서 숨김.
-        if msg.role == crate::providers::types::Role::System && msg.pinned {
-            continue;
+    // [v0.1.0-beta.18] Phase 9-A: timeline_entries 기반 렌더링.
+    // timeline이 비어있으면 기존 session.messages 폴백 (하위 호환).
+    let mut lines: Vec<Line> = Vec::new();
+
+    if !state.timeline.is_empty() {
+        // === 타임라인 엔트리 기반 렌더링 ===
+        for entry in &state.timeline {
+            match &entry.kind {
+                TimelineEntryKind::UserMessage(msg) => {
+                    lines.push(Line::from(vec![
+                        Span::styled("User:\n", Style::default().fg(pal::ACCENT)),
+                    ]));
+                    lines.push(Line::from(msg.as_str()));
+                    lines.push(Line::from(""));
+                }
+                TimelineEntryKind::AssistantMessage(msg) => {
+                    lines.push(Line::from(vec![
+                        Span::styled("AI:\n", Style::default().fg(pal::SUCCESS)),
+                    ]));
+                    // 도구 호출 JSON 필터링 유지
+                    let display = filter_tool_json(msg);
+                    lines.push(Line::from(display));
+                    lines.push(Line::from(""));
+                }
+                TimelineEntryKind::AssistantDelta(buf) => {
+                    // SSE 스트리밍 중간 결과: 실시간 표시
+                    if !buf.is_empty() {
+                        lines.push(Line::from(vec![
+                            Span::styled("AI: ", Style::default().fg(pal::SUCCESS)),
+                        ]));
+                        lines.push(Line::from(buf.as_str()));
+                    }
+                }
+                TimelineEntryKind::SystemNotice(msg) => {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("ℹ  {}", msg),
+                            Style::default().fg(pal::INFO),
+                        ),
+                    ]));
+                    lines.push(Line::from(""));
+                }
+                TimelineEntryKind::ToolCard { tool_name, status, summary } => {
+                    // [v0.1.0-beta.18] A-4: tick 기반 배지 애니메이션
+                    let (badge, badge_color) = match status {
+                        ToolStatus::Queued => ("◻", pal::MUTED),
+                        ToolStatus::Running => {
+                            let frame = pal::TOOL_BADGE[(state.tick_count as usize) % 2];
+                            let s: String = frame.to_string().chars().collect();
+                            // 임시 변수로 lifetime 확보
+                            (if (state.tick_count % 2) == 0 { "●" } else { "○" }, pal::WARNING)
+                        }
+                        ToolStatus::Done => ("✅", pal::SUCCESS),
+                        ToolStatus::Error => ("❌", pal::DANGER),
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("{} {} ", badge, tool_name),
+                            Style::default().fg(badge_color),
+                        ),
+                    ]));
+                    if !summary.is_empty() {
+                        for sl in summary.lines() {
+                            lines.push(Line::from(vec![
+                                Span::styled(
+                                    format!("   {}", sl),
+                                    Style::default().fg(pal::TEXT_SECONDARY),
+                                ),
+                            ]));
+                        }
+                    }
+                    lines.push(Line::from(""));
+                }
+                TimelineEntryKind::ApprovalCard { tool_name, detail } => {
+                    // [v0.1.0-beta.18] 승인 대기 카드: tick 기반 pulse
+                    let pulse_color = if (state.tick_count % 6) < 3 {
+                        pal::WARNING
+                    } else {
+                        pal::TEXT_PRIMARY
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("⚠  승인 대기: {} ", tool_name),
+                            Style::default().fg(pulse_color),
+                        ),
+                    ]));
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("   {}", detail),
+                            Style::default().fg(pal::TEXT_SECONDARY),
+                        ),
+                    ]));
+                    lines.push(Line::from(""));
+                }
+                TimelineEntryKind::CompactSummary(msg) => {
+                    lines.push(Line::from(vec![
+                        Span::styled(
+                            format!("📋 Context Compacted: {}", &msg[..msg.len().min(80)]),
+                            Style::default().fg(pal::MUTED),
+                        ),
+                    ]));
+                    lines.push(Line::from(""));
+                }
+            }
         }
-        let role_str = match msg.role {
-            crate::providers::types::Role::User => "User:\n",
-            crate::providers::types::Role::Assistant => "AI:\n",
-            crate::providers::types::Role::System => "System:\n",
-            crate::providers::types::Role::Tool => "Tool:\n",
-        };
-        chat_history.push_str(role_str);
-
-        // [v0.1.0-beta.16] AI 응답에서 ```json ... ``` 도구 호출 블록을 필터링하여
-        // 사용자에게 원시(raw) JSON 스키마가 노출되지 않도록 처리.
-        // 도구 호출 부분은 "⚙️ 도구 호출 실행 중..." 으로 대체.
-        let display_content = filter_tool_json(&msg.content);
-        chat_history.push_str(&display_content);
-        chat_history.push_str("\n\n");
+    } else {
+        // === 폴백: 기존 session.messages 기반 ===
+        for msg in &state.session.messages {
+            if msg.role == crate::providers::types::Role::System && msg.pinned {
+                continue;
+            }
+            let (role_str, role_color) = match msg.role {
+                crate::providers::types::Role::User => ("User:\n", pal::ACCENT),
+                crate::providers::types::Role::Assistant => ("AI:\n", pal::SUCCESS),
+                crate::providers::types::Role::System => ("System:\n", pal::INFO),
+                crate::providers::types::Role::Tool => ("Tool:\n", pal::MUTED),
+            };
+            lines.push(Line::from(vec![
+                Span::styled(role_str, Style::default().fg(role_color)),
+            ]));
+            let display_content = filter_tool_json(&msg.content);
+            lines.push(Line::from(display_content));
+            lines.push(Line::from(""));
+        }
     }
 
-    // [v0.1.0-beta.16] AI 추론 중 인디케이터
+    // [v0.1.0-beta.18] A-4: tick 기반 thinking 스피너
     if state.is_thinking {
-        chat_history.push_str("✨ AI가 응답을 생성하고 있습니다...\n");
+        let spinner = pal::SPINNER_FRAMES[(state.tick_count as usize) % 4];
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("{} AI가 응답을 생성하고 있습니다...", spinner),
+                Style::default().fg(pal::INFO),
+            ),
+        ]));
     }
 
-    if chat_history.is_empty() {
-        chat_history = "Welcome to smlcli Timeline.\nPress Tab to switch PLAN/RUN. Type in Composer and push Enter.".to_string();
+    if lines.is_empty() {
+        lines.push(Line::from("Welcome to smlcli Timeline."));
+        lines.push(Line::from("Press Tab to switch PLAN/RUN. Type in Composer and push Enter."));
     }
 
     let block = Block::default().title("Timeline").borders(Borders::RIGHT);
-    let paragraph = Paragraph::new(chat_history).block(block);
+    let paragraph = Paragraph::new(lines).block(block);
     f.render_widget(paragraph, area);
 }
 
@@ -176,28 +300,44 @@ fn filter_tool_json(content: &str) -> String {
 
 fn draw_inspector(f: &mut Frame, state: &AppState, area: Rect) {
     use crate::app::state::InspectorTab;
-    let tabs_title = match state.active_inspector_tab {
-        InspectorTab::Preview => "Inspector | [*Preview*] • [Diff] • [Search] • [Logs] • [Recent]",
-        InspectorTab::Diff => "Inspector | [Preview] • [*Diff*] • [Search] • [Logs] • [Recent]",
-        InspectorTab::Search => "Inspector | [Preview] • [Diff] • [*Search*] • [Logs] • [Recent]",
-        InspectorTab::Logs => "Inspector | [Preview] • [Diff] • [Search] • [*Logs*] • [Recent]",
-        InspectorTab::Recent => "Inspector | [Preview] • [Diff] • [Search] • [Logs] • [*Recent*]",
+
+    // [v0.1.0-beta.18] Semantic Palette 적용: 활성 탭을 ACCENT 색상으로 강조
+    let tab_names = ["Preview", "Diff", "Search", "Logs", "Recent"];
+    let active_idx = match state.active_inspector_tab {
+        InspectorTab::Preview => 0,
+        InspectorTab::Diff => 1,
+        InspectorTab::Search => 2,
+        InspectorTab::Logs => 3,
+        InspectorTab::Recent => 4,
     };
-    let block = Block::default().title(tabs_title).borders(Borders::LEFT);
+    let tabs_title: String = tab_names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            if i == active_idx {
+                format!("[*{}*]", name)
+            } else {
+                format!("[{}]", name)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let title = format!("Inspector | {}", tabs_title);
+
+    let block = Block::default().title(title).borders(Borders::LEFT);
     let inner_area = block.inner(area);
     f.render_widget(block, area);
 
-    use ratatui::text::{Line, Span};
-
+    // 승인 대기 중이면 Diff 탭 강제 표시
     if let Some(tool) = &state.approval.pending_tool {
         let mut lines = Vec::new();
         lines.push(Line::from(vec![Span::styled(
             "⚠️ APPROVAL REQUIRED ⚠️",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(pal::WARNING),
         )]));
         lines.push(Line::from(vec![Span::styled(
             "============================",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(pal::WARNING),
         )]));
         lines.push(Line::from(vec![Span::raw(format!("{:?}", tool))]));
         lines.push(Line::from(vec![Span::raw("")]));
@@ -205,23 +345,23 @@ fn draw_inspector(f: &mut Frame, state: &AppState, area: Rect) {
         if let Some(diff) = &state.approval.diff_preview {
             lines.push(Line::from(vec![Span::styled(
                 "[Diff Preview]",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(pal::INFO),
             )]));
             for l in diff.lines() {
                 if l.starts_with('+') {
                     lines.push(Line::from(vec![Span::styled(
                         l,
-                        Style::default().fg(Color::Green),
+                        Style::default().fg(pal::SUCCESS),
                     )]));
                 } else if l.starts_with('-') {
                     lines.push(Line::from(vec![Span::styled(
                         l,
-                        Style::default().fg(Color::Red),
+                        Style::default().fg(pal::DANGER),
                     )]));
                 } else if l.starts_with('@') {
                     lines.push(Line::from(vec![Span::styled(
                         l,
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(pal::INFO),
                     )]));
                 } else {
                     lines.push(Line::from(vec![Span::raw(l)]));
@@ -231,20 +371,67 @@ fn draw_inspector(f: &mut Frame, state: &AppState, area: Rect) {
         }
         lines.push(Line::from(vec![Span::styled(
             ">> Press 'y' to Approve, 'n' to Reject.",
-            Style::default().fg(Color::Yellow),
+            Style::default().fg(pal::WARNING),
         )]));
 
         let paragraph = Paragraph::new(lines);
         f.render_widget(paragraph, inner_area);
-    } else {
-        let text = "No active tool context.\n\nRelevant files will appear here.";
-        let paragraph = Paragraph::new(text).style(Style::default().fg(Color::Yellow));
-        f.render_widget(paragraph, inner_area);
+        return;
+    }
+
+    // [v0.1.0-beta.18] A-5: 탭별 실체 콘텐츠 렌더링
+    match state.active_inspector_tab {
+        InspectorTab::Logs => {
+            // logs_buffer의 최근 항목 표시
+            let mut lines = Vec::new();
+            if state.logs_buffer.is_empty() {
+                lines.push(Line::from(vec![Span::styled(
+                    "No logs yet.",
+                    Style::default().fg(pal::MUTED),
+                )]));
+            } else {
+                // 마지막 50줄만 표시
+                let start = state.logs_buffer.len().saturating_sub(50);
+                for log in &state.logs_buffer[start..] {
+                    lines.push(Line::from(vec![Span::styled(
+                        log.as_str(),
+                        Style::default().fg(pal::TEXT_SECONDARY),
+                    )]));
+                }
+            }
+            let paragraph = Paragraph::new(lines);
+            f.render_widget(paragraph, inner_area);
+        }
+        InspectorTab::Diff => {
+            let text = "No pending diffs.\n\nDiffs will appear here after file write proposals.";
+            let paragraph = Paragraph::new(text).style(Style::default().fg(pal::MUTED));
+            f.render_widget(paragraph, inner_area);
+        }
+        InspectorTab::Search => {
+            let text = "No search results.\n\nGrep results will appear here.";
+            let paragraph = Paragraph::new(text).style(Style::default().fg(pal::MUTED));
+            f.render_widget(paragraph, inner_area);
+        }
+        InspectorTab::Recent => {
+            let text = "No recent files.\n\nRecently accessed files will appear here.";
+            let paragraph = Paragraph::new(text).style(Style::default().fg(pal::MUTED));
+            f.render_widget(paragraph, inner_area);
+        }
+        _ => {
+            // Preview (기본)
+            let text = "No active file context.\n\nRelevant files will appear here.";
+            let paragraph = Paragraph::new(text).style(Style::default().fg(pal::MUTED));
+            f.render_widget(paragraph, inner_area);
+        }
     }
 }
 
 fn draw_composer(f: &mut Frame, state: &AppState, area: Rect) {
-    let block = Block::default().title("Composer").borders(Borders::TOP);
+    // [v0.1.0-beta.18] Semantic Palette 적용
+    let block = Block::default()
+        .title("Composer")
+        .borders(Borders::TOP)
+        .style(Style::default().fg(pal::TEXT_PRIMARY));
     let content = if state.composer.input_buffer.is_empty() {
         "> (/, @, ! 사용 가능) Type your prompt here...".to_string()
     } else {
@@ -263,28 +450,28 @@ fn draw_composer(f: &mut Frame, state: &AppState, area: Rect) {
         let f_block = Block::default()
             .title("File Select (@)")
             .borders(Borders::ALL)
-            .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+            .style(Style::default().bg(pal::BG_ELEVATED).fg(pal::TEXT_PRIMARY));
 
         let mut lines = Vec::new();
-        lines.push(ratatui::text::Line::from(vec![ratatui::text::Span::raw(
+        lines.push(Line::from(vec![Span::raw(
             format!("> {}", state.fuzzy.input),
         )]));
 
         if state.fuzzy.matches.is_empty() {
-            lines.push(ratatui::text::Line::from(vec![
-                ratatui::text::Span::styled("No files found", Style::default().fg(Color::Red)),
+            lines.push(Line::from(vec![
+                Span::styled("No files found", Style::default().fg(pal::DANGER)),
             ]));
         } else {
             for (i, m) in state.fuzzy.matches.iter().enumerate().take(3) {
                 if i == state.fuzzy.cursor {
-                    lines.push(ratatui::text::Line::from(vec![
-                        ratatui::text::Span::styled(
+                    lines.push(Line::from(vec![
+                        Span::styled(
                             format!("▶ {}", m),
-                            Style::default().fg(Color::Cyan),
+                            Style::default().fg(pal::ACCENT),
                         ),
                     ]));
                 } else {
-                    lines.push(ratatui::text::Line::from(vec![ratatui::text::Span::raw(
+                    lines.push(Line::from(vec![Span::raw(
                         format!("  {}", m),
                     )]));
                 }
@@ -307,20 +494,20 @@ fn draw_composer(f: &mut Frame, state: &AppState, area: Rect) {
         let menu_block = Block::default()
             .title("Commands (/)")
             .borders(Borders::ALL)
-            .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+            .style(Style::default().bg(pal::BG_ELEVATED).fg(pal::TEXT_PRIMARY));
 
         let mut lines = Vec::new();
         for (i, (cmd, desc)) in state.slash_menu.matches.iter().enumerate() {
             let line_text = format!("{:<12} {}", cmd, desc);
             if i == state.slash_menu.cursor {
-                lines.push(ratatui::text::Line::from(vec![
-                    ratatui::text::Span::styled(
+                lines.push(Line::from(vec![
+                    Span::styled(
                         format!("▶ {}", line_text),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(pal::ACCENT),
                     ),
                 ]));
             } else {
-                lines.push(ratatui::text::Line::from(vec![ratatui::text::Span::raw(
+                lines.push(Line::from(vec![Span::raw(
                     format!("  {}", line_text),
                 )]));
             }

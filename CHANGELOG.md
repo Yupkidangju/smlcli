@@ -3,6 +3,27 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [0.1.0-beta.18] - 2026-04-16
+
+### Added (Phase 9-A: 이벤트 아키텍처 기반 — 7건)
+- **Action enum 14종 확장**: ChatStarted, ChatDelta, ToolQueued, ToolStarted, ToolOutputChunk, ToolSummaryReady 추가
+- **TimelineEntry 이중 데이터 모델**: session.messages(LLM)와 timeline_entries(UI 카드) 분리
+- **Semantic Palette**: `tui/palette.rs` 신규 — 전경 6색 + 배경 3계층 + 스피너/배지 상수
+- **tick 기반 애니메이션**: thinking 스피너(◐◓◑◒), 도구 배지 깜빡임(●/○), 승인 pulse, compact progress
+- **Inspector Logs 탭 실체**: logs_buffer 기반 실제 로그 렌더링
+- **Tool 출력 요약 분리**: raw stdout → 2~4줄 타임라인 요약 + 원문 Logs 탭
+- **타임라인 렌더링 전환**: session.messages 기반 → timeline_entries 기반 (폴백 유지)
+
+### Added (Phase 9-B: 보안 강화 — 3건)
+- **Blocked Command 목록**: sudo/rm -rf/chmod 777/mkfs/dd/fork bomb 등 15개 패턴 무조건 차단
+- **File Read 안전장치**: '..' 경로 traversal 차단 + 1MB 초과 파일 읽기 차단
+- **테스트 4건 추가**: blocked_command_sudo, blocked_command_rm_rf, path_traversal, timeline_entry (14→18건)
+
+### Changed
+- `layout.rs`: 하드코딩 Color 전면 제거 → Semantic Palette 참조로 교체
+- `chat_runtime.rs`: 사용자 메시지/에러를 timeline에도 동기 추가
+- `mod.rs`: tick 이벤트에서 tick_count 증가, generate_tool_summary() 추가
+
 ## [0.1.0-beta.17] - 2026-04-16
 
 ### Fixed (감사 리포트 수정 3건)

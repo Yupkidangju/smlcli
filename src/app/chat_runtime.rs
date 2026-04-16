@@ -124,10 +124,17 @@ impl App {
         // 사용자 메시지를 세션에 추가
         let msg = crate::providers::types::ChatMessage {
             role: crate::providers::types::Role::User,
-            content: final_text,
+            content: final_text.clone(),
             pinned: false,
         };
         self.state.session.add_message(msg);
+
+        // [v0.1.0-beta.18] 사용자 메시지를 타임라인에도 추가
+        self.state.timeline.push(
+            crate::app::state::TimelineEntry::now(
+                crate::app::state::TimelineEntryKind::UserMessage(final_text),
+            ),
+        );
 
         // [v0.1.0-beta.9] 중앙 보안 가드 사용: dispatch 전 사전 검증
         let (provider_kind, model_name, api_key) = match self.resolve_credentials() {
@@ -137,15 +144,27 @@ impl App {
                     .session
                     .add_message(crate::providers::types::ChatMessage {
                         role: crate::providers::types::Role::System,
-                        content: err_msg,
+                        content: err_msg.clone(),
                         pinned: false,
                     });
+                // [v0.1.0-beta.18] 에러를 타임라인에도 표시
+                self.state.timeline.push(
+                    crate::app::state::TimelineEntry::now(
+                        crate::app::state::TimelineEntryKind::SystemNotice(err_msg),
+                    ),
+                );
                 return;
             }
         };
 
-        // [v0.1.0-beta.16] AI 추론 시작: thinking indicator 활성화
+        // [v0.1.0-beta.18] ChatStarted 이벤트 발송: thinking indicator + 빈 Delta 엔트리 추가
+        // (handle_action에서 ChatStarted가 처리됨)
         self.state.is_thinking = true;
+        self.state.timeline.push(
+            crate::app::state::TimelineEntry::now(
+                crate::app::state::TimelineEntryKind::AssistantDelta(String::new()),
+            ),
+        );
 
         // 비동기 LLM 요청 발송
         let tx = self.action_tx.clone();
