@@ -20,9 +20,9 @@
   - 앱 첫 실행 시 `Setup Home` 로드
   - 제공자 선택 및 자격 증명 (API Key 등) 입력 마스킹 UI 구현
   - 플로우 상태 처리 (`Not Started`, `In Progress`, `Done`)
-- [x] **Task 5: Keyring 연동과 암호화 파일 설정**
-  - 로컬 `master-key` 생성 및 운영체제 Keyring 등록 로직
-  - XChaCha20Poly1305 기반 로컬 구성 정보(`settings.toml`) 암호화 및 복호화
+- [x] **Task 5: 파일 기반 암호화 설정 저장소**
+  - 로컬 `master-key` 생성 및 `~/.smlcli/.master_key` 파일 저장 (chmod 600)
+  - ChaCha20Poly1305 기반 API 키 필드 암호화 (`config.toml`의 `encrypted_keys`)
 - [x] **Task 6: Provider 자격 검증 (Smoke Test)**
   - API 키 입력 즉시 HTTP 테스트를 거치는 Provider Adapter 인터페이스
   - 설정 저장 실패/성공에 따른 상태바 업데이트 반영
@@ -53,8 +53,8 @@
 ## Phase 5: 통합 및 완성도 확보 (Integration & Polish)
 - [x] **Task 14: LLM 도구 호출 JSON 로직 연동**
   - 프롬프트 엔지니어링 및 `serde_json` 기반 응답 파서를 통한 승인(Pending) 카드 자동 생성
-- [x] **Task 15: 설정 및 Vault 암호화 연동**
-  - 운영체제 Keyring과 XChaCha20 적용한 구성 영구 저장 기능
+- [x] **Task 15: 설정 및 암호화 저장소 연동**
+  - 파일 기반 마스터 키 + ChaCha20Poly1305 적용한 구성 영구 저장 기능
 - [x] **Task 16: Inspector 반응형 분할 및 UI/UX 폴리싱**
   - 화면 폭/단축키(`Ctrl + I`)에 대응하는 동적 Split 레이아웃
   - `similar` Diff의 라인별 `초록색/빨간색` 렌더링 스팬 처리
@@ -62,7 +62,7 @@
 ## Phase 6: 슬래시 커맨드 및 설정 결합 (Commands & Config)
 - [x] **Task 17: `/config` 종합 마스터 대시보드 구현**
   - TUI 오버레이를 통해 Provider, Model, Permission 등 모든 설정 내역을 방향키로 이동 및 수정
-  - 변경 시 즉시 OS Keyring 및 암호화 파일(`settings.enc`)에 반영
+  - 변경 시 즉시 `config.toml` 영속 저장 및 암호화 키 갱신
 - [x] **Task 18: `/provider` 및 `/model` 양방향 선택 팝업**
   - 콘솔 입력창에 명령어 입력 시 자동 페칭 후 방향키로 리스트에서 선택 (키보드 친화적 UX)
 - [x] **Task 19: 핵심 슬래시 커맨드 파서 연결**
@@ -127,4 +127,27 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
   - [High-1건] /config→Model 경로 보안 가드 우회 차단 (6차 자체 감사에서 이미 수정 확인).
   - [High-1건] Provider 전환 사용자 취소(Esc) 시 rollback 누락: Esc 핸들러에 롤백 스냅샷 복구 로직 추가.
   - [Medium-1건] save_config() 실패 묵살 수정: ShellPolicy 토글 + ModelList 저장에서 에러를 err_msg로 사용자 가시화.
+  - [Quality] 전체 품질 게이트 통과: `cargo check ✓ | cargo test 14/14 ✓ | cargo clippy -D warnings ✓ | cargo fmt --check ✓`
+- [2026-04-15] : **[8차 AUDIT & REMEDIATION - v0.1.0-beta.12]** 외부 감사 보고서 기반 4건 수정.
+  - [Medium-1건] save_config() 저장 실패 시 in-memory 복구: ShellPolicy 토글 및 ModelList 저장에서 실패 시 이전 값으로 자동 롤백.
+  - [Quality] 전체 품질 게이트 통과.
+- [2026-04-15] : **[v0.1.0-beta.13]** 긴급 실행 불가 버그 수정.
+  - keyring 백엔드 미설정(`sync-secret-service` feature 누락)으로 mock credential store 사용 → 키 영속화 실패 수정.
+  - `dbus`, `dbus-secret-service`, `libdbus-sys` transitive 의존성 자동 추가.
+- [2026-04-16] : **[v0.1.0-beta.14] Credential Store 아키텍처 재설계.**
+  - `keyring` 크레이트 완전 제거: OS 의존적 gnome-keyring → 크로스플랫폼 파일 기반으로 교체.
+  - 설정 저장 경로 변경: `~/.config/smlcli/settings.enc` (암호화 바이너리) → `~/.smlcli/config.toml` (TOML 평문).
+  - API 키: config.toml의 `encrypted_keys` HashMap에 ChaCha20Poly1305 암호화 저장.
+  - 마스터 키: `~/.smlcli/.master_key` 파일 (hex 인코딩, chmod 600).
+  - `save_config()` / `load_config()` 시그니처에서 `master_key` 파라미터 제거.
+  - `PersistedSettings`에 `encrypted_keys: HashMap<String, String>` 필드 추가.
+- [2026-04-16] : **[v0.1.0-beta.15] 감사 3건 수정.**
+  - [High] `serde_yml` (RUSTSEC-2025-0067/0068) 제거 → 기존 `toml` 크레이트로 교체.
+  - [Medium] 문서-구현 불일치 해소: README/spec.md 내 keyring 참조를 파일 기반 암호화로 교체.
+  - [Low] `config.toml`에 chmod 600 권한 설정 추가 (Unix).
+- [2026-04-16] : **[v0.1.0-beta.16] UX 4건 개선.**
+  - Tool JSON 필터링: AI 응답 내 도구 호출 JSON 스키마를 `⚙️ [도구명]` 형태로 대체 표시.
+  - AI 추론 인디케이터: 프롬프트 전송 ~ 응답 수신까지 `✨ AI가 응답을 생성하고 있습니다...` 표시.
+  - 슬래시 커맨드 자동완성 메뉴: Composer에서 `/` 입력 시 11개 명령어 팝업, 방향키+Enter 선택.
+  - 에이전트 페르소나 시스템 프롬프트: CLI 에이전트 역할 정의 (~1K 토큰), 사용자 입력 언어 미러링.
   - [Quality] 전체 품질 게이트 통과: `cargo check ✓ | cargo test 14/14 ✓ | cargo clippy -D warnings ✓ | cargo fmt --check ✓`
