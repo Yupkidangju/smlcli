@@ -5,13 +5,15 @@
 
 ## [0.1.0-beta.18] - 2026-04-16
 
-### Added (Phase 10: 세션 영속성 + CLI Entry — 3건)
+### Added (Phase 10: 기능 완성 — 4건)
 - **JSONL 대화 로그**: `~/.smlcli/sessions/session_{ts}.jsonl` — append-only 기록, 복원, 세션 목록 조회
 - **CLI Entry Modes**: `smlcli run` (기본 TUI) / `smlcli doctor` (환경 진단) / `smlcli sessions` (세션 목록)
+- **SSE 스트리밍**: Provider chat_stream() — stream:true + delta_tx 채널 → ChatDelta 실시간 발행 (OpenRouter/Gemini)
 - **전역 #![allow] 최소화**: unused_imports/unused_variables 제거 (dead_code만 유지) — 미사용 6+2건 수정
 - 신규 의존성: `clap 4` (derive feature)
 
 ### Changed (Phase 10)
+- chat_runtime: batch chat() → chat_stream() 전환 (delta_forwarder 비동기 태스크)
 - 상태바 ctx% 색상: budget ≥ 85 → `DANGER`(빨강), ≥ 70 → `WARNING`(노랑), 기본 → `MUTED`
 
 ### Added (Phase 9-A: 이벤트 아키텍처 기반 — 7건)

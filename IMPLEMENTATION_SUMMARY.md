@@ -187,16 +187,46 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
 7. ⏳ Structured Tool Call — Phase 9-C로 이관
 
 ### Phase 9-C: 품질 강화 — ✅ 부분 완료 (3/6건)
-1. ⏳ SSE 스트리밍 (9-A에서 이관) — Phase 10으로 이관
-2. ⏳ CLI Entry Modes (9-B에서 이관) — Phase 10으로 이관
-3. ⏳ 세션 영속성 JSONL (9-B에서 이관) — Phase 10으로 이관
+1. ✅ SSE 스트리밍 → Phase 10에서 구현 완료
+2. ✅ CLI Entry Modes → Phase 10에서 구현 완료
+3. ✅ 세션 영속성 JSONL → Phase 10에서 구현 완료
 4. ✅ Shell stdout/stderr 실시간 스트리밍 (라인 단위 비동기 + ToolOutputChunk 이벤트)
-5. ⏳ Diff 접기/펼치기 UI — Phase 10으로 이관
+5. ⏳ Diff 접기/펼치기 UI — Phase 11로 이관
 6. ✅ 테스트 확장 (14→24건): blocked_command, timeline, ToolStatus 등
 7. ✅ ListDir 재귀 트리 (├──/└── Unicode, 디렉토리 우선 정렬, 1000개 제한)
 
-### 실제 결과 (Phase 9 전체)
-- 코드 변경량: ~870줄 추가 (13개 파일 변경, 1개 신규)
+---
+
+## Phase 10: 기능 완성 (v0.1.0-beta.18)
+
+**상태**: ✅ 구현 완료
+**완료 일시**: 2026-04-16
+**커밋**: `369fb9e` → `d03d7b2` → `8e7c57e`
+
+### 구현 항목 — 4건
+1. ✅ **JSONL 세션 영속성** (`infra/session_log.rs` 신규)
+   - append-only 대화 기록, 복원(restore_messages), 세션 목록(list_sessions)
+   - 사용자/AI 메시지 자동 기록 (chat_runtime.rs + mod.rs)
+   - 외부 의존성 0건 (std::time::UNIX_EPOCH 기반)
+2. ✅ **CLI Entry Modes** (`main.rs` 전면 개편, clap 4 derive)
+   - `smlcli run`: 기본 인터랙티브 TUI 모드
+   - `smlcli doctor`: 환경 진단 (설정 로드, 세션 수, 시스템 정보)
+   - `smlcli sessions`: JSONL 세션 파일 목록 (파일명/크기/메시지 수)
+3. ✅ **SSE 스트리밍** (`providers/registry.rs` chat_stream 메서드)
+   - ProviderAdapter trait에 chat_stream() 추가
+   - OpenRouter/Gemini: stream:true → SSE data: 라인 파싱 → delta_tx 전송
+   - chat_runtime.rs: delta_forwarder 태스크가 ChatDelta 이벤트 실시간 발행
+4. ✅ **전역 #![allow] 최소화**
+   - unused_imports/unused_variables 제거, dead_code만 유지
+   - 미사용 import 6건 + 변수 2건 수정
+   - ctx% 상태바 색상 차등 적용 (budget ≥85 DANGER / ≥70 WARNING)
+
+### 실제 결과 (Phase 9+10 전체)
+- 코드 변경량: ~1,200줄 추가 (18개 파일 변경, 2개 신규)
 - 테스트: 14건 → 24건, Clippy: 0 warnings
-- 신규 파일: `tui/palette.rs`
-- 커밋: `b5c4612` (9-A/B), `f1c81f4` (9-C)
+- 신규 파일: `tui/palette.rs`, `infra/session_log.rs`
+- 신규 의존성: `clap 4` (derive feature)
+
+### 남은 이관 항목
+- ⏳ Structured Tool Call (Provider별 native tool call contract)
+- ⏳ Diff 접기/펼치기 UI
