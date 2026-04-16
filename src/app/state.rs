@@ -262,6 +262,8 @@ pub struct AppState {
     pub logs_buffer: Vec<String>,
     /// [v0.1.0-beta.18] UI 애니메이션 틱 카운터 (250ms 주기 증가)
     pub tick_count: u64,
+    /// [v0.1.0-beta.18] Phase 10: JSONL 세션 로거 (대화 영속성)
+    pub session_logger: Option<crate::infra::session_log::SessionLogger>,
 }
 
 impl AppState {
@@ -274,6 +276,9 @@ impl AppState {
             loaded_settings = Some(settings);
             is_wizard_open = false;
         }
+
+        // [v0.1.0-beta.18] Phase 10: JSONL 세션 로거 자동 생성
+        let session_logger = crate::infra::session_log::SessionLogger::new_session().ok();
 
         Self {
             should_quit: false,
@@ -292,6 +297,7 @@ impl AppState {
             timeline: Vec::new(),
             logs_buffer: Vec::new(),
             tick_count: 0,
+            session_logger,
         }
     }
 }

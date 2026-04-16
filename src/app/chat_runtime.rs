@@ -127,7 +127,12 @@ impl App {
             content: final_text.clone(),
             pinned: false,
         };
-        self.state.session.add_message(msg);
+        self.state.session.add_message(msg.clone());
+
+        // [v0.1.0-beta.18] Phase 10: 사용자 메시지를 JSONL 세션 로그에 기록
+        if let Some(ref logger) = self.state.session_logger {
+            let _ = logger.append_message(&msg);
+        }
 
         // [v0.1.0-beta.18] 사용자 메시지를 타임라인에도 추가
         self.state.timeline.push(

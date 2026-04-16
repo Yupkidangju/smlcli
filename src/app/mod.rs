@@ -116,6 +116,11 @@ impl App {
                 self.state.session.token_budget_used += res.input_tokens + res.output_tokens;
                 self.state.session.add_message(res.message.clone());
 
+                // [v0.1.0-beta.18] Phase 10: AI 응답을 JSONL 세션 로그에 기록
+                if let Some(ref logger) = self.state.session_logger {
+                    let _ = logger.append_message(&res.message);
+                }
+
                 // 스트리밍 Delta가 있으면 완성된 메시지로 변환
                 if let Some(last) = self.state.timeline.last_mut() {
                     if matches!(last.kind, TimelineEntryKind::AssistantDelta(_)) {
