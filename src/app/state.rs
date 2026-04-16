@@ -179,6 +179,67 @@ impl SlashMenuState {
     }
 }
 
+// === [v0.1.0-beta.18] Phase 9-A: 타임라인 전용 데이터 모델 ===
+// session.messages(LLM 컨텍스트)와 분리된 UI 표시 전용 카드 시스템.
+// designs.md §5.2 카드 타입 + §5.6 도구 출력 요약 분리 기반.
+
+/// 도구 실행 상태를 나타내는 열거형. 타임라인 카드의 배지 표시에 사용.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolStatus {
+    /// 권한 검사 대기 중
+    Queued,
+    /// 실행 중 (배지 깜빡임 애니메이션)
+    Running,
+    /// 실행 완료
+    Done,
+    /// 실행 실패
+    Error,
+}
+
+/// 타임라인에 표시되는 개별 카드의 종류.
+/// 각 variant가 타임라인의 한 줄(또는 카드)에 대응.
+#[derive(Debug, Clone)]
+pub enum TimelineEntryKind {
+    /// 사용자 입력 메시지
+    UserMessage(String),
+    /// AI 응답 완료 메시지
+    AssistantMessage(String),
+    /// SSE 스트리밍 중간 결과 (실시간 토큰 append)
+    AssistantDelta(String),
+    /// 시스템 알림 (context compact, 에러, 연결 상태 등)
+    SystemNotice(String),
+    /// 도구 실행 카드: 상태 배지 + 2~4줄 요약
+    ToolCard {
+        tool_name: String,
+        status: ToolStatus,
+        summary: String,
+    },
+    /// 승인 대기 카드: diff preview 포함
+    ApprovalCard {
+        tool_name: String,
+        detail: String,
+    },
+    /// 컨텍스트 압축 요약
+    CompactSummary(String),
+}
+
+/// 타임라인의 단일 엔트리. 시간 순서대로 Vec에 저장.
+#[derive(Debug, Clone)]
+pub struct TimelineEntry {
+    pub kind: TimelineEntryKind,
+    pub timestamp: std::time::Instant,
+}
+
+impl TimelineEntry {
+    /// 새 타임라인 엔트리를 현재 시각으로 생성
+    pub fn now(kind: TimelineEntryKind) -> Self {
+        Self {
+            kind,
+            timestamp: std::time::Instant::now(),
+        }
+    }
+}
+
 pub struct AppState {
     pub should_quit: bool,
     pub is_wizard_open: bool,
@@ -195,6 +256,12 @@ pub struct AppState {
     pub is_thinking: bool,
     /// [v0.1.0-beta.16] 슬래시 명령어 자동완성 메뉴
     pub slash_menu: SlashMenuState,
+    /// [v0.1.0-beta.18] 타임라인 전용 카드 목록 (session.messages와 분리)
+    pub timeline: Vec<TimelineEntry>,
+    /// [v0.1.0-beta.18] 도구/셸/Provider 원문 로그 (Inspector Logs 탭 표시용)
+    pub logs_buffer: Vec<String>,
+    /// [v0.1.0-beta.18] UI 애니메이션 틱 카운터 (250ms 주기 증가)
+    pub tick_count: u64,
 }
 
 impl AppState {
@@ -222,6 +289,9 @@ impl AppState {
             approval: ApprovalState::new(),
             is_thinking: false,
             slash_menu: SlashMenuState::new(),
+            timeline: Vec::new(),
+            logs_buffer: Vec::new(),
+            tick_count: 0,
         }
     }
 }

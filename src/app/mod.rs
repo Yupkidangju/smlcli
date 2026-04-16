@@ -63,6 +63,9 @@ impl App {
                         self.handle_action(action);
                     }
                     Event::Tick => {
+                        // [v0.1.0-beta.18] 애니메이션 틱 카운터 증가
+                        self.state.tick_count = self.state.tick_count.wrapping_add(1);
+
                         // 컨텍스트 자동 압축 트리거
                         if self.state.session.needs_auto_compaction {
                             self.state.session.needs_auto_compaction = false;
@@ -83,8 +86,109 @@ impl App {
     /// 비동기 액션 이벤트를 각 도메인별 핸들러로 라우팅.
     /// 도구 결과, 채팅 응답, 모델 목록, 인증 결과, 컨텍스트 요약 등 처리.
     fn handle_action(&mut self, action: action::Action) {
+        use crate::app::state::{TimelineEntry, TimelineEntryKind, ToolStatus};
+
         match action {
+            // === [v0.1.0-beta.18] 채팅 라이프사이클 ===
+
+            action::Action::ChatStarted => {
+                // thinking indicator 시작 + 타임라인에 스트리밍 준비 엔트리
+                self.state.is_thinking = true;
+                self.state.timeline.push(TimelineEntry::now(
+                    TimelineEntryKind::AssistantDelta(String::new()),
+                ));
+            }
+
+            action::Action::ChatDelta(token) => {
+                // SSE 토큰 수신: 스트리밍 중간 결과에 append
+                self.state.is_thinking = false;
+                if let Some(last) = self.state.timeline.last_mut() {
+                    if let TimelineEntryKind::AssistantDelta(ref mut buf) = last.kind {
+                        buf.push_str(&token);
+                    }
+                }
+            }
+
+            action::Action::ChatResponseOk(res) => {
+                // [v0.1.0-beta.16] 추론 완료: thinking indicator 비활성화
+                self.state.is_thinking = false;
+                // 토큰 예산 갱신
+                self.state.session.token_budget_used += res.input_tokens + res.output_tokens;
+                self.state.session.add_message(res.message.clone());
+
+                // 스트리밍 Delta가 있으면 완성된 메시지로 변환
+                if let Some(last) = self.state.timeline.last_mut() {
+                    if matches!(last.kind, TimelineEntryKind::AssistantDelta(_)) {
+                        last.kind = TimelineEntryKind::AssistantMessage(res.message.content.clone());
+                    }
+                } else {
+                    // Delta 없이 batch로 수신된 경우
+                    self.state.timeline.push(TimelineEntry::now(
+                        TimelineEntryKind::AssistantMessage(res.message.content.clone()),
+                    ));
+                }
+
+                // 응답에서 도구 호출 감지 및 처리 (tool_runtime.rs에 위임)
+                self.process_tool_calls_from_response(&res.message.content);
+            }
+
+            action::Action::ChatResponseErr(e) => {
+                // [v0.1.0-beta.16] 추론 완료: thinking indicator 비활성화
+                self.state.is_thinking = false;
+
+                // 스트리밍 Delta가 있으면 에러 메시지로 변환
+                if let Some(last) = self.state.timeline.last_mut() {
+                    if matches!(last.kind, TimelineEntryKind::AssistantDelta(_)) {
+                        last.kind = TimelineEntryKind::SystemNotice(format!("Provider Error: {}", e));
+                    }
+                } else {
+                    self.state.timeline.push(TimelineEntry::now(
+                        TimelineEntryKind::SystemNotice(format!("Provider Error: {}", e)),
+                    ));
+                }
+
+                self.state
+                    .session
+                    .add_message(crate::providers::types::ChatMessage {
+                        role: crate::providers::types::Role::System,
+                        content: format!("Provider Error: {}", e),
+                        pinned: false,
+                    });
+            }
+
+            // === [v0.1.0-beta.18] 도구 라이프사이클 ===
+
+            action::Action::ToolQueued(ref tool_call) => {
+                // 타임라인에 "대기중" 카드 추가
+                let tool_name = format!("{:?}", tool_call).chars().take(30).collect::<String>();
+                self.state.timeline.push(TimelineEntry::now(
+                    TimelineEntryKind::ToolCard {
+                        tool_name,
+                        status: ToolStatus::Queued,
+                        summary: "권한 검사 중...".to_string(),
+                    },
+                ));
+            }
+
+            action::Action::ToolStarted(name) => {
+                // 마지막 ToolCard의 상태를 Running으로 갱신
+                for entry in self.state.timeline.iter_mut().rev() {
+                    if let TimelineEntryKind::ToolCard { ref tool_name, ref mut status, .. } = entry.kind {
+                        if *tool_name == name || *status == ToolStatus::Queued {
+                            *status = ToolStatus::Running;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            action::Action::ToolOutputChunk(chunk) => {
+                // 원문 로그를 logs_buffer에 추가 (Inspector Logs 탭)
+                self.state.logs_buffer.push(chunk);
+            }
+
             action::Action::ToolFinished(res) => {
+                // LLM 컨텍스트에 도구 결과 추가
                 let content = format!(
                     "[Tool Result] {}\nExit Code: {}\nSTDOUT: {}\nSTDERR: {}",
                     res.tool_name, res.exit_code, res.stdout, res.stderr
@@ -96,7 +200,39 @@ impl App {
                         content,
                         pinned: false,
                     });
+
+                // 원문은 logs_buffer에 보존
+                self.state.logs_buffer.push(format!(
+                    "[{}] exit={} stdout={} stderr={}",
+                    res.tool_name, res.exit_code,
+                    res.stdout.chars().take(500).collect::<String>(),
+                    res.stderr.chars().take(500).collect::<String>(),
+                ));
+
+                // 타임라인 ToolCard 상태를 Done/Error로 갱신
+                let final_status = if res.is_error { ToolStatus::Error } else { ToolStatus::Done };
+                for entry in self.state.timeline.iter_mut().rev() {
+                    if let TimelineEntryKind::ToolCard { ref mut status, ref mut summary, .. } = entry.kind {
+                        if *status == ToolStatus::Running || *status == ToolStatus::Queued {
+                            *status = final_status.clone();
+                            // 2~4줄 요약 생성
+                            *summary = Self::generate_tool_summary(&res);
+                            break;
+                        }
+                    }
+                }
             }
+
+            action::Action::ToolSummaryReady(new_summary) => {
+                // 외부에서 생성된 요약으로 마지막 ToolCard 갱신
+                for entry in self.state.timeline.iter_mut().rev() {
+                    if let TimelineEntryKind::ToolCard { ref mut summary, .. } = entry.kind {
+                        *summary = new_summary;
+                        break;
+                    }
+                }
+            }
+
             action::Action::ToolError(e) => {
                 self.state
                     .session
@@ -105,28 +241,21 @@ impl App {
                         content: format!("[Tool Execution Failed] {}", e),
                         pinned: false,
                     });
-            }
-            action::Action::ChatResponseOk(res) => {
-                // [v0.1.0-beta.16] 추론 완료: thinking indicator 비활성화
-                self.state.is_thinking = false;
-                // 토큰 예산 갱신
-                self.state.session.token_budget_used += res.input_tokens + res.output_tokens;
-                self.state.session.add_message(res.message.clone());
 
-                // 응답에서 도구 호출 감지 및 처리 (tool_runtime.rs에 위임)
-                self.process_tool_calls_from_response(&res.message.content);
+                // 타임라인 ToolCard 상태를 Error로 갱신
+                for entry in self.state.timeline.iter_mut().rev() {
+                    if let TimelineEntryKind::ToolCard { ref mut status, ref mut summary, .. } = entry.kind {
+                        if *status == ToolStatus::Running || *status == ToolStatus::Queued {
+                            *status = ToolStatus::Error;
+                            *summary = format!("실패: {}", e.chars().take(80).collect::<String>());
+                            break;
+                        }
+                    }
+                }
             }
-            action::Action::ChatResponseErr(e) => {
-                // [v0.1.0-beta.16] 추론 완료: thinking indicator 비활성화
-                self.state.is_thinking = false;
-                self.state
-                    .session
-                    .add_message(crate::providers::types::ChatMessage {
-                        role: crate::providers::types::Role::System,
-                        content: format!("Provider Error: {}", e),
-                        pinned: false,
-                    });
-            }
+
+            // === 기존 유지 ===
+
             action::Action::ModelsFetched(res, source) => {
                 self.handle_models_fetched(res, source);
             }
@@ -135,6 +264,9 @@ impl App {
             }
             action::Action::ContextSummaryOk(summary) => {
                 self.state.session.apply_summary(&summary);
+                self.state.timeline.push(TimelineEntry::now(
+                    TimelineEntryKind::CompactSummary(summary),
+                ));
             }
             action::Action::ContextSummaryErr(e) => {
                 self.state
@@ -142,6 +274,28 @@ impl App {
                     .apply_summary(&format!("Fallback due to error: {}", e));
             }
         }
+    }
+
+    /// [v0.1.0-beta.18] ToolResult에서 2~4줄 요약을 생성.
+    /// 타임라인에는 이 요약만 표시하고, 원문은 Logs 탭에 보존.
+    fn generate_tool_summary(res: &crate::domain::tool_result::ToolResult) -> String {
+        let status_icon = if res.is_error { "❌" } else { "✅" };
+        let mut summary = format!("{} {} (exit {})", status_icon, res.tool_name, res.exit_code);
+
+        // stdout이 있으면 첫 2줄만 표시
+        if !res.stdout.is_empty() {
+            let first_lines: String = res.stdout.lines().take(2).collect::<Vec<_>>().join("\n");
+            if !first_lines.is_empty() {
+                summary.push_str(&format!("\n   {}", first_lines));
+            }
+        }
+        // stderr가 있으면 첫 1줄만 표시
+        if !res.stderr.is_empty()
+            && let Some(first) = res.stderr.lines().next()
+        {
+            summary.push_str(&format!("\n   ⚠ {}", first));
+        }
+        summary
     }
 
     /// [v0.1.0-beta.10] ModelsFetched 이벤트 처리: FetchSource에 따라 정확한 상태 슬롯으로 라우팅.
