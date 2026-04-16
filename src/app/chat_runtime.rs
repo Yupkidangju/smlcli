@@ -171,7 +171,8 @@ impl App {
             ),
         );
 
-        // 비동기 LLM 요청 발송
+        // [v0.1.0-beta.18] Phase 10: SSE 스트리밍 모드로 LLM 요청 발송.
+        // delta_tx 채널로 실시간 토큰을 수신하여 ChatDelta 이벤트로 UI 갱신.
         let tx = self.action_tx.clone();
         let messages = self.state.session.messages.clone();
 
@@ -181,8 +182,25 @@ impl App {
                 model: model_name,
                 messages,
             };
-            match adapter.chat(&api_key, req).await {
+
+            // 스트리밍 delta 채널 생성
+            let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(64);
+
+            // delta 수신 태스크: UI에 ChatDelta 이벤트 전송
+            let tx_delta = tx.clone();
+            let delta_forwarder = tokio::spawn(async move {
+                while let Some(delta) = delta_rx.recv().await {
+                    let _ = tx_delta
+                        .send(event_loop::Event::Action(action::Action::ChatDelta(delta)))
+                        .await;
+                }
+            });
+
+            // 스트리밍 채팅 실행
+            match adapter.chat_stream(&api_key, req, delta_tx).await {
                 Ok(res) => {
+                    // delta forwarder 완료 대기
+                    let _ = delta_forwarder.await;
                     let _ = tx
                         .send(event_loop::Event::Action(action::Action::ChatResponseOk(
                             res,
@@ -190,6 +208,7 @@ impl App {
                         .await;
                 }
                 Err(e) => {
+                    let _ = delta_forwarder.await;
                     let _ = tx
                         .send(event_loop::Event::Action(action::Action::ChatResponseErr(
                             e.to_string(),
