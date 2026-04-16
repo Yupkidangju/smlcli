@@ -1,6 +1,6 @@
 // [v0.1.0-beta.14] 아키텍처 변경: keyring 제거 → 파일 기반 설정 + 암호화 키.
 // PersistedSettings에 encrypted_keys 필드 추가.
-// 설정은 ~/.smlcli/config.yaml에 YAML 평문으로 저장되되,
+// 설정은 ~/.smlcli/config.toml에 TOML 평문으로 저장되되,
 // API 키만 ChaCha20Poly1305로 암호화하여 encrypted_keys 맵에 보관.
 
 use super::permissions::{FileWritePolicy, NetworkPolicy, ShellPolicy};

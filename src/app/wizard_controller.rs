@@ -12,7 +12,7 @@ impl App {
     /// 1. ProviderSelection: 선택된 Provider를 기록하고 ApiKeyInput으로 이동
     /// 2. ApiKeyInput: validate_credentials 비동기 호출 → (CredentialValidated 이벤트로 결과 수신)
     /// 3. ModelSelection: 선택된 모델을 기록하고 Saving으로 이동
-    /// 4. Saving: 설정을 암호화 파일 및 Keyring에 저장하고 위자드 종료
+    /// 4. Saving: 설정을 암호화 저장소에 저장하고 위자드 종료
     pub(crate) fn handle_wizard_enter(&mut self) {
         match self.state.wizard.step {
             state::WizardStep::ProviderSelection => {
@@ -74,7 +74,7 @@ impl App {
     }
 
     /// Saving 단계: 수집된 설정을 PersistedSettings로 조립하고,
-    /// Keyring에 API 키 저장, 암호화 파일에 설정 저장, AppState에 즉시 반영.
+    /// 암호화 저장소에 API 키 저장, config.toml에 설정 저장, AppState에 즉시 반영.
     fn save_wizard_settings(&mut self) {
         let default_model = if self.state.wizard.selected_model.is_empty() {
             "auto".to_string()
@@ -225,7 +225,7 @@ impl App {
                     "Google"
                 };
 
-                // [v0.1.0-beta.9] 중앙 보안 가드: NetworkPolicy + Keyring 사전 검증
+                // [v0.1.0-beta.9] 중앙 보안 가드: NetworkPolicy + 암호화 저장소 사전 검증
                 let (provider_kind, api_key) =
                     match self.resolve_credentials_for_provider(new_provider_str) {
                         Ok(creds) => creds,

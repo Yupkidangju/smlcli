@@ -3,7 +3,7 @@
 // 자연어 입력 시 메시지 가공 → Provider 호출 → 응답 수신 흐름을 캡슐화.
 //
 // [v0.1.0-beta.9] 5차 감사: resolve_credentials() 중앙 보안 가드를 도입하여
-// /model, /compact, /provider 등 보조 경로에서도 NetworkPolicy + Keyring 검증을 일관 적용.
+// /model, /compact, /provider 등 보조 경로에서도 NetworkPolicy + 암호화 저장소 검증을 일관 적용.
 
 use super::{App, action, event_loop};
 
@@ -13,7 +13,7 @@ impl App {
     /// 검증 항목:
     /// 1. 설정 존재 여부
     /// 2. NetworkPolicy::Deny 차단
-    /// 3. Keyring에서 API 키 조회 (빈 키 거부)
+    /// 3. 암호화 저장소에서 API 키 조회 (빈 키 거부)
     ///
     /// 성공 시 (ProviderKind, model_name, api_key) 튜플을 반환.
     /// 실패 시 사용자 표시용 에러 메시지 문자열을 반환.
@@ -40,7 +40,7 @@ impl App {
         };
 
         let alias = format!("{}_key", settings.default_provider.to_lowercase());
-        // [v0.1.0-beta.14] keyring → config.yaml 기반 API 키 조회
+        // [v0.1.0-beta.14] 파일 기반 암호화 저장소에서 API 키 조회
         let api_key = crate::infra::secret_store::get_api_key(settings, &alias).map_err(|e| {
             format!(
                 "[Config Error] API 키를 불러올 수 없습니다: {}. /setting으로 재설정하세요.",
@@ -83,7 +83,7 @@ impl App {
         };
 
         let alias = format!("{}_key", provider_str.to_lowercase());
-        // [v0.1.0-beta.14] keyring → config.yaml 기반 API 키 조회
+        // [v0.1.0-beta.14] 파일 기반 암호화 저장소에서 API 키 조회
         let api_key = crate::infra::secret_store::get_api_key(settings, &alias).map_err(|e| {
             format!(
                 "[Config Error] {} API 키를 불러올 수 없습니다: {}. /setting으로 재설정하세요.",
@@ -102,7 +102,7 @@ impl App {
     }
 
     /// 사용자 자연어 입력을 처리하여 LLM Provider에 채팅 요청을 전송.
-    /// @ 파일 참조 인라인 처리 및 keyring 기반 API 키 조회를 포함.
+    /// @ 파일 참조 인라인 처리 및 암호화 저장소 기반 API 키 조회를 포함.
     pub(crate) fn dispatch_chat_request(&mut self, text: String) {
         // @ 파일 참조 인라인 처리: @path 형태의 토큰을 파일 내용으로 교체
         let mut final_text = text.clone();

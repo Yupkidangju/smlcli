@@ -120,7 +120,7 @@ fn test_wizard_no_error_esc_quits() {
 #[test]
 fn test_wizard_save_failure_keeps_wizard_open() {
     // save_wizard_settings 실패 시 is_wizard_open이 여전히 true여야 함.
-    // 실제 Keyring을 사용할 수 없는 테스트 환경에서는 상태 전이만 검증.
+    // 암호화 저장소를 사용할 수 없는 테스트 환경에서는 상태 전이만 검증.
     let wizard = WizardState::new();
 
     // Saving 단계 진입
@@ -128,7 +128,7 @@ fn test_wizard_save_failure_keeps_wizard_open() {
 
     // err_msg가 설정되었을 때 is_wizard_open이 닫히면 안 되는 불변식
     let mut is_wizard_open = true;
-    let err = Some("Failed to access Keyring: No keyring found".to_string());
+    let err = Some("Failed to access encrypted store: config not found".to_string());
 
     // save_wizard_settings의 에러 분기: return 하므로 is_wizard_open이 변경 안 됨
     if err.is_some() {

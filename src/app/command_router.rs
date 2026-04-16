@@ -4,7 +4,7 @@
 // 이전에는 mod.rs 내 handle_slash_command 메서드에 모든 로직이 인라인되어 있었음.
 //
 // [v0.1.0-beta.9] 5차 감사: /model과 /compact가 중앙 보안 가드(resolve_credentials)를 우회하던 문제 수정.
-// unwrap_or_default()로 빈 키를 삼키던 패턴을 제거하고, NetworkPolicy + Keyring 검증을 일관 적용.
+// unwrap_or_default()로 빈 키를 삼키던 패턴을 제거하고, NetworkPolicy + 암호화 저장소 검증을 일관 적용.
 
 use super::{App, action, event_loop, state};
 
@@ -29,7 +29,7 @@ impl App {
                 self.state.config.cursor_index = 0;
             }
             "/model" => {
-                // [v0.1.0-beta.9] 중앙 보안 가드 적용: NetworkPolicy + Keyring 검증 후 모델 페칭
+                // [v0.1.0-beta.9] 중앙 보안 가드 적용: NetworkPolicy + 암호화 저장소 검증 후 모델 페칭
                 let (provider_kind, _model_name, api_key) = match self.resolve_credentials() {
                     Ok(creds) => creds,
                     Err(err_msg) => {
@@ -133,7 +133,18 @@ impl App {
                     });
             }
             "/help" => {
-                let help_text = "/config: Settings Dashboard\n/setting: Setup Wizard\n/provider: Switch Provider\n/model: Switch Model\n/status: Show Session Info\n/mode: Toggle PLAN/RUN\n/tokens: Show Token Limits\n/compact: Compress Chat Context\n/clear: Clear Chat\n/help: Show this message\n/quit: Exit";
+                let help_text = "\
+/config    설정 대시보드 (Settings Dashboard)\n\
+/setting   셋업 위자드 (Setup Wizard)\n\
+/provider  공급자 전환 (Switch Provider)\n\
+/model     모델 전환 (Switch Model)\n\
+/status    세션 상태 (Session Info)\n\
+/mode      PLAN ↔ RUN 전환 (Toggle Mode)\n\
+/tokens    토큰 사용량 (Token Usage)\n\
+/compact   컨텍스트 압축 (Compress Context)\n\
+/clear     대화 초기화 (Clear Chat)\n\
+/help      도움말 (Help)\n\
+/quit      종료 (Exit)";
                 self.state
                     .session
                     .add_message(crate::providers::types::ChatMessage {
@@ -160,7 +171,7 @@ impl App {
     /// /compact 커맨드의 비동기 압축 처리 전용 헬퍼.
     /// LLM을 통해 기존 대화 컨텍스트를 요약하여 토큰을 절약.
     fn handle_compact_command(&mut self) {
-        // [v0.1.0-beta.9] 중앙 보안 가드 적용: NetworkPolicy + Keyring 검증 후 압축 실행
+        // [v0.1.0-beta.9] 중앙 보안 가드 적용: NetworkPolicy + 암호화 저장소 검증 후 압축 실행
         let (provider_kind, model_name, api_key) = match self.resolve_credentials() {
             Ok(creds) => creds,
             Err(err_msg) => {

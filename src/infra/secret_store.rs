@@ -1,8 +1,8 @@
 // [v0.1.0-beta.14] 아키텍처 변경: keyring 의존성 완전 제거.
 // 마스터 키를 ~/.smlcli/.master_key 파일에 저장 (hex 인코딩, chmod 600).
-// API 키는 ChaCha20Poly1305로 암호화하여 config.yaml의 encrypted_keys 맵에 보관.
+// API 키는 ChaCha20Poly1305로 암호화하여 config.toml의 encrypted_keys 맵에 보관.
 // 이 모듈은 마스터 키 관리 + 값 암호화/복호화만 담당.
-// config.yaml 읽기/쓰기는 config_store.rs가 담당.
+// config.toml 읽기/쓰기는 config_store.rs가 담당.
 
 use anyhow::{Context, Result};
 use chacha20poly1305::{
