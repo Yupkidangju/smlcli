@@ -390,3 +390,101 @@ fn test_blocked_command_fork_bomb() {
         "fork bomb은 반드시 차단이어야 함"
     );
 }
+
+// ============================================================
+// [v0.1.0-beta.18] Phase 10: 세션 로거 JSONL 테스트 (4건)
+// ============================================================
+
+/// JSONL 세션 로거: 메시지 append 후 restore하면 동일 내용 복원
+#[test]
+fn test_session_logger_append_and_restore() {
+    use crate::infra::session_log::SessionLogger;
+    use crate::providers::types::{ChatMessage, Role};
+
+    let dir = std::env::temp_dir().join("smlcli_test_session_1");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("test_session.jsonl");
+    let _ = std::fs::remove_file(&path);
+
+    // 새 파일 생성 후 로거 초기화
+    std::fs::File::create(&path).unwrap();
+    let logger = SessionLogger::from_file(path.clone()).unwrap();
+
+    // 메시지 2건 기록
+    let msg1 = ChatMessage { role: Role::User, content: "hello".to_string(), pinned: false };
+    let msg2 = ChatMessage { role: Role::Assistant, content: "hi there".to_string(), pinned: false };
+    logger.append_message(&msg1).unwrap();
+    logger.append_message(&msg2).unwrap();
+
+    // 복원 검증
+    let (messages, errors) = logger.restore_messages().unwrap();
+    assert_eq!(messages.len(), 2, "2건 복원이어야 함");
+    assert_eq!(errors, 0, "에러 0건이어야 함");
+    assert_eq!(messages[0].content, "hello");
+    assert_eq!(messages[1].content, "hi there");
+
+    // 정리
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+/// JSONL 빈 파일 restore 시 0건 반환
+#[test]
+fn test_session_logger_empty_file() {
+    use crate::infra::session_log::SessionLogger;
+
+    let dir = std::env::temp_dir().join("smlcli_test_session_2");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("empty.jsonl");
+    std::fs::File::create(&path).unwrap();
+
+    let logger = SessionLogger::from_file(path.clone()).unwrap();
+    let (messages, errors) = logger.restore_messages().unwrap();
+    assert_eq!(messages.len(), 0);
+    assert_eq!(errors, 0);
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+/// JSONL 손상된 라인이 있어도 나머지는 정상 복원
+#[test]
+fn test_session_logger_corrupted_line_skipped() {
+    use crate::infra::session_log::SessionLogger;
+    use crate::providers::types::{ChatMessage, Role};
+
+    let dir = std::env::temp_dir().join("smlcli_test_session_3");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("corrupted.jsonl");
+
+    // 정상 1줄 + 손상 1줄 + 정상 1줄
+    let msg = ChatMessage { role: Role::User, content: "valid".to_string(), pinned: false };
+    std::fs::File::create(&path).unwrap();
+    let logger = SessionLogger::from_file(path.clone()).unwrap();
+    logger.append_message(&msg).unwrap();
+
+    // 손상된 라인 직접 추가
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    writeln!(file, "{{invalid json line}}").unwrap();
+    drop(file);
+
+    logger.append_message(&msg).unwrap();
+
+    let (messages, errors) = logger.restore_messages().unwrap();
+    assert_eq!(messages.len(), 2, "정상 2건만 복원");
+    assert_eq!(errors, 1, "손상 1건 건너뛰기");
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+/// from_file: 존재하지 않는 파일은 에러
+#[test]
+fn test_session_logger_nonexistent_file() {
+    use crate::infra::session_log::SessionLogger;
+    use std::path::PathBuf;
+
+    let result = SessionLogger::from_file(PathBuf::from("/tmp/smlcli_nonexistent_99999.jsonl"));
+    assert!(result.is_err(), "존재하지 않는 파일은 에러여야 함");
+}
