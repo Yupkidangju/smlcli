@@ -14,10 +14,7 @@ const SHELL_TIMEOUT_SECS: u64 = 30;
 
 /// 셸 명령어를 실행하고 stdout/stderr를 수집하여 ToolResult로 반환.
 /// action_tx가 Some이면 각 라인을 ToolOutputChunk 이벤트로 실시간 전송.
-pub(crate) async fn execute_shell(
-    cmd: &str,
-    cwd: Option<&str>,
-) -> Result<ToolResult> {
+pub(crate) async fn execute_shell(cmd: &str, cwd: Option<&str>) -> Result<ToolResult> {
     execute_shell_streaming(cmd, cwd, None).await
 }
 
@@ -47,9 +44,8 @@ pub(crate) async fn execute_shell_streaming(
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
 
-    let timeout_result = tokio::time::timeout(
-        std::time::Duration::from_secs(SHELL_TIMEOUT_SECS),
-        async {
+    let timeout_result =
+        tokio::time::timeout(std::time::Duration::from_secs(SHELL_TIMEOUT_SECS), async {
             let mut child = command.spawn()?;
 
             let stdout_handle = child.stdout.take();
@@ -66,9 +62,10 @@ pub(crate) async fn execute_shell_streaming(
                         if let Some(ref tx) = tx_clone {
                             let _ = tx
                                 .send(crate::app::event_loop::Event::Action(
-                                    crate::app::action::Action::ToolOutputChunk(
-                                        format!("[stdout] {}", line),
-                                    ),
+                                    crate::app::action::Action::ToolOutputChunk(format!(
+                                        "[stdout] {}",
+                                        line
+                                    )),
                                 ))
                                 .await;
                         }
@@ -89,9 +86,10 @@ pub(crate) async fn execute_shell_streaming(
                         if let Some(ref tx) = tx_clone2 {
                             let _ = tx
                                 .send(crate::app::event_loop::Event::Action(
-                                    crate::app::action::Action::ToolOutputChunk(
-                                        format!("[stderr] {}", line),
-                                    ),
+                                    crate::app::action::Action::ToolOutputChunk(format!(
+                                        "[stderr] {}",
+                                        line
+                                    )),
                                 ))
                                 .await;
                         }
@@ -115,10 +113,10 @@ pub(crate) async fn execute_shell_streaming(
                 stderr: stderr_buf,
                 exit_code,
                 is_error: !status.success(),
+                tool_call_id: None,
             })
-        },
-    )
-    .await;
+        })
+        .await;
 
     match timeout_result {
         Ok(Ok(result)) => Ok(result),
@@ -128,6 +126,7 @@ pub(crate) async fn execute_shell_streaming(
             stderr: format!("프로세스 실행 실패: {}", e),
             exit_code: 1,
             is_error: true,
+            tool_call_id: None,
         }),
         Err(_) => Ok(ToolResult {
             tool_name: "ExecShell".to_string(),
@@ -135,6 +134,149 @@ pub(crate) async fn execute_shell_streaming(
             stderr: format!("프로세스 타임아웃 ({}초 초과).", SHELL_TIMEOUT_SECS),
             exit_code: 1,
             is_error: true,
+            tool_call_id: None,
         }),
+    }
+}
+
+// ==========================================
+// Phase 13: Agentic Autonomy Tool Registry
+// ==========================================
+
+use crate::domain::error::ToolError;
+use crate::domain::permissions::{PermissionResult, ShellPolicy};
+use crate::domain::settings::PersistedSettings;
+use crate::tools::registry::{Tool, ToolContext};
+use async_trait::async_trait;
+use serde_json::{Value, json};
+
+pub struct ExecShellTool;
+
+#[async_trait]
+impl Tool for ExecShellTool {
+    fn name(&self) -> &'static str {
+        "ExecShell"
+    }
+
+    fn description(&self) -> &'static str {
+        "Executes a shell command."
+    }
+
+    fn schema(&self) -> Value {
+        json!({
+            "type": "function",
+            "function": {
+                "name": "ExecShell",
+                "description": "Execute a shell command. Use this to run tests, build, or interact with the OS.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": { "type": "string" },
+                        "cwd": { "type": "string", "description": "Current working directory. Default: '.'" },
+                        "safe_to_auto_run": { "type": "boolean", "description": "Set to true if command is read-only or safe" }
+                    },
+                    "required": ["command"]
+                }
+            }
+        })
+    }
+
+    fn check_permission(&self, args: &Value, settings: &PersistedSettings) -> PermissionResult {
+        let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+        let safe_to_auto_run = args
+            .get("safe_to_auto_run")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        if command.trim().is_empty() {
+            return PermissionResult::Deny("빈 명령은 실행할 수 없습니다.".to_string());
+        }
+
+        // 위험 명령어 블랙리스트 처리 (임시 하드코딩, 나중에 PermissionEngine 로직 재사용)
+        let lower = command.to_lowercase();
+        let blocked = [
+            "sudo ",
+            "rm -rf",
+            "rm -fr",
+            "chmod 777",
+            "chmod -R 777",
+            "mkfs",
+            "dd if=",
+            "> /dev/",
+            ":(){ :|:&",
+            "shutdown",
+            "reboot",
+            "init 0",
+            "init 6",
+            "format c:",
+            "del /f /s",
+        ];
+        if blocked.iter().any(|pattern| lower.contains(pattern)) {
+            return PermissionResult::Deny(format!(
+                "위험 명령어로 차단됨: '{}'",
+                command.chars().take(60).collect::<String>()
+            ));
+        }
+
+        match settings.shell_policy {
+            ShellPolicy::Deny => {
+                PermissionResult::Deny("Shell execution is disabled by policy.".to_string())
+            }
+            ShellPolicy::Ask => PermissionResult::Ask,
+            ShellPolicy::SafeOnly => {
+                let parts: Vec<&str> = command.split_whitespace().collect();
+                if parts.is_empty() {
+                    return PermissionResult::Deny(
+                        "빈 명령은 안전하지 않음으로 분류됩니다.".to_string(),
+                    );
+                }
+
+                let is_custom_safe = settings
+                    .safe_commands
+                    .as_ref()
+                    .map_or(false, |c| c.iter().any(|cmd| cmd == parts[0]));
+                let os = std::env::consts::OS;
+                let is_builtin_safe = if os == "windows" {
+                    vec!["dir", "echo", "date", "cd", "type", "find"].contains(&parts[0])
+                } else {
+                    vec![
+                        "ls", "pwd", "date", "echo", "cat", "grep", "df", "free", "uname",
+                    ]
+                    .contains(&parts[0])
+                };
+
+                if safe_to_auto_run || is_custom_safe || is_builtin_safe {
+                    PermissionResult::Allow
+                } else {
+                    PermissionResult::Deny(format!(
+                        "Command '{}' is blocked in SafeOnly mode.",
+                        command
+                    ))
+                }
+            }
+        }
+    }
+
+    fn format_detail(&self, args: &Value) -> String {
+        let command = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+        let cwd_str = args.get("cwd").and_then(|v| v.as_str()).unwrap_or(".");
+        format!("승인 대기 (y/n) — 명령: '{}' (cwd: {})", command, cwd_str)
+    }
+
+    async fn execute(&self, args: Value, _ctx: &ToolContext<'_>) -> Result<ToolResult, ToolError> {
+        let command = args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let cwd = args
+            .get("cwd")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        // TODO: action_tx가 필요한 streaming은 execute 인자로 어떻게 넘길지 나중에 개선
+        execute_shell(&command, cwd.as_deref())
+            .await
+            .map_err(|e| ToolError::ExecutionFailure(e.to_string()))
     }
 }

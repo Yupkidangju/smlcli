@@ -15,39 +15,41 @@ impl App {
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         match parts[0] {
             "/setting" => {
-                self.state.is_wizard_open = true;
-                self.state.wizard = state::WizardState::new();
+                self.state.ui.is_wizard_open = true;
+                self.state.ui.wizard = state::WizardState::new();
             }
             "/config" => {
-                self.state.config.is_open = true;
-                self.state.config.active_popup = state::ConfigPopup::Dashboard;
-                self.state.config.cursor_index = 0;
+                self.state.ui.config.is_open = true;
+                self.state.ui.config.active_popup = state::ConfigPopup::Dashboard;
+                self.state.ui.config.cursor_index = 0;
             }
             "/provider" => {
-                self.state.config.is_open = true;
-                self.state.config.active_popup = state::ConfigPopup::ProviderList;
-                self.state.config.cursor_index = 0;
+                self.state.ui.config.is_open = true;
+                self.state.ui.config.active_popup = state::ConfigPopup::ProviderList;
+                self.state.ui.config.cursor_index = 0;
             }
             "/model" => {
                 // [v0.1.0-beta.9] 중앙 보안 가드 적용: NetworkPolicy + 암호화 저장소 검증 후 모델 페칭
                 let (provider_kind, _model_name, api_key) = match self.resolve_credentials() {
                     Ok(creds) => creds,
                     Err(err_msg) => {
-                        self.state
-                            .session
-                            .add_message(crate::providers::types::ChatMessage {
+                        self.state.domain.session.add_message(
+                            crate::providers::types::ChatMessage {
                                 role: crate::providers::types::Role::System,
-                                content: err_msg,
+                                content: Some(err_msg.to_string()),
+                                tool_calls: None,
+                                tool_call_id: None,
                                 pinned: false,
-                            });
+                            },
+                        );
                         return;
                     }
                 };
 
-                self.state.config.is_open = true;
-                self.state.config.active_popup = state::ConfigPopup::ModelList;
-                self.state.config.cursor_index = 0;
-                self.state.config.is_loading = true;
+                self.state.ui.config.is_open = true;
+                self.state.ui.config.active_popup = state::ConfigPopup::ModelList;
+                self.state.ui.config.cursor_index = 0;
+                self.state.ui.config.is_loading = true;
 
                 let tx = self.action_tx.clone();
                 tokio::spawn(async move {
@@ -57,9 +59,12 @@ impl App {
                     // OpenRouter /models는 공개 엔드포인트라 가짜 키도 200 반환하므로,
                     // /auth/key로 키 유효성을 먼저 확인해야 함.
                     if let Err(e) = adapter.validate_credentials(&api_key).await {
+                        // [v0.1.0-beta.21] ProviderError 구조화
                         let _ = tx
                             .send(event_loop::Event::Action(action::Action::ModelsFetched(
-                                Err(format!("API key validation failed: {}", e)),
+                                Err(crate::domain::error::ProviderError::AuthenticationFailed(
+                                    format!("API key validation failed: {}", e),
+                                )),
                                 action::FetchSource::Config,
                             )))
                             .await;
@@ -76,9 +81,12 @@ impl App {
                                 .await;
                         }
                         Err(e) => {
+                            // [v0.1.0-beta.21] ProviderError 구조화
                             let _ = tx
                                 .send(event_loop::Event::Action(action::Action::ModelsFetched(
-                                    Err(e.to_string()),
+                                    Err(crate::domain::error::ProviderError::NetworkFailure(
+                                        e.to_string(),
+                                    )),
                                     action::FetchSource::Config,
                                 )))
                                 .await;
@@ -87,52 +95,61 @@ impl App {
                 });
             }
             "/status" => {
-                let info = if let Some(s) = &self.state.settings {
+                let info = if let Some(s) = &self.state.domain.settings {
                     format!(
                         "Provider: {}\nModel: {}\nBudget Used: {} tokens",
-                        s.default_provider, s.default_model, self.state.session.token_budget_used
+                        s.default_provider,
+                        s.default_model,
+                        self.state.domain.session.token_budget_used
                     )
                 } else {
                     "Not configured.".to_string()
                 };
                 self.state
+                    .domain
                     .session
                     .add_message(crate::providers::types::ChatMessage {
                         role: crate::providers::types::Role::System,
-                        content: format!("[Status]\n{}", info),
+                        content: Some(format!("[Status]\n{}", info)),
+                        tool_calls: None,
+                        tool_call_id: None,
                         pinned: false,
                     });
             }
             "/mode" => {
                 use crate::domain::session::AppMode;
-                self.state.session.mode = match self.state.session.mode {
+                self.state.domain.session.mode = match self.state.domain.session.mode {
                     AppMode::Plan => AppMode::Run,
                     AppMode::Run => AppMode::Plan,
                 };
             }
             "/clear" => {
                 // [v0.1.0-beta.7] pinned 메시지(시스템 프롬프트, 요약)를 보존하고 나머지만 삭제.
-                self.state.session.messages.retain(|m| m.pinned);
+                self.state.domain.session.messages.retain(|m| m.pinned);
             }
             "/compact" => {
                 self.handle_compact_command();
             }
             "/tokens" => {
-                let budget = self.state.session.get_context_load_percentage();
-                let estimated = self.state.session.estimate_current_tokens();
-                let cap = self.state.session.max_token_budget;
+                let budget = self.state.domain.session.get_context_load_percentage();
+                let estimated = self.state.domain.session.estimate_current_tokens();
+                let cap = self.state.domain.session.max_token_budget;
                 self.state
+                    .domain
                     .session
                     .add_message(crate::providers::types::ChatMessage {
                         role: crate::providers::types::Role::System,
-                        content: format!(
+                        content: Some(format!(
                             "[Tokens Insight]\nEstimated tokens in context: {} / {} ({}%)",
                             estimated, cap, budget
-                        ),
+                        )),
+                        tool_calls: None,
+                        tool_call_id: None,
                         pinned: false,
                     });
             }
             "/help" => {
+                // [v0.1.0-beta.21] /theme 커맨드를 도움말 목록에 추가
                 let help_text = "\
 /config    설정 대시보드 (Settings Dashboard)\n\
 /setting   셋업 위자드 (Setup Wizard)\n\
@@ -142,26 +159,78 @@ impl App {
 /mode      PLAN ↔ RUN 전환 (Toggle Mode)\n\
 /tokens    토큰 사용량 (Token Usage)\n\
 /compact   컨텍스트 압축 (Compress Context)\n\
+/theme     테마 전환 (Toggle Theme)\n\
 /clear     대화 초기화 (Clear Chat)\n\
 /help      도움말 (Help)\n\
 /quit      종료 (Exit)";
                 self.state
+                    .domain
                     .session
                     .add_message(crate::providers::types::ChatMessage {
                         role: crate::providers::types::Role::System,
-                        content: help_text.to_string(),
+                        content: Some(help_text.to_string()),
+                        tool_calls: None,
+                        tool_call_id: None,
                         pinned: false,
                     });
             }
             "/quit" => {
                 self.state.should_quit = true;
             }
+            // [v0.1.0-beta.20] /theme 명령어: Default ↔ HighContrast 실시간 전환.
+            // designs.md §21.4 요구사항 반영.
+            "/theme" => {
+                if let Some(settings) = &mut self.state.domain.settings {
+                    let new_theme = if settings.theme == "high_contrast" {
+                        "default".to_string()
+                    } else {
+                        "high_contrast".to_string()
+                    };
+                    settings.theme = new_theme.clone();
+
+                    // 설정 변경을 config.toml에 비동기 저장
+                    let settings_clone = settings.clone();
+                    tokio::spawn(async move {
+                        let _ = crate::infra::config_store::save_config(&settings_clone).await;
+                    });
+
+                    self.state
+                        .domain
+                        .session
+                        .add_message(crate::providers::types::ChatMessage {
+                            role: crate::providers::types::Role::System,
+                            content: Some(format!(
+                                "[Theme] 테마가 '{}'(으)로 전환되었습니다.",
+                                new_theme
+                            )),
+                            tool_calls: None,
+                            tool_call_id: None,
+                            pinned: false,
+                        });
+                } else {
+                    self.state
+                        .domain
+                        .session
+                        .add_message(crate::providers::types::ChatMessage {
+                            role: crate::providers::types::Role::System,
+                            content: Some(
+                                "설정이 없습니다. /setting으로 초기 설정을 진행하세요.".to_string(),
+                            ),
+                            tool_calls: None,
+                            tool_call_id: None,
+                            pinned: false,
+                        });
+                }
+            }
             _ => {
                 self.state
+                    .domain
                     .session
                     .add_message(crate::providers::types::ChatMessage {
                         role: crate::providers::types::Role::System,
-                        content: format!("Unknown command: {}", parts[0]),
+                        content: Some(format!("Unknown command: {}", parts[0])),
+                        tool_calls: None,
+                        tool_call_id: None,
                         pinned: false,
                     });
             }
@@ -176,23 +245,29 @@ impl App {
             Ok(creds) => creds,
             Err(err_msg) => {
                 self.state
+                    .domain
                     .session
                     .add_message(crate::providers::types::ChatMessage {
                         role: crate::providers::types::Role::System,
-                        content: err_msg,
+                        content: Some(err_msg.to_string()),
+                        tool_calls: None,
+                        tool_call_id: None,
                         pinned: false,
                     });
                 return;
             }
         };
 
-        let to_summarize = self.state.session.extract_for_summary();
+        let to_summarize = self.state.domain.session.extract_for_summary();
         if to_summarize.is_empty() {
             self.state
+                .domain
                 .session
                 .add_message(crate::providers::types::ChatMessage {
                     role: crate::providers::types::Role::System,
-                    content: "Context too small to compress.".to_string(),
+                    content: Some("Context too small to compress.".to_string()),
+                    tool_calls: None,
+                    tool_call_id: None,
                     pinned: false,
                 });
         } else {
@@ -205,16 +280,25 @@ impl App {
                         crate::providers::types::Role::User => "User",
                         _ => "Other",
                     };
-                    content.push_str(&format!("{}: {}\n\n", r, m.content));
+                    content.push_str(&format!(
+                        "{}: {}\n\n",
+                        r,
+                        m.content.as_deref().unwrap_or_default()
+                    ));
                 }
 
                 let req = crate::providers::types::ChatRequest {
                     model: model_name,
                     messages: vec![crate::providers::types::ChatMessage {
                         role: crate::providers::types::Role::User,
-                        content,
+                        content: Some(content),
+                        tool_calls: None,
+                        tool_call_id: None,
                         pinned: false,
                     }],
+                    stream: false,
+                    tools: None,
+                    tool_choice: None,
                 };
 
                 let adapter = crate::providers::registry::get_adapter(&provider_kind);
@@ -222,7 +306,7 @@ impl App {
                     Ok(res) => {
                         let _ = tx
                             .send(event_loop::Event::Action(action::Action::ContextSummaryOk(
-                                res.message.content,
+                                res.message.content.unwrap_or_default(),
                             )))
                             .await;
                     }

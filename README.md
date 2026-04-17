@@ -18,6 +18,10 @@
 - **Inspect 패널과 Diff 플로우**: 작업 승인 전에 변경될 항목 가시성 확보.
 - **지능형 컨텍스트 압축**: 장기 세션 보호를 위한 백그라운드 LLM 요약기 및 토큰 한도 제어(`/tokens`).
 - **@ 로컬 데이터 참조**: `@` 퍼지 파인터를 통해 작업 파일 경로와 컨텍스트를 빠짐없이 LLM에 자동 인라인 삽입.
+- **실시간 테마 전환**: `/theme` 명령어로 Default ↔ HighContrast 테마를 즉시 전환. 설정 파일에 자동 저장.
+- **Inspector Search 탭**: 타임라인 전체를 대소문자 무시로 실시간 검색 (최대 50건 표시).
+- **SSE 스트리밍**: AI 응답을 토큰 단위로 실시간 표시 (OpenRouter/Gemini 대응).
+- **JSONL 세션 로그**: 대화 내용을 `~/.smlcli/sessions/`에 자동 기록하여 세션 복원 지원.
 - **플랫폼 지원**: Linux (bash/zsh) 및 Windows (PowerShell/WSL) 동시 지원.
 
 ### 빠른 시작
@@ -51,6 +55,10 @@
 - **Inspector & Diff Previews**: High visibility of what is changing before you approve it.
 - **Intelligent Compaction**: LLM-based background summarization and `/tokens` budgeting to protect long sessions.
 - **@ Context Injection**: Fuzzy search your filesystem with `@` and inline file data safely without closing Composer.
+- **Live Theme Switching**: Toggle between Default and HighContrast themes instantly with `/theme`. Persists across restarts.
+- **Inspector Search Tab**: Real-time, case-insensitive full-text search across your entire timeline (up to 50 results).
+- **SSE Streaming**: Token-by-token real-time display of AI responses (OpenRouter/Gemini).
+- **JSONL Session Logs**: Automatic conversation recording in `~/.smlcli/sessions/` with session restore support.
 - **Cross-platform**: Full support for Linux and Windows.
 
 ### Quick Start
@@ -75,10 +83,14 @@
 
 ### 主な機能
 - **ターミナルファースト TUI**: 全ての操作をキーボードだけで迅速に行えます。
-- **マルチプロバイダー対応**: OpenAI, Anthropic, Google, OpenRouter 等をサポート。
+- **マルチプロバイダー対応**: OpenRouter, Google (Gemini) 等をサポート。
 - **堅牢なセキュリティ**: APIキーのローカル暗号化ファイル保存 (~/.smlcli/config.toml)、安全なコマンド実行ポリシー設定。
 - **インテリジェント コンテキスト圧縮**: 長期セッション保護のためのバックグラウンド LLM 要約と `/tokens` トークン監視。
 - **@ ローカルデータ参照**: `@` ファジー検索から該当ファイルのコンテンツをAIに自動挿入。
+- **リアルタイム テーマ切替**: `/theme` コマンドで Default ↔ HighContrast テーマを即座に切り替え可能。
+- **Inspector 検索タブ**: タイムライン全体をリアルタイムで全文検索（最大50件表示）。
+- **SSE ストリーミング**: AIの回答をトークン単位でリアルタイム表示。
+- **JSONL セッションログ**: 会話を自動記録し、セッション復元をサポート。
 
 ### クイックスタート
 1. リポジトリをクローンします。
@@ -102,10 +114,14 @@
 
 ### 核心功能
 - **全鍵盤 TUI**: 告別滑鼠，快速進行所有主要指令操作。
-- **多平台模型**: 支援 OpenAI, Anthropic, Google, OpenRouter 等平台。
+- **多平台模型**: 支援 OpenRouter, Google (Gemini) 等平台。
 - **高規格安全**: 使用本地檔案加密 (~/.smlcli/config.toml) 保護 API 密鑰。提供完整變更預覽與權限驗證流程。
 - **智能上下文壓縮**: 透過後台 LLM 摘要保護長對話串並支持動態代幣(Token)管理。
 - **@ 檔案快速參照**: 輸入 `@` 即可使用 Fuzzy Finder 將本地檔案匯入 AI 記憶。
+- **即時主題切換**: 透過 `/theme` 指令在 Default 與 HighContrast 主題間即時切換。
+- **Inspector 搜索分頁**: 即時全文搜索整個時間線（最多顯示50筆結果）。
+- **SSE 串流**: 逐字符即時顯示 AI 回應。
+- **JSONL 對話記錄**: 自動記錄對話內容並支援工作階段還原。
 
 ### 快速開始
 1. 複製專案:
@@ -129,10 +145,14 @@
 
 ### 核心功能
 - **纯键盘 TUI**: 所有核心操作可通过键盘在3步内完成。
-- **多供应商支持**: 兼容 OpenAI, Anthropic, Google, OpenRouter 及自定义节点。
+- **多供应商支持**: 兼容 OpenRouter, Google (Gemini)（后续可扩展）。
 - **安全性优先**: 在执行写入和 Shell 执行前自动生成 Diff，并要求显式权限授权；密钥存入本地加密文件 (~/.smlcli/config.toml)。
 - **智能上下文压缩**: 通过后台 LLM 摘要引擎保护长期会话防止记忆丢失，包含动态 Token 管理。
 - **@ 文件快速查询**: 输入 `@` 自动使用 Fuzzy Finder 将本地文件数据嵌入 AI 记忆上下文。
+- **实时主题切换**: 通过 `/theme` 命令在 Default 和 HighContrast 主题间即时切换。
+- **Inspector 搜索选项卡**: 实时全文搜索整个时间线（最多显示50条结果）。
+- **SSE 流式传输**: 逐令牌实时显示 AI 回复。
+- **JSONL 会话日志**: 自动记录对话内容并支持会话恢复。
 
 ### 快速开始
 1. 克隆项目

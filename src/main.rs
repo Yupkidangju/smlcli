@@ -1,8 +1,5 @@
 // [v0.1.0-beta.18] Phase 10: CLI Entry Modes 구현.
-// clap derive 기반으로 서브커맨드 (run/doctor/sessions/version) 지원.
-// 서브커맨드 없이 실행하면 기본 인터랙티브 TUI 모드로 진입.
-// --help 플래그는 clap이 자동 처리하여 도움말 출력 후 종료.
-// [v0.1.0-beta.18] Phase 9-C: 전역 #![allow] 최소화 — dead_code만 유지 (MVP 미사용 코드 허용).
+// [v0.1.0-beta.19] 비동기 I/O 전환에 따른 main 루프 및 서브커맨드 await 적용.
 
 #![allow(dead_code)]
 
@@ -53,22 +50,24 @@ async fn main() -> Result<()> {
     match cli.command {
         // 서브커맨드가 없거나 'run'이면 인터랙티브 TUI 진입
         None | Some(Commands::Run) => run_interactive().await,
-        Some(Commands::Doctor) => run_doctor(),
-        Some(Commands::Sessions) => run_sessions(),
+        Some(Commands::Doctor) => run_doctor().await,
+        Some(Commands::Sessions) => run_sessions().await,
     }
 }
 
 /// 인터랙티브 TUI 모드: 기존 메인 루프 실행
 async fn run_interactive() -> Result<()> {
-    // 1. 패닉 훅 등록: 패닉 시에도 raw 모드 복구 보장
+    // 1. 패닉 훅 등록
     tui::terminal::install_panic_hook();
 
-    // 2. 터미널 진입 (Raw 모드, Alternate Screen)
+    // 2. 터미널 진입
     let mut terminal = tui::terminal::init_terminal()?;
 
     // 3. 앱 실행
     let (events, tx) = app::event_loop::EventLoop::new(std::time::Duration::from_millis(250));
-    let mut app = App::new(tx);
+
+    // [v0.1.0-beta.19] App::new 도 비동기 초기화 필요 (설정 로드)
+    let mut app = App::new(tx).await;
     let res = app.run(&mut terminal, events).await;
 
     // 4. 앱 종료 후 터미널 정리 정돈
@@ -77,12 +76,12 @@ async fn run_interactive() -> Result<()> {
     res
 }
 
-/// Doctor: 환경 진단 — API 키 유무, 설정 파일 존재 여부, 시스템 정보 출력
-fn run_doctor() -> Result<()> {
+/// Doctor: 환경 진단
+async fn run_doctor() -> Result<()> {
     println!("🩺 smlcli doctor — 환경 진단\n");
 
     // 설정 파일 확인
-    match infra::config_store::load_config() {
+    match infra::config_store::load_config().await {
         Ok(Some(settings)) => {
             println!("✅ 설정 파일: 로드 완료");
             println!("   공급자: {}", settings.default_provider);
@@ -97,7 +96,7 @@ fn run_doctor() -> Result<()> {
     }
 
     // 세션 디렉토리 확인
-    match infra::session_log::SessionLogger::list_sessions() {
+    match infra::session_log::SessionLogger::list_sessions().await {
         Ok(sessions) => {
             println!("📁 세션 파일: {}개", sessions.len());
         }
@@ -120,10 +119,10 @@ fn run_doctor() -> Result<()> {
 }
 
 /// Sessions: 저장된 세션 목록 표시
-fn run_sessions() -> Result<()> {
+async fn run_sessions() -> Result<()> {
     println!("📋 smlcli sessions — 저장된 세션 목록\n");
 
-    match infra::session_log::SessionLogger::list_sessions() {
+    match infra::session_log::SessionLogger::list_sessions().await {
         Ok(sessions) => {
             if sessions.is_empty() {
                 println!("저장된 세션이 없습니다.");

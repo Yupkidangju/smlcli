@@ -3,6 +3,131 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [0.1.0-beta.23] - 2026-04-17
+
+### Added (Phase 12: Native Structured Tool Call Integration 완료)
+- **OpenAI 호환 도구 호출 완전 이관**: 기존의 마크다운 정규식 캡처(Fenced JSON) 방식을 폐기하고, 모델이 공식적으로 지원하는 구조화된 도구(Tool Call) API로 안전하게 이관 완료.
+- **스트리밍 델타 버퍼링**: `OpenRouterAdapter::chat_stream`에서 SSE로 수신되는 `delta.tool_calls`의 파편화된 조각들을 JSON 및 객체 형태로 조립하는 스트리밍 로직 구현 완료.
+- **도구 호출 ID(`tool_call_id`) 추적 매핑**: LLM의 도구 호출에 대응되는 `tool_call_id`를 유지하고 결과(`ToolResult`) 반환 시 매칭하여 정확히 전달할 수 있도록 도구 라이프사이클 및 파이프라인 개편.
+
+### Changed
+- `providers/types.rs`: `ChatMessage` 및 `ChatRequest` 등 도메인 모델에 `tool_calls`, `tool_call_id` 필드를 추가하고 `content`를 `Option<String>`으로 안전하게 래핑.
+- `app/command_router.rs`: `ChatMessage` 및 `ChatRequest`의 모든 초기화 지점에 누락된 필드 보충 및 타입 변경에 따른 컴파일 에러 완전 해결.
+- `app/chat_runtime.rs`: System 메시지 주입 로직의 타입 불일치와 구조체 누락 필드 전면 수정.
+- `tools/*.rs` (실행기 모듈): `file_ops`, `grep`, `shell`, `sys_ops`, `executor` 내 `ToolResult` 반환 시 `tool_call_id` 필드를 추가하여 타입 무결성 확보.
+- `tui/layout.rs`: 변경된 모델 구조를 지원하도록 메시지 UI 렌더링 로직 수정 (`content.as_deref()`).
+
+### Quality
+- `tests/audit_regression.rs`: 이전의 Fenced JSON 파싱 테스트를 Native Tool Call 구조 전송 검증 테스트로 일괄 갱신.
+- `cargo check` 및 `cargo test`: 타입 안전성 확보 및 회귀 테스트 42건 무결성 통과 (0 failed).
+
+## [0.1.0-beta.22] - 2026-04-17
+
+### Fixed (하네스 구조/보안/UX 감사 대응 — HIGH 5건, MEDIUM 3건, LOW 2건)
+- **[H-1] 도구 호출 격리 계층 강화**: bare JSON(fenced가 아닌) 응답을 도구로 인식하지 않도록 사전 차단. `"tool"` 키 존재 여부 1차 필터 + ToolCall serde 역직렬화 2차 필터 + ExecShell 빈 명령 3차 필터 도입. 모델 인삿말에 도구 JSON이 섞여 자동 실행되는 결함 해소.
+- **[H-2] 빈 ExecShell 차단**: `command.trim().is_empty()` 검사를 permission 단계 이전에 추가. `is_safe_command()`에서 빈 토큰이 `true`를 반환하던 결함도 수정. SafeOnly/Ask 정책 모두에서 빈 명령 원천 차단.
+- **[H-3] 전체 UI Wrap + 스크롤**: 타임라인, 컴포저, 설정 팝업, 위자드 4곳에 `Wrap { trim: false }` 적용. `UiState::timeline_scroll` 필드 추가로 세로 스크롤 오프셋 지원. 긴 응답/도움말이 가로로 넘치지 않음.
+- **[H-4] 첫 턴 자연어 가드**: 시스템 프롬프트에 "첫 응답은 반드시 자연어", "비작업성 입력에는 도구 미사용" 정책을 명시. 도구 카탈로그를 간결화하고 예시 JSON을 제거하여 스키마 노출 원인 제거.
+- **[H-5] bare JSON 렌더링 필터링**: `filter_tool_json()`에 bare JSON 감지 로직 추가. `"tool"` 키가 있는 bare JSON은 사용자 친화적 요약으로 대체. 스키마가 사용자에게 그대로 노출되는 결함 해소.
+- **[M-1] PLAN/RUN 모드 시스템 프롬프트 주입**: 채팅 요청 시 현재 모드에 따라 LLM에 행동 계약을 주입. PLAN에서는 분석/설명 위주, RUN에서는 WriteFile/ReplaceFileContent 우선 사용을 지시.
+- **[M-2] 작업 계약 명확화**: RUN 모드에서 코드 작성 요청 시 파일 도구를 우선 사용하도록 계약화하여, "인라인 답변 → 나중에 WriteFile" 불일치 해소.
+- **[M-3] 타임라인 스크롤 키 바인딩**: PageUp/PageDown 키로 `timeline_scroll` 조작. 위자드/Fuzzy/설정 팝업이 열려 있지 않을 때만 동작. wrap 적용 후 긴 응답을 탐색할 수 있는 입력 경로 확보.
+- **[L-1] 승인 카드 전체 경로 표시**: 도구 이름을 `Debug` 포맷의 30자 절단에서 도구별 의미 있는 이름(전체 경로 포함, 최대 120자)으로 개선. 승인 detail에 명령어/경로/동작을 축약 없이 표시.
+- **[L-2] 회귀 테스트 갱신**: bare JSON 필터링 검증을 "스키마 노출 차단" 관점으로 갱신. 33/33 통과.
+
+### Changed
+- `domain/session.rs`: 시스템 프롬프트 전면 개편 — 첫 턴 자연어 가드, 도구 카탈로그 간결화, 예시 JSON 제거
+- `domain/permissions.rs`: ExecShell 빈 명령 하드 가드 추가, `is_safe_command()` 빈 토큰 `false` 반환
+- `app/tool_runtime.rs`: 3단계 도구 호출 필터링 계층 구현, `format_tool_name()`/`format_tool_detail()` 추가
+- `app/chat_runtime.rs`: `dispatch_chat_request()`에 PLAN/RUN 모드별 시스템 프롬프트 주입
+- `app/mod.rs`: PageUp/PageDown 키 바인딩 → `timeline_scroll` 조작
+- `app/state.rs`: `UiState::timeline_scroll: u16` 필드 추가
+- `tui/layout.rs`: 타임라인 `Wrap + scroll()`, 컴포저 `Wrap`, bare JSON 렌더링 필터 추가
+- `tui/widgets/config_dashboard.rs`: Paragraph에 `Wrap` 적용
+- `tui/widgets/setting_wizard.rs`: Paragraph에 `Wrap` 적용
+- `tests/audit_regression.rs`: bare JSON 필터링 테스트를 "스키마 노출 차단" 검증으로 갱신
+
+### Quality
+- **[H-6→삭제] 첫 턴 하드가드 삭제**: `assistant_turn_count <= 1` 전역 차단을 제거. UX 파괴 원인이었음.
+- **[H-7] 시스템 프롬프트 계약 통일**: "첫 응답 도구 금지" 규칙을 삭제하고, "작업 요청이면 첫 프롬프트라도 즉시 도구 사용" / "비작업성 입력이면 자연어 전용"으로 통일. Run 모드 계약과의 모순 해소.
+- **[M-4] mixed bare JSON 렌더링 필터**: `filter_tool_json()`을 바이트 스캔 방식으로 개편. 응답 내 어디에든 `{"tool":...}` 패턴이 있으면 brace 매칭(`find_json_end`)으로 JSON 범위를 특정하여 사용자 친화적 요약으로 대체.
+- **[M-5] 모드 지시 누적 방지 (dedupe)**: `chat_runtime.rs`에서 `"[Mode:"` 접두사로 기존 메시지를 찾아 교체.
+- **[M-6] 승인 Inspector `{:?}` → `format_tool_name/detail`**: `crate::app::App::format_tool_name()` + `format_tool_detail()` 사용 + `Wrap` + `scroll()` 적용. 긴 경로/diff/replacement 탐색 가능.
+- **[M-7] 통합 회귀 테스트**: `process_tool_calls_from_response()` 직접 호출로 bare JSON 차단 / fenced JSON 디스패치 / 첫 턴 동작 일관성 검증. 시스템 프롬프트 계약 검증 테스트 추가.
+- **[Open Q] 기본 모드 Run 전환**: `session.rs` 기본 모드를 `AppMode::Run`으로 변경 (코딩 에이전트 기본 동작).
+- `domain/session.rs`: 시스템 프롬프트 재설계 — 작업/비작업 분기, 기본 모드 Run
+- `app/tool_runtime.rs`: 첫 턴 하드가드 삭제, `format_tool_name/detail` pub(crate)
+- `app/state.rs`: `AppState::new_for_test()` 동기 생성자 추가
+- `tui/layout.rs`: 승인 Inspector `format_tool_name/detail` + Wrap + scroll, `filter_tool_json/find_json_end` pub(crate)
+- **[H-8] 비작업성 입력 런타임 도구 억제**: `is_actionable_input()` 휴리스틱으로 사용자 입력 의도를 분류하고, 인삿말/잡담 시 `user_intent_actionable=false`로 설정하여 `process_tool_calls_from_response()`에서 도구 디스패치를 코드로 차단. 프롬프트 순응에만 의존하지 않음.
+- **[M-8] Inspector 서브탭 scroll 적용**: Logs/Search/Recent 3개 탭에 `.scroll((timeline_scroll, 0))` 적용. PageUp/PageDown으로 Inspector 내용도 탐색 가능.
+- **[L-1] assistant_turn_count 데드 코드 정리**: 차단 로직이 제거되어 의미 없는 상태 필드와 증가 코드를 삭제. 오해를 유발하는 주석 정리.
+- **[Feature] Shift+Tab 모드 전환 추가**: `Tab` 키뿐만 아니라 `Shift+Tab`(`BackTab`) 단축키로도 PLAN/RUN 모드를 즉시 전환할 수 있도록 키 바인딩 추가.
+- **[Feature] 프롬프트 상단 커맨드 상태바(Status Bar) 추가**: 프롬프트 입력창 상단에 1줄짜리 커맨드 안내 상태창을 신설. 현재 모드(`[PLAN]` / `[RUN]`) 및 각종 주요 단축키 안내를 항상 표시하여 터미널 인터페이스의 사용성과 직관성 대폭 향상.
+- **[Bug Fix] 도구 호출 JSON 파싱 실패 무시 현상**: LLM이 선택적 boolean 필드(`overwrite`, `safe_to_auto_run`, `case_insensitive`)를 누락할 경우 `serde_json` 파싱이 실패하여 도구 실행이 중단되는 버그 수정 (`#[serde(default)]` 추가). 파싱 실패 시 LLM과 사용자 모두에게 명확한 오류 로그와 피드백 전달하도록 예외 처리(`match` 적용).
+- **[Bug Fix] `/help` 다중 줄 렌더링 깨짐**: `SystemNotice` 렌더링 시 개행문자(`\n`)가 포함된 문장을 개별 `Line`으로 올바르게 분리하여 출력하도록 변경.
+- `app/chat_runtime.rs`: `is_actionable_input()` 휴리스틱 함수 추가, 입력 시점 의도 분류
+- `app/tool_runtime.rs`: `user_intent_actionable == false` 시 도구 디스패치 차단 가드. ToolCall 파싱 에러 런타임 피드백 처리.
+- `app/state.rs`: `assistant_turn_count` → `user_intent_actionable` 교체
+- `app/mod.rs`: `assistant_turn_count` 증가 코드 제거. `Tab` / `BackTab` 모드 토글 로직 추가.
+- `tui/layout.rs`: `SystemNotice` 다중 줄(`msg.lines()`) 분리 지원 및 `draw_command_status_bar` 함수 신설.
+- `domain/tool_result.rs`: 선택적 bool 파라미터 `#[serde(default)]` 어노테이션 추가
+- `tui/widgets/inspector_tabs.rs`: Logs/Search/Recent Wrap + scroll 추가
+- `tests/audit_regression.rs`: 의도 분류 테스트 + 통합 테스트 보강 (41→42건)
+
+### Quality
+- `cargo test`: 42건 전부 통과 (0 failed)
+- `cargo clippy --all-targets --all-features -- -D warnings`: 경고 0건 (릴리스 게이트 통과)
+
+## [0.1.0-beta.21] - 2026-04-17
+
+### Fixed (재감사 대응 — HIGH 1건, MEDIUM 2건, LOW 2건)
+- **[H-1] 테마 전환 렌더링 실연결**: `/theme` 명령어가 설정값만 변경하고 화면에 반영되지 않던 결함 해소. `AppState::palette()` 헬퍼를 도입하고, `layout.rs`, `inspector_tabs.rs`, `config_dashboard.rs`, `setting_wizard.rs` 4개 렌더링 파일의 모든 정적 `pal::CONSTANT` 참조(50+곳)를 `state.palette().field` 동적 참조로 전환. `/theme` 실행 즉시 화면 전체 색상이 전환됨.
+- **[M-1] 에러 타입 구조화 (ProviderError/ToolError)**: `Action` enum의 `ChatResponseErr(String)`, `ToolError(String)`, `ModelsFetched(Err(String))`, `CredentialValidated(Err(String))` 4개 경로를 `ProviderError`/`ToolError` 도메인 타입으로 전환. 에러 종류별 패턴매칭과 UI 메시지 분리가 가능해짐.
+- **[M-2] spec.md Action 계약 동기화**: spec.md의 Action enum 정의를 v0.1.0-beta.21 구현(Box 래핑, ProviderError/ToolError 타입)과 정확히 일치시킴.
+- **[L-1] /help 도움말 갱신**: `/theme` 커맨드가 슬래시 자동완성에는 포함되어 있었으나 `/help` 출력에는 누락되어 있던 불일치 해소.
+- **[L-2] config_store.rs 에러 분류 정확화**: `read_to_string` 실패를 `ConfigError::NotFound`로 일괄 매핑하던 코드를 `ErrorKind` 분기 처리로 수정 — 권한 거부·기타 I/O 오류와 파일 미존재를 정확히 구분.
+- **[L-3] README 기능 목록 갱신**: 5개 언어 섹션에 `/theme` 테마 전환, Inspector Search 탭, SSE 스트리밍, JSONL 세션 로그 기능 추가.
+
+### Changed
+- `domain/error.rs`: `AppError`, `ConfigError`, `ToolError`, `ProviderError` 4개 타입에 `Clone` derive 추가 (Action Clone 호환). `Io`/`Unknown` variant를 `String` 기반으로 단순화.
+- `app/action.rs`: 에러 경로 4곳을 도메인 타입(`ProviderError`, `ToolError`)으로 전환
+- `app/mod.rs`: `handle_models_fetched`, `handle_credential_validated` 시그니처를 `ProviderError`로 갱신
+- `app/chat_runtime.rs`: `ChatResponseErr` 발송 2곳을 `ProviderError::NetworkFailure`로 구조화
+- `app/tool_runtime.rs`: `ToolError` 발송 1곳을 `ToolError::ExecutionFailure`로 구조화
+- `app/wizard_controller.rs`: `ModelsFetched`/`CredentialValidated` 발송 5곳을 `ProviderError` 기반으로 전환
+- `app/command_router.rs`: `ModelsFetched` 발송 2곳을 `ProviderError` 기반으로 전환, `/help` 텍스트에 `/theme` 추가
+- `tui/layout.rs`: 모든 색상을 `state.palette()` 동적 참조로 전환 (50+곳)
+- `tui/widgets/inspector_tabs.rs`: 모든 색상을 동적 참조로 전환
+- `tui/widgets/config_dashboard.rs`: `Color::Yellow` → `palette().warning` 전환
+- `tui/widgets/setting_wizard.rs`: `Color::Cyan` → `palette().info` 전환
+- `app/state.rs`: `AppState::palette()` 헬퍼 메서드 추가
+
+### Quality
+- `cargo test`: 28건 전부 통과 (0 failed)
+- `cargo clippy --all-targets --all-features -- -D warnings`: 경고 0건 (릴리스 게이트 통과)
+
+## [0.1.0-beta.20] - 2026-04-17
+
+### Fixed (감사 리포트 대응 — HIGH 2건, MEDIUM 3건)
+- **[H-1] 세션 로거 회귀 복구**: `SessionLogger::from_file()`, `restore_messages()`, 동기 `append_message()` API 복원. 비동기 전환 과정에서 삭제된 세션 복원/테스트용 동기 API를 재공급하여 회귀 테스트 28건 전부 통과.
+- **[H-2] 세션 영속성 실행 불가 수정**: `chat_runtime.rs` 및 `mod.rs`에서 `logger.append_message()`가 async fn인 상태에서 await/spawn 없이 버려지던 Future를 동기 API로 교체. 로그가 실제로 디스크에 기록되도록 수정.
+- **[M-1] Inspector Search 탭 실제 구현**: "v0.2 예정" 안내만 표시하던 Search 탭을 타임라인 전체 대소문자 무시 검색 엔진으로 교체. Composer 입력을 검색어로 사용하며 최대 50건 표시.
+- **[M-2] 테마 시스템 구현**: `PersistedSettings`에 `theme` 필드 추가, `palette.rs`에 `Palette` 구조체와 `DEFAULT_PALETTE`/`HIGH_CONTRAST_PALETTE` 정의, `/theme` 슬래시 커맨드로 Default ↔ HighContrast 실시간 전환 + config.toml 비동기 저장.
+- **[M-3] thiserror 에러 체계 연동**: `config_store.rs`에서 `ConfigError::NotFound`/`ParseFailure`를 실제 코드 경로에 연결. 향후 UI에서 에러 종류별 분기 처리 가능.
+
+### Changed
+- `session_log.rs`: 비동기 `append_message` → `append_message_async`로 이름 변경, 동기 `append_message` 신규 추가
+- `state.rs`: `WizardStep`, `ConfigPopup`에 `Debug` derive 추가, `SlashMenuState::ALL_COMMANDS`에 `/theme` 추가 (11→12개)
+- `wizard_controller.rs`: PersistedSettings 초기화에 `theme` 필드 추가, 미사용 변수 clippy 경고 해소
+- `layout.rs`: `tick_count % 2 == 0` → `tick_count.is_multiple_of(2)` clippy 준수
+- `palette.rs`: `Palette` 구조체, `get_palette()` 함수, `DEFAULT_PALETTE`/`HIGH_CONTRAST_PALETTE` 상수 추가
+- `command_router.rs`: `/theme` 슬래시 커맨드 핸들러 추가
+
+### Quality
+- `cargo test`: 28건 전부 통과 (0 failed)
+- `cargo clippy --all-targets --all-features -- -D warnings`: 경고 0건 (릴리스 게이트 통과)
+
 ## [0.1.0-beta.18] - 2026-04-16
 
 ### Added (Phase 10: 기능 완성 — 7건)

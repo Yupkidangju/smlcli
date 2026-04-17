@@ -6,106 +6,118 @@
 use super::{App, action, event_loop};
 
 impl App {
-    /// LLM 응답 내의 ```json``` 블록을 파싱하여 도구 호출을 감지하고,
-    /// 권한 정책에 따라 자동 실행/승인 대기/거부를 결정하는 파이프라인.
-    ///
-    /// [v0.1.0-beta.18] Phase 10: 복수 ```json 블록 감지 지원.
-    /// 응답에 여러 도구 호출이 포함된 경우 모두 순차 처리.
-    /// (단, 현재는 첫 번째만 실행하고 나머지는 대기열에 큐잉)
-    pub(crate) fn process_tool_calls_from_response(&mut self, content: &str) {
-        let mut search_from = 0;
-        let mut found_count = 0;
-
-        while let Some(start_idx) = content[search_from..].find("```json") {
-            let abs_start = search_from + start_idx + 7;
-            if abs_start >= content.len() {
-                break;
+    /// [v0.1.0-beta.22] 도구 호출 파싱 — 엄격한 후처리 계층.
+    /// - fenced ```json 블록만 도구 호출로 인식한다 (bare JSON은 무시).
+    /// - "tool" 필드가 존재하고 ToolCall serde 역직렬화에 성공해야 디스패치.
+    /// - 빈 ExecShell 명령은 파싱 단계에서 사전 차단.
+    /// - 자연어 설명 없이 JSON만 있는 응답은 경고를 로깅한다.
+    pub(crate) fn process_tool_calls_from_response(
+        &mut self,
+        msg: &crate::providers::types::ChatMessage,
+    ) {
+        if !self.state.runtime.user_intent_actionable {
+            if msg.tool_calls.is_some() {
+                self.state.runtime.logs_buffer.push(
+                    "[Harness] 비작업성 입력에 대한 도구 호출 감지 → 런타임에서 차단됨. \
+                     인삿말/잡담 입력에서는 도구를 사용하지 않음."
+                        .to_string(),
+                );
             }
-            let block = &content[abs_start..];
-            if let Some(end_idx) = block.find("```") {
-                let json_str = block[..end_idx].trim();
-                if let Ok(tool_call) =
-                    serde_json::from_str::<crate::domain::tool_result::ToolCall>(json_str)
-                {
-                    found_count += 1;
-                    // 첫 번째 도구만 즉시 디스패치 (연쇄 호출 방지)
-                    if found_count == 1 {
-                        self.dispatch_tool_call(tool_call);
-                    } else {
-                        // 추가 도구는 로그에 기록 (향후 큐 구현 시 활용)
-                        self.state.logs_buffer.push(format!(
-                            "[Multi-Tool] 추가 도구 감지 (#{}) — 현재 단일 실행 모드",
-                            found_count
-                        ));
+            return;
+        }
+
+        if let Some(tool_calls) = &msg.tool_calls {
+            let mut found_count = 0;
+            for call in tool_calls {
+                let name = call.function.name.clone();
+                let args = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
+                    .unwrap_or_else(|_| serde_json::json!({}));
+                let tool_call = crate::domain::tool_result::ToolCall { name, args };
+
+                // [v0.1.0-beta.22] 빈 명령은 권한 검사 이전에 즉시 차단
+                if tool_call.name == "ExecShell" {
+                    if let Some(cmd) = tool_call.args.get("command").and_then(|v| v.as_str()) {
+                        if cmd.trim().is_empty() {
+                            self.state.runtime.logs_buffer.push(
+                                "[Harness] ExecShell 빈 명령 감지 → 실행 차단됨.".to_string(),
+                            );
+                            self.state
+                                .ui
+                                .timeline
+                                .push(crate::app::state::TimelineEntry::now(
+                                    crate::app::state::TimelineEntryKind::SystemNotice(
+                                        "⚠ 빈 명령은 실행할 수 없습니다.".to_string(),
+                                    ),
+                                ));
+                            continue;
+                        }
                     }
                 }
-                search_from = abs_start + end_idx + 3;
-            } else {
-                break;
+
+                found_count += 1;
+                if found_count == 1 {
+                    self.dispatch_tool_call(tool_call, Some(call.id.clone()));
+                } else {
+                    self.state.runtime.logs_buffer.push(format!(
+                        "[Multi-Tool] 추가 도구 감지 (#{}) — 현재 단일 실행 모드",
+                        found_count
+                    ));
+                }
             }
         }
     }
 
     /// 파싱된 ToolCall에 대해 권한 검사를 수행하고, 결과에 따라 실행/승인대기/거부를 처리.
-    pub(crate) fn dispatch_tool_call(&mut self, tool_call: crate::domain::tool_result::ToolCall) {
-        let settings = self.state.settings.clone().unwrap_or_default();
+    pub(crate) fn dispatch_tool_call(
+        &mut self,
+        tool_call: crate::domain::tool_result::ToolCall,
+        tool_call_id: Option<String>,
+    ) {
+        let settings = self.state.domain.settings.clone().unwrap_or_default();
 
-        // [v0.1.0-beta.18] Phase 9-A: ToolQueued 타임라인 엔트리 추가
-        let tool_name = format!("{:?}", &tool_call).chars().take(30).collect::<String>();
-        self.state.timeline.push(
-            crate::app::state::TimelineEntry::now(
+        let tool_name = Self::format_tool_name(&tool_call);
+        self.state
+            .ui
+            .timeline
+            .push(crate::app::state::TimelineEntry::now(
                 crate::app::state::TimelineEntryKind::ToolCard {
                     tool_name: tool_name.clone(),
                     status: crate::app::state::ToolStatus::Queued,
                     summary: "권한 검사 중...".to_string(),
                 },
-            ),
-        );
+            ));
 
         let perm = crate::domain::permissions::PermissionEngine::check(&tool_call, &settings);
 
         match perm {
             crate::domain::permissions::PermissionResult::Allow => {
-                // 자동 실행: 비동기 spawn으로 TUI 프리징 방지
-                self.execute_tool_async(tool_call);
+                // 자동 실행
+                self.execute_tool_async(tool_call, tool_call_id);
             }
             crate::domain::permissions::PermissionResult::Ask => {
-                // 승인 대기: Inspector 패널 강제 오픈 + Diff Preview 자동 생성
-                // [v0.1.0-beta.18] 타임라인 ToolCard를 ApprovalCard로 대체
-                if let Some(last) = self.state.timeline.last_mut() {
+                // 승인 대기
+                if let Some(last) = self.state.ui.timeline.last_mut() {
                     last.kind = crate::app::state::TimelineEntryKind::ApprovalCard {
                         tool_name: tool_name.clone(),
-                        detail: "사용자 승인 대기 중 (y/n)".to_string(),
+                        // [v0.1.0-beta.22] 전체 도구 설명을 축약 없이 표시
+                        detail: Self::format_tool_detail(&tool_call),
                     };
                 }
-                self.state.approval.pending_tool = Some(tool_call.clone());
-                self.state.show_inspector = true;
+                self.state.runtime.approval.pending_tool = Some(tool_call.clone());
+                self.state.runtime.approval.pending_tool_call_id = tool_call_id;
+                self.state.ui.show_inspector = true;
 
-                // Diff Preview 자동 매핑: 파일 수정 도구인 경우 미리보기 생성
-                match tool_call {
-                    crate::domain::tool_result::ToolCall::ReplaceFileContent {
-                        path,
-                        target_content,
-                        replacement_content,
-                    } => {
-                        let old_text = std::fs::read_to_string(&path).unwrap_or_default();
-                        let diff = crate::tools::file_ops::generate_diff(
-                            &old_text,
-                            &old_text.replace(&target_content, &replacement_content),
-                        );
-                        self.state.approval.diff_preview = Some(diff);
-                    }
-                    crate::domain::tool_result::ToolCall::WriteFile { path, content, .. } => {
-                        let diff = crate::tools::file_ops::write_file_preview(&path, &content)
-                            .unwrap_or_default();
-                        self.state.approval.diff_preview = Some(diff);
-                    }
-                    _ => {}
+                // Diff Preview 자동 매핑
+                if let Some(tool) =
+                    crate::tools::registry::GLOBAL_REGISTRY.get_tool(&tool_call.name)
+                {
+                    self.state.runtime.approval.diff_preview =
+                        tool.generate_diff_preview(&tool_call.args);
                 }
             }
             crate::domain::permissions::PermissionResult::Deny(reason) => {
-                // [v0.1.0-beta.18] 타임라인 ToolCard를 Error 상태로 갱신
-                for entry in self.state.timeline.iter_mut().rev() {
+                // 타임라인 ToolCard를 Error 상태로 갱신
+                for entry in self.state.ui.timeline.iter_mut().rev() {
                     if let crate::app::state::TimelineEntryKind::ToolCard {
                         ref mut status,
                         ref mut summary,
@@ -118,26 +130,115 @@ impl App {
                         break;
                     }
                 }
-                // 거부: 보안 차단 메시지를 세션에 표시
+                // 거부 메시지 추가
                 self.state
+                    .domain
                     .session
                     .add_message(crate::providers::types::ChatMessage {
                         role: crate::providers::types::Role::System,
-                        content: format!("[Security Block] {}", reason),
+                        content: Some(format!("[Security Block] {}", reason)),
+                        tool_calls: None,
+                        tool_call_id: tool_call_id,
                         pinned: false,
                     });
             }
         }
     }
 
+    /// [v0.1.0-beta.22] 도구 종류별 의미 있는 이름 생성 (전체 경로 포함, 최대 120자).
+    /// 이전: Debug 포맷의 30자 절단 → 개선: 도구명 + 핵심 정보 전체 표시.
+    pub(crate) fn format_tool_name(tool_call: &crate::domain::tool_result::ToolCall) -> String {
+        let raw = match tool_call.name.as_str() {
+            "ExecShell" => format!(
+                "ExecShell: {}",
+                tool_call
+                    .args
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+            ),
+            "ReadFile" => format!(
+                "ReadFile: {}",
+                tool_call
+                    .args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+            ),
+            "WriteFile" => format!(
+                "WriteFile: {}",
+                tool_call
+                    .args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+            ),
+            "ReplaceFileContent" => format!(
+                "ReplaceFileContent: {}",
+                tool_call
+                    .args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+            ),
+            "ListDir" => format!(
+                "ListDir: {}",
+                tool_call
+                    .args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+            ),
+            "GrepSearch" => format!(
+                "GrepSearch: '{}' in {}",
+                tool_call
+                    .args
+                    .get("pattern")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+                tool_call
+                    .args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+            ),
+            "Stat" => format!(
+                "Stat: {}",
+                tool_call
+                    .args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+            ),
+            "SysInfo" => "SysInfo".to_string(),
+            _ => format!("{:?}", tool_call),
+        };
+        if raw.chars().count() > 120 {
+            format!("{}...", raw.chars().take(117).collect::<String>())
+        } else {
+            raw
+        }
+    }
+
+    /// [v0.1.0-beta.22] 승인 카드에 표시할 전체 도구 설명 (축약 없이).
+    pub(crate) fn format_tool_detail(tool_call: &crate::domain::tool_result::ToolCall) -> String {
+        if let Some(tool) = crate::tools::registry::GLOBAL_REGISTRY.get_tool(&tool_call.name) {
+            tool.format_detail(&tool_call.args)
+        } else {
+            format!("승인 대기 (y/n) — 알 수 없는 도구: {}", tool_call.name)
+        }
+    }
+
     /// 도구를 비동기로 실행하고, 완료/에러 결과를 이벤트 루프에 전송.
-    pub(crate) fn execute_tool_async(&mut self, tool_call: crate::domain::tool_result::ToolCall) {
+    pub(crate) fn execute_tool_async(
+        &mut self,
+        tool_call: crate::domain::tool_result::ToolCall,
+        tool_call_id: Option<String>,
+    ) {
         // [v0.1.0-beta.18] Phase 9-A: ToolStarted — 타임라인 카드를 Running으로 갱신
-        let _tool_name = format!("{:?}", &tool_call).chars().take(30).collect::<String>();
-        for entry in self.state.timeline.iter_mut().rev() {
-            if let crate::app::state::TimelineEntryKind::ToolCard {
-                ref mut status, ..
-            } = entry.kind
+        for entry in self.state.ui.timeline.iter_mut().rev() {
+            if let crate::app::state::TimelineEntryKind::ToolCard { ref mut status, .. } =
+                entry.kind
                 && *status == crate::app::state::ToolStatus::Queued
             {
                 *status = crate::app::state::ToolStatus::Running;
@@ -150,15 +251,19 @@ impl App {
 
         tokio::spawn(async move {
             match crate::tools::executor::execute_tool(tool_call, &token).await {
-                Ok(res) => {
+                Ok(mut res) => {
+                    res.tool_call_id = tool_call_id;
                     let _ = tx
-                        .send(event_loop::Event::Action(action::Action::ToolFinished(res)))
+                        .send(event_loop::Event::Action(action::Action::ToolFinished(
+                            Box::new(res),
+                        )))
                         .await;
                 }
                 Err(e) => {
+                    // [v0.1.0-beta.21] ToolError 구조화: String 대신 도메인 타입 사용
                     let _ = tx
                         .send(event_loop::Event::Action(action::Action::ToolError(
-                            e.to_string(),
+                            crate::domain::error::ToolError::ExecutionFailure(e.to_string()),
                         )))
                         .await;
                 }
@@ -167,88 +272,101 @@ impl App {
     }
 
     /// 사용자가 도구 승인 카드에서 'y'(승인) 또는 'n'(거부)을 입력했을 때 처리.
-    /// 승인 시 execute_tool_async를 호출하고, 거부 시 pending_tool을 해제.
     pub(crate) fn handle_tool_approval(&mut self, approved: bool) {
         if approved {
-            let tool = self.state.approval.pending_tool.take().unwrap();
-            self.state.approval.diff_preview = None;
+            let tool = self.state.runtime.approval.pending_tool.take().unwrap();
+            let tool_call_id = self.state.runtime.approval.pending_tool_call_id.take();
+            self.state.runtime.approval.diff_preview = None;
 
-            // [v0.1.0-beta.18] 승인 완료: ApprovalCard를 ToolCard(Running)로 전환
-            let tool_name = format!("{:?}", &tool).chars().take(30).collect::<String>();
-            self.state.timeline.push(
-                crate::app::state::TimelineEntry::now(
+            // [v0.1.0-beta.22] 승인 완료: ApprovalCard를 ToolCard(Running)로 전환 (전체 경로 표시)
+            let tool_name = Self::format_tool_name(&tool);
+            self.state
+                .ui
+                .timeline
+                .push(crate::app::state::TimelineEntry::now(
                     crate::app::state::TimelineEntryKind::ToolCard {
                         tool_name,
                         status: crate::app::state::ToolStatus::Running,
                         summary: "실행 중...".to_string(),
                     },
-                ),
-            );
+                ));
 
-            self.execute_tool_async(tool);
+            self.execute_tool_async(tool, tool_call_id.clone());
 
             self.state
+                .domain
                 .session
                 .add_message(crate::providers::types::ChatMessage {
                     role: crate::providers::types::Role::System,
-                    content: "Tool is running in background...".to_string(),
+                    content: Some("Tool is running in background...".to_string()),
+                    tool_calls: None,
+                    tool_call_id: tool_call_id,
                     pinned: false,
                 });
         } else {
-            self.state.approval.pending_tool = None;
-            self.state.approval.diff_preview = None;
+            let tool_call_id = self.state.runtime.approval.pending_tool_call_id.take();
+            self.state.runtime.approval.pending_tool = None;
+            self.state.runtime.approval.diff_preview = None;
 
             // [v0.1.0-beta.18] 거부: 타임라인에 SystemNotice 추가
-            self.state.timeline.push(
-                crate::app::state::TimelineEntry::now(
+            self.state
+                .ui
+                .timeline
+                .push(crate::app::state::TimelineEntry::now(
                     crate::app::state::TimelineEntryKind::SystemNotice(
                         "사용자가 도구 실행을 거부했습니다.".to_string(),
                     ),
-                ),
-            );
+                ));
 
             self.state
+                .domain
                 .session
                 .add_message(crate::providers::types::ChatMessage {
                     role: crate::providers::types::Role::System,
-                    content: "Tool execution rejected by user.".to_string(),
+                    content: Some("Tool execution rejected by user.".to_string()),
+                    tool_calls: None,
+                    tool_call_id: tool_call_id,
                     pinned: false,
                 });
         }
     }
 
     /// Composer에서 '!' 접두사로 입력된 직접 셸 실행 요청을 처리.
-    /// 권한 정책에 따라 즉시 실행, 승인 대기, 또는 거부를 결정.
     pub(crate) fn handle_direct_shell_execution(&mut self, cmd: String) {
         if cmd.is_empty() {
             return;
         }
 
-        let settings = self.state.settings.clone().unwrap_or_default();
-        let tool_call = crate::domain::tool_result::ToolCall::ExecShell {
-            command: cmd.clone(),
-            cwd: None,
-            safe_to_auto_run: false,
+        let settings = self.state.domain.settings.clone().unwrap_or_default();
+        let tool_call = crate::domain::tool_result::ToolCall {
+            name: "ExecShell".to_string(),
+            args: serde_json::json!({
+                "command": cmd.clone(),
+                "cwd": ".",
+                "safe_to_auto_run": false
+            }),
         };
         let perm = crate::domain::permissions::PermissionEngine::check(&tool_call, &settings);
 
         match perm {
             crate::domain::permissions::PermissionResult::Allow
             | crate::domain::permissions::PermissionResult::Ask => {
-                // 직접 셸 실행은 Allow가 아닐 경우 항상 Ask 처리됨
                 if matches!(perm, crate::domain::permissions::PermissionResult::Allow) {
-                    self.execute_tool_async(tool_call);
+                    self.execute_tool_async(tool_call, None);
                 } else {
-                    self.state.approval.pending_tool = Some(tool_call);
-                    self.state.show_inspector = true;
+                    self.state.runtime.approval.pending_tool = Some(tool_call);
+                    self.state.ui.show_inspector = true;
                 }
             }
             crate::domain::permissions::PermissionResult::Deny(reason) => {
                 self.state
+                    .domain
                     .session
                     .add_message(crate::providers::types::ChatMessage {
                         role: crate::providers::types::Role::System,
-                        content: format!("[Security Block] {}", reason),
+                        content: Some(format!("[Security Block] {}", reason)),
+                        tool_calls: None,
+                        tool_call_id: None,
                         pinned: false,
                     });
             }

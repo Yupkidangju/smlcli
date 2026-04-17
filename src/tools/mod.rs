@@ -1,6 +1,7 @@
 pub mod executor;
 pub mod file_ops;
 pub mod grep;
+pub mod registry;
 pub mod shell;
 pub mod sys_ops;
 

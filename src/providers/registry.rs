@@ -78,10 +78,16 @@ impl ProviderAdapter for OpenRouterAdapter {
             struct Payload<'a> {
                 model: &'a str,
                 messages: &'a Vec<crate::providers::types::ChatMessage>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                tools: &'a Option<Vec<serde_json::Value>>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                tool_choice: &'a Option<String>,
             }
             let payload = Payload {
                 model: &req.model,
                 messages: &req.messages,
+                tools: &req.tools,
+                tool_choice: &req.tool_choice,
             };
 
             let response = self
@@ -119,7 +125,9 @@ impl ProviderAdapter for OpenRouterAdapter {
 
             let reply = crate::providers::types::ChatMessage {
                 role: crate::providers::types::Role::Assistant,
-                content: reply_content,
+                content: Some(reply_content),
+                tool_calls: None,
+                tool_call_id: None,
                 pinned: false,
             };
 
@@ -146,11 +154,17 @@ impl ProviderAdapter for OpenRouterAdapter {
                 model: &'a str,
                 messages: &'a Vec<crate::providers::types::ChatMessage>,
                 stream: bool,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                tools: &'a Option<Vec<serde_json::Value>>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                tool_choice: &'a Option<String>,
             }
             let payload = StreamPayload {
                 model: &req.model,
                 messages: &req.messages,
                 stream: true,
+                tools: &req.tools,
+                tool_choice: &req.tool_choice,
             };
 
             let response = self
@@ -168,6 +182,10 @@ impl ProviderAdapter for OpenRouterAdapter {
 
             // SSE 라인 단위 파싱
             let mut full_content = String::new();
+            let mut tool_calls_map: std::collections::HashMap<
+                usize,
+                crate::providers::types::ToolCallRequest,
+            > = std::collections::HashMap::new();
             let body = response.text().await?;
             for line in body.lines() {
                 let line = line.trim();
@@ -179,18 +197,60 @@ impl ProviderAdapter for OpenRouterAdapter {
                         break;
                     }
                     // SSE delta JSON 파싱
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
-                        && let Some(delta) = parsed["choices"][0]["delta"]["content"].as_str()
-                    {
-                        full_content.push_str(delta);
-                        let _ = delta_tx.send(delta.to_string()).await;
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
+                        let delta = &parsed["choices"][0]["delta"];
+                        if let Some(content) = delta["content"].as_str() {
+                            full_content.push_str(content);
+                            let _ = delta_tx.send(content.to_string()).await;
+                        }
+                        if let Some(tc_array) = delta["tool_calls"].as_array() {
+                            for tc_val in tc_array {
+                                if let Some(idx) = tc_val["index"].as_u64().map(|i| i as usize) {
+                                    let entry = tool_calls_map.entry(idx).or_insert_with(|| {
+                                        crate::providers::types::ToolCallRequest {
+                                            id: tc_val["id"]
+                                                .as_str()
+                                                .unwrap_or_default()
+                                                .to_string(),
+                                            r#type: "function".to_string(),
+                                            function: crate::providers::types::FunctionCall {
+                                                name: tc_val["function"]["name"]
+                                                    .as_str()
+                                                    .unwrap_or_default()
+                                                    .to_string(),
+                                                arguments: String::new(),
+                                            },
+                                        }
+                                    });
+                                    if let Some(arg_chunk) =
+                                        tc_val["function"]["arguments"].as_str()
+                                    {
+                                        entry.function.arguments.push_str(arg_chunk);
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
 
+            let tool_calls = if tool_calls_map.is_empty() {
+                None
+            } else {
+                let mut tcs: Vec<_> = tool_calls_map.into_iter().collect();
+                tcs.sort_by_key(|k| k.0);
+                Some(tcs.into_iter().map(|(_, v)| v).collect())
+            };
+
             let reply = crate::providers::types::ChatMessage {
                 role: crate::providers::types::Role::Assistant,
-                content: full_content,
+                content: if full_content.is_empty() {
+                    None
+                } else {
+                    Some(full_content)
+                },
+                tool_calls,
+                tool_call_id: None,
                 pinned: false,
             };
 
@@ -275,10 +335,16 @@ impl ProviderAdapter for GeminiAdapter {
             struct Payload<'a> {
                 model: &'a str,
                 messages: &'a Vec<crate::providers::types::ChatMessage>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                tools: &'a Option<Vec<serde_json::Value>>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                tool_choice: &'a Option<String>,
             }
             let payload = Payload {
                 model: &req.model,
                 messages: &req.messages,
+                tools: &req.tools,
+                tool_choice: &req.tool_choice,
             };
 
             let response = self
@@ -316,7 +382,9 @@ impl ProviderAdapter for GeminiAdapter {
 
             let reply = crate::providers::types::ChatMessage {
                 role: crate::providers::types::Role::Assistant,
-                content: reply_content,
+                content: Some(reply_content),
+                tool_calls: None,
+                tool_call_id: None,
                 pinned: false,
             };
 
@@ -342,11 +410,17 @@ impl ProviderAdapter for GeminiAdapter {
                 model: &'a str,
                 messages: &'a Vec<crate::providers::types::ChatMessage>,
                 stream: bool,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                tools: &'a Option<Vec<serde_json::Value>>,
+                #[serde(skip_serializing_if = "Option::is_none")]
+                tool_choice: &'a Option<String>,
             }
             let payload = StreamPayload {
                 model: &req.model,
                 messages: &req.messages,
                 stream: true,
+                tools: &req.tools,
+                tool_choice: &req.tool_choice,
             };
 
             let response = self
@@ -384,7 +458,9 @@ impl ProviderAdapter for GeminiAdapter {
 
             let reply = crate::providers::types::ChatMessage {
                 role: crate::providers::types::Role::Assistant,
-                content: full_content,
+                content: Some(full_content),
+                tool_calls: None,
+                tool_call_id: None,
                 pinned: false,
             };
 

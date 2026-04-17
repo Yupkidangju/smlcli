@@ -68,14 +68,11 @@ pub(crate) fn grep_search(pattern: &str, path: &str, case_insensitive: bool) -> 
                             output.push_str("  ...\n");
                         }
 
-                        for (j, ctx_line) in all_lines.iter().enumerate().skip(start).take(end - start) {
+                        for (j, ctx_line) in
+                            all_lines.iter().enumerate().skip(start).take(end - start)
+                        {
                             let prefix = if j == i { ">" } else { " " };
-                            output.push_str(&format!(
-                                "{} {:>4}: {}\n",
-                                prefix,
-                                j + 1,
-                                ctx_line
-                            ));
+                            output.push_str(&format!("{} {:>4}: {}\n", prefix, j + 1, ctx_line));
                         }
 
                         if total_matches >= max_results {
@@ -113,5 +110,73 @@ pub(crate) fn grep_search(pattern: &str, path: &str, case_insensitive: bool) -> 
         stderr: String::new(),
         exit_code: 0,
         is_error: false,
+        tool_call_id: None,
     })
+}
+
+// ==========================================
+// Phase 13: Agentic Autonomy Tool Registry
+// ==========================================
+
+use crate::domain::error::ToolError;
+use crate::domain::permissions::PermissionResult;
+use crate::domain::settings::PersistedSettings;
+use crate::tools::registry::{Tool, ToolContext};
+use async_trait::async_trait;
+use serde_json::{Value, json};
+
+pub struct GrepSearchTool;
+
+#[async_trait]
+impl Tool for GrepSearchTool {
+    fn name(&self) -> &'static str {
+        "GrepSearch"
+    }
+
+    fn description(&self) -> &'static str {
+        "Searches for a pattern in files recursively."
+    }
+
+    fn schema(&self) -> Value {
+        json!({
+            "type": "function",
+            "function": {
+                "name": "GrepSearch",
+                "description": "Recursively search for a string pattern in files.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": { "type": "string" },
+                        "path": { "type": "string" },
+                        "case_insensitive": { "type": "boolean" }
+                    },
+                    "required": ["pattern", "path"]
+                }
+            }
+        })
+    }
+
+    fn check_permission(&self, _args: &Value, _settings: &PersistedSettings) -> PermissionResult {
+        PermissionResult::Allow
+    }
+
+    async fn execute(&self, args: Value, _ctx: &ToolContext<'_>) -> Result<ToolResult, ToolError> {
+        let pattern = args
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let path = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let case_insensitive = args
+            .get("case_insensitive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        grep_search(&pattern, &path, case_insensitive)
+            .map_err(|e| ToolError::ExecutionFailure(e.to_string()))
+    }
 }

@@ -26,60 +26,39 @@ impl SessionState {
             "sh"
         };
 
-        // [v0.1.0-beta.16] 시스템 프롬프트 강화: CLI 에이전트 페르소나 + 도구 호출 프로토콜.
-        // 약 1K 토큰 내외로 구성. JSON 스키마가 사용자에게 노출되지 않도록 자연어 설명 병행 지시.
+        // [v0.1.0-beta.22] 시스템 프롬프트 개편:
+        // - 첫 턴 자연어 응답 가드 추가 (도구 호출 억제)
+        // - 도구 카탈로그를 간결화하고 예시 JSON 제거 (스키마 노출 방지)
+        // - 비작업성 입력(인삿말, 질문)에는 도구를 사용하지 않도록 명시
+        // - 작업 요청이면 첫 프롬프트라도 즉시 도구 사용 (Run 모드 계약과 일관)
         let system_prompt = format!(
-            "You are **smlcli**, a professional autonomous CLI agent running in the user's terminal.\n\
-            You are conversational, concise, and action-oriented.\n\
+            "You are **smlcli**, a professional CLI agent in the user's terminal.\n\
             \n\
-            ## Identity\n\
-            - You are a local AI assistant embedded in a terminal TUI application.\n\
-            - You have direct access to the user's file system and shell.\n\
-            - You think step-by-step but communicate results clearly and briefly.\n\
-            - When you perform an action (read file, run command, etc.), always explain what you're about to do and why BEFORE the tool call.\n\
-            - After a tool produces output, summarize the result for the user in natural language.\n\
+            ## Core Rules\n\
+            - If the user's message is a greeting, question, or general conversation: \
+            respond in natural language ONLY. No tools.\n\
+            - If the user's message is an explicit work request \
+            (read a file, run a command, write/modify code, etc.): \
+            use the appropriate tool immediately, even on the very first message.\n\
+            - When you use a tool, always explain what you are about to do BEFORE the tool call.\n\
+            - After a tool produces output, summarize the result in natural language.\n\
+            - The user sees your full response. Never output raw JSON without context.\n\
             \n\
             ## Environment\n\
             - OS: {} / {}\n\
             - Shell: {}\n\
-            - Working Directory: The user's current terminal working directory.\n\
             \n\
             ## Communication Style\n\
-            - Be direct and professional. Always respond in the same language the user writes in. Keep code, paths, and technical terms in their original form.\n\
-            - Keep responses concise. Avoid unnecessary preambles.\n\
-            - When uncertain, ask clarifying questions rather than guessing.\n\
-            - Format output using markdown when helpful (code blocks, headers, lists).\n\
+            - Be direct, professional, and concise.\n\
+            - Respond in the same language the user writes in.\n\
+            - Format output using markdown when helpful.\n\
+            - When uncertain, ask clarifying questions.\n\
             \n\
-            ## Tool Usage\n\
-            You have these tools. When you need one, output EXACTLY ONE ```json block with the call.\n\
-            **CRITICAL**: Always write a brief natural-language explanation of what you are doing BEFORE the JSON block.\n\
-            Never output raw JSON without context. The user sees your full response.\n\
-            \n\
-            ### Available Tools\n\
-            1. `ExecShell` — Run a shell command.\n\
-               Fields: command (string), cwd (string|null), safe_to_auto_run (bool)\n\
-            2. `ReadFile` — Read file contents.\n\
-               Fields: path (string), start_line (int|null), end_line (int|null)\n\
-            3. `WriteFile` — Create or overwrite a file.\n\
-               Fields: path (string), content (string), overwrite (bool)\n\
-            4. `ReplaceFileContent` — Replace specific text in a file.\n\
-               Fields: path (string), target_content (string), replacement_content (string)\n\
-            5. `ListDir` — List directory contents.\n\
-               Fields: path (string), depth (int|null)\n\
-            6. `GrepSearch` — Search files with a pattern.\n\
-               Fields: pattern (string), path (string), case_insensitive (bool)\n\
-            7. `SysInfo` — Get system resource info (CPU, memory).\n\
-               Fields: (none)\n\
-            \n\
-            ### Tool Call Format\n\
-            ```json\n\
-            {{\n\
-              \"tool\": \"ExecShell\",\n\
-              \"command\": \"ls -al\",\n\
-              \"cwd\": null,\n\
-              \"safe_to_auto_run\": true\n\
-            }}\n\
-            ```\n\
+            ## Tools\n\
+            You have access to: ExecShell, ReadFile, WriteFile, ReplaceFileContent, \
+            ListDir, GrepSearch, Stat, SysInfo.\n\
+            When you need a tool, output EXACTLY ONE fenced ```json block containing \
+            the tool call object with a \"tool\" field.\n\
             Only call ONE tool per response. Wait for the result before calling another.",
             os_type, arch, shell_name
         );
@@ -87,10 +66,15 @@ impl SessionState {
         Self {
             messages: vec![ChatMessage {
                 role: crate::providers::types::Role::System,
-                content: system_prompt,
+                content: Some(system_prompt),
+                tool_calls: None,
+                tool_call_id: None,
                 pinned: true,
             }],
-            mode: AppMode::Plan,
+            // [v0.1.0-beta.22] 기본 모드를 Run으로 변경.
+            // 코딩 에이전트로서 파일 읽기/쓰기가 기본 동작.
+            // Plan 모드는 분석/설명 전용으로 Tab 키로 전환.
+            mode: AppMode::Run,
             token_budget_used: 0,
             max_token_budget: 128_000,
             needs_auto_compaction: false,
@@ -108,7 +92,7 @@ impl SessionState {
     pub fn estimate_current_tokens(&self) -> u32 {
         self.messages
             .iter()
-            .map(|m| (m.content.len() as u32 / 3).max(1))
+            .map(|m| (m.content.as_ref().map(|s| s.len()).unwrap_or(0) as u32 / 3).max(1))
             .sum()
     }
 
@@ -145,7 +129,9 @@ impl SessionState {
 
         new_messages.push(ChatMessage {
             role: crate::providers::types::Role::System,
-            content: "[Summary Pending...]".to_string(),
+            content: Some("[Summary Pending...]".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
             pinned: true,
         });
 
@@ -159,8 +145,8 @@ impl SessionState {
 
     pub fn apply_summary(&mut self, summary: &str) {
         for msg in &mut self.messages {
-            if msg.content == "[Summary Pending...]" {
-                msg.content = format!("[Context Compaction Summary]\n{}", summary);
+            if msg.content.as_deref() == Some("[Summary Pending...]") {
+                msg.content = Some(format!("[Context Compaction Summary]\n{}", summary));
                 msg.pinned = true;
                 break;
             }

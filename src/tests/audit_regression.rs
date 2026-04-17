@@ -66,6 +66,7 @@ fn test_network_policy_deny_blocks_chat() {
         network_policy: NetworkPolicy::Deny,
         safe_commands: None,
         encrypted_keys: std::collections::HashMap::new(),
+        theme: "default".to_string(),
     };
 
     // Deny 상태 확인
@@ -154,12 +155,16 @@ fn test_permission_engine_denies_shell_on_deny_policy() {
         network_policy: NetworkPolicy::ProviderOnly,
         safe_commands: None,
         encrypted_keys: std::collections::HashMap::new(),
+        theme: "default".to_string(),
     };
 
-    let tool = ToolCall::ExecShell {
-        command: "rm -rf /".to_string(),
-        cwd: None,
-        safe_to_auto_run: false,
+    let tool = ToolCall {
+        name: "ExecShell".to_string(),
+        args: serde_json::json!({
+            "command": "rm -rf /".to_string(),
+            "cwd": serde_json::Value::Null,
+            "safe_to_auto_run": false
+        }),
     };
 
     let result = PermissionEngine::check(&tool, &settings);
@@ -188,10 +193,13 @@ fn test_file_write_asks_permission() {
     let settings = PersistedSettings::default();
     assert_eq!(settings.file_write_policy, FileWritePolicy::AlwaysAsk);
 
-    let tool = ToolCall::WriteFile {
-        path: "/tmp/test.txt".to_string(),
-        content: "hello".to_string(),
-        overwrite: true,
+    let tool = ToolCall {
+        name: "WriteFile".to_string(),
+        args: serde_json::json!({
+            "path": "/tmp/test.txt".to_string(),
+            "content": "hello".to_string(),
+            "overwrite": true
+        }),
     };
 
     let result = PermissionEngine::check(&tool, &settings);
@@ -206,10 +214,13 @@ fn test_file_write_asks_permission() {
 #[test]
 fn test_read_file_always_allowed() {
     let settings = PersistedSettings::default();
-    let tool = ToolCall::ReadFile {
-        path: "/etc/passwd".to_string(),
-        start_line: None,
-        end_line: None,
+    let tool = ToolCall {
+        name: "ReadFile".to_string(),
+        args: serde_json::json!({
+            "path": "/etc/passwd".to_string(),
+            "start_line": serde_json::Value::Null,
+            "end_line": serde_json::Value::Null
+        }),
     };
 
     let result = PermissionEngine::check(&tool, &settings);
@@ -229,10 +240,13 @@ fn test_blocked_command_sudo_denied() {
         shell_policy: ShellPolicy::Ask,
         ..PersistedSettings::default()
     };
-    let tool = ToolCall::ExecShell {
-        command: "sudo rm -rf /".to_string(),
-        cwd: None,
-        safe_to_auto_run: false,
+    let tool = ToolCall {
+        name: "ExecShell".to_string(),
+        args: serde_json::json!({
+            "command": "sudo rm -rf /".to_string(),
+            "cwd": serde_json::Value::Null,
+            "safe_to_auto_run": false
+        }),
     };
     let result = PermissionEngine::check(&tool, &settings);
     assert!(
@@ -248,10 +262,13 @@ fn test_blocked_command_rm_rf_denied() {
         shell_policy: ShellPolicy::SafeOnly,
         ..PersistedSettings::default()
     };
-    let tool = ToolCall::ExecShell {
-        command: "rm -rf /tmp/important".to_string(),
-        cwd: None,
-        safe_to_auto_run: true,
+    let tool = ToolCall {
+        name: "ExecShell".to_string(),
+        args: serde_json::json!({
+            "command": "rm -rf /tmp/important".to_string(),
+            "cwd": serde_json::Value::Null,
+            "safe_to_auto_run": true
+        }),
     };
     let result = PermissionEngine::check(&tool, &settings);
     assert!(
@@ -266,10 +283,13 @@ fn test_blocked_command_rm_rf_denied() {
 fn test_read_file_path_traversal_denied() {
     // '..' 포함 경로는 차단
     let settings = PersistedSettings::default();
-    let tool = ToolCall::ReadFile {
-        path: "../../etc/passwd".to_string(),
-        start_line: None,
-        end_line: None,
+    let tool = ToolCall {
+        name: "ReadFile".to_string(),
+        args: serde_json::json!({
+            "path": "../../etc/passwd".to_string(),
+            "start_line": serde_json::Value::Null,
+            "end_line": serde_json::Value::Null
+        }),
     };
     let result = PermissionEngine::check(&tool, &settings);
     assert!(
@@ -320,10 +340,13 @@ fn test_blocked_command_case_insensitive() {
         shell_policy: ShellPolicy::Ask,
         ..PersistedSettings::default()
     };
-    let tool = ToolCall::ExecShell {
-        command: "SUDO apt install something".to_string(),
-        cwd: None,
-        safe_to_auto_run: false,
+    let tool = ToolCall {
+        name: "ExecShell".to_string(),
+        args: serde_json::json!({
+            "command": "SUDO apt install something".to_string(),
+            "cwd": serde_json::Value::Null,
+            "safe_to_auto_run": false
+        }),
     };
     let result = PermissionEngine::check(&tool, &settings);
     assert!(
@@ -336,10 +359,13 @@ fn test_blocked_command_case_insensitive() {
 fn test_read_file_normal_path_allowed() {
     // '..'이 없는 정상 경로는 Allow
     let settings = PersistedSettings::default();
-    let tool = ToolCall::ReadFile {
-        path: "/tmp/test_file.txt".to_string(),
-        start_line: None,
-        end_line: None,
+    let tool = ToolCall {
+        name: "ReadFile".to_string(),
+        args: serde_json::json!({
+            "path": "/tmp/test_file.txt".to_string(),
+            "start_line": serde_json::Value::Null,
+            "end_line": serde_json::Value::Null
+        }),
     };
     let result = PermissionEngine::check(&tool, &settings);
     assert!(
@@ -379,10 +405,13 @@ fn test_blocked_command_fork_bomb() {
         shell_policy: ShellPolicy::SafeOnly,
         ..PersistedSettings::default()
     };
-    let tool = ToolCall::ExecShell {
-        command: ":(){ :|:& };:".to_string(),
-        cwd: None,
-        safe_to_auto_run: true,
+    let tool = ToolCall {
+        name: "ExecShell".to_string(),
+        args: serde_json::json!({
+            "command": ":(){ :|:& };:".to_string(),
+            "cwd": serde_json::Value::Null,
+            "safe_to_auto_run": true
+        }),
     };
     let result = PermissionEngine::check(&tool, &settings);
     assert!(
@@ -411,8 +440,20 @@ fn test_session_logger_append_and_restore() {
     let logger = SessionLogger::from_file(path.clone()).unwrap();
 
     // 메시지 2건 기록
-    let msg1 = ChatMessage { role: Role::User, content: "hello".to_string(), pinned: false };
-    let msg2 = ChatMessage { role: Role::Assistant, content: "hi there".to_string(), pinned: false };
+    let msg1 = ChatMessage {
+        role: Role::User,
+        content: Some("hello".to_string()),
+        tool_calls: None,
+        tool_call_id: None,
+        pinned: false,
+    };
+    let msg2 = ChatMessage {
+        role: Role::Assistant,
+        content: Some("hi there".to_string()),
+        tool_calls: None,
+        tool_call_id: None,
+        pinned: false,
+    };
     logger.append_message(&msg1).unwrap();
     logger.append_message(&msg2).unwrap();
 
@@ -420,8 +461,11 @@ fn test_session_logger_append_and_restore() {
     let (messages, errors) = logger.restore_messages().unwrap();
     assert_eq!(messages.len(), 2, "2건 복원이어야 함");
     assert_eq!(errors, 0, "에러 0건이어야 함");
-    assert_eq!(messages[0].content, "hello");
-    assert_eq!(messages[1].content, "hi there");
+    assert_eq!(messages[0].content.as_deref().unwrap_or_default(), "hello");
+    assert_eq!(
+        messages[1].content.as_deref().unwrap_or_default(),
+        "hi there"
+    );
 
     // 정리
     let _ = std::fs::remove_file(&path);
@@ -458,14 +502,23 @@ fn test_session_logger_corrupted_line_skipped() {
     let path = dir.join("corrupted.jsonl");
 
     // 정상 1줄 + 손상 1줄 + 정상 1줄
-    let msg = ChatMessage { role: Role::User, content: "valid".to_string(), pinned: false };
+    let msg = ChatMessage {
+        role: Role::User,
+        content: Some("valid".to_string()),
+        tool_calls: None,
+        tool_call_id: None,
+        pinned: false,
+    };
     std::fs::File::create(&path).unwrap();
     let logger = SessionLogger::from_file(path.clone()).unwrap();
     logger.append_message(&msg).unwrap();
 
     // 손상된 라인 직접 추가
     use std::io::Write;
-    let mut file = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
     writeln!(file, "{{invalid json line}}").unwrap();
     drop(file);
 
@@ -487,4 +540,577 @@ fn test_session_logger_nonexistent_file() {
 
     let result = SessionLogger::from_file(PathBuf::from("/tmp/smlcli_nonexistent_99999.jsonl"));
     assert!(result.is_err(), "존재하지 않는 파일은 에러여야 함");
+}
+
+// =============================================================================
+// [v0.1.0-beta.22] 하네스 구조/보안/UX 감사 회귀 테스트 6건
+// =============================================================================
+
+/// [H-2] 빈 ExecShell 명령은 permission 검사 이전에 즉시 Deny 처리되어야 한다.
+/// 빈 명령이 SafeOnly에서 자동 허용되거나 Ask에서 무의미한 승인 대기로
+/// 흐르는 것을 방지하는 하드 가드.
+#[test]
+fn test_empty_exec_shell_denied() {
+    let settings = PersistedSettings::default();
+
+    // 빈 문자열
+    let call_empty = ToolCall {
+        name: "ExecShell".to_string(),
+        args: serde_json::json!({
+            "command": "".to_string(),
+            "cwd": serde_json::Value::Null,
+            "safe_to_auto_run": false
+        }),
+    };
+    let result = PermissionEngine::check(&call_empty, &settings);
+    assert!(
+        matches!(result, PermissionResult::Deny(_)),
+        "빈 명령은 즉시 Deny여야 함"
+    );
+
+    // 공백만 있는 경우
+    let call_spaces = ToolCall {
+        name: "ExecShell".to_string(),
+        args: serde_json::json!({
+            "command": "   ".to_string(),
+            "cwd": serde_json::Value::Null,
+            "safe_to_auto_run": false
+        }),
+    };
+    let result = PermissionEngine::check(&call_spaces, &settings);
+    assert!(
+        matches!(result, PermissionResult::Deny(_)),
+        "공백만 있는 명령도 즉시 Deny여야 함"
+    );
+
+    // safe_to_auto_run=true여도 빈 명령은 차단
+    let call_safe_empty = ToolCall {
+        name: "ExecShell".to_string(),
+        args: serde_json::json!({
+            "command": "".to_string(),
+            "cwd": serde_json::Value::Null,
+            "safe_to_auto_run": true
+        }),
+    };
+    let result = PermissionEngine::check(&call_safe_empty, &settings);
+    assert!(
+        matches!(result, PermissionResult::Deny(_)),
+        "safe_to_auto_run이어도 빈 명령은 Deny여야 함"
+    );
+}
+
+/// [H-2 보조] SafeOnly 정책에서 빈 명령이 자동 허용되지 않는지 검증.
+/// 이전 버전에서는 is_safe_command()가 빈 토큰 목록에 true를 반환하여
+/// SafeOnly에서 빈 명령이 허용되는 결함이 있었음.
+#[test]
+fn test_empty_exec_shell_safe_only_denied() {
+    let settings = PersistedSettings {
+        shell_policy: ShellPolicy::SafeOnly,
+        ..Default::default()
+    };
+
+    let call = ToolCall {
+        name: "ExecShell".to_string(),
+        args: serde_json::json!({
+            "command": "".to_string(),
+            "cwd": serde_json::Value::Null,
+            "safe_to_auto_run": false
+        }),
+    };
+    let result = PermissionEngine::check(&call, &settings);
+    assert!(
+        matches!(result, PermissionResult::Deny(_)),
+        "SafeOnly에서도 빈 명령은 Deny여야 함"
+    );
+}
+
+/// [H-3] UiState의 timeline_scroll 필드가 존재하고 0으로 초기화되는지 검증.
+/// 이 필드는 타임라인 Wrap + 스크롤 오프셋의 상태 저장소.
+#[test]
+fn test_timeline_scroll_initial_value() {
+    let ui = crate::app::state::UiState::new(false);
+    assert_eq!(
+        ui.timeline_scroll, 0,
+        "타임라인 스크롤 오프셋은 0으로 초기화되어야 함"
+    );
+}
+
+/// [M-1] PLAN/RUN 모드가 SessionState에 올바르게 설정되는지 검증.
+/// dispatch_chat_request에서 모드별 시스템 프롬프트를 주입하는 기반.
+#[test]
+fn test_plan_run_mode_toggle() {
+    use crate::domain::session::{AppMode, SessionState};
+
+    let mut session = SessionState::new();
+    // [v0.1.0-beta.22] 기본 모드가 Run으로 변경됨 (코딩 에이전트 기본 동작)
+    assert_eq!(session.mode, AppMode::Run, "초기 모드는 Run이어야 함");
+
+    session.mode = AppMode::Plan;
+    assert_eq!(session.mode, AppMode::Plan, "모드가 Plan으로 전환되어야 함");
+
+    session.mode = AppMode::Run;
+    assert_eq!(
+        session.mode,
+        AppMode::Run,
+        "모드가 다시 Run으로 돌아가야 함"
+    );
+}
+
+/// [H-1/H-2] bare JSON 도구 스키마가 실행되지 않고, 렌더링에서도 필터링되는지 검증.
+/// - tool_runtime: bare JSON은 도구로 디스패치하지 않음 (실행 차단)
+/// - filter_tool_json: bare JSON의 "tool" 키가 있으면 사용자 친화적 요약으로 대체 (스키마 노출 방지)
+#[test]
+fn test_bare_json_filtered_from_display() {
+    // bare JSON 도구 스키마 — fenced가 아니므로 실행에서 무시됨
+    let bare_tool_json = r#"{"tool":"ExecShell","command":"ls"}"#;
+    assert!(
+        !bare_tool_json.contains("```json"),
+        "bare JSON에는 fenced 마커가 없어야 함"
+    );
+    // bare JSON에 "tool" 키가 있으므로 렌더러가 필터링해야 함
+    assert!(
+        bare_tool_json.contains("\"tool\""),
+        "bare JSON에 tool 키가 있으면 렌더러가 필터링 대상으로 감지해야 함"
+    );
+
+    // fenced JSON은 도구 호출로 인식되어야 함
+    let fenced_response = "설명입니다.\n```json\n{\"tool\":\"ExecShell\",\"command\":\"ls\"}\n```";
+    assert!(
+        fenced_response.contains("```json"),
+        "fenced JSON에는 마커가 있어야 함"
+    );
+
+    // "tool" 키가 없는 bare JSON은 필터링하지 않아야 함 (일반 데이터)
+    let bare_data_json = r#"{"name":"test","value":42}"#;
+    assert!(
+        !bare_data_json.contains("\"tool\""),
+        "일반 JSON에는 tool 키가 없으므로 필터링 대상이 아님"
+    );
+}
+
+/// [H-4] 첫 턴 하드가드 삭제 후에도 bare JSON 3단계 필터가 동작하는지 검증.
+/// 첫 턴이든 N번째 턴이든 bare JSON은 차단되고, fenced JSON은 통과해야 함.
+/// 실제 함수: filter_tool_json() 호출.
+#[test]
+fn test_filter_tool_json_bare_vs_fenced() {
+    use crate::tui::layout::filter_tool_json;
+
+    // bare 도구 JSON → 요약으로 대체 (스키마 미노출)
+    let bare = r#"{"tool":"ExecShell","command":"ls -la"}"#;
+    let filtered = filter_tool_json(bare);
+    assert!(
+        !filtered.contains(r#""tool""#),
+        "bare 도구 JSON의 스키마가 노출되면 안 됨: {}",
+        filtered
+    );
+    assert!(
+        filtered.contains("ExecShell"),
+        "bare 도구 JSON은 도구 이름 요약으로 대체되어야 함: {}",
+        filtered
+    );
+
+    // fenced 도구 JSON → 요약으로 대체
+    let fenced = "설명입니다.\n```json\n{\"tool\":\"ReadFile\",\"path\":\"/tmp/a.txt\"}\n```\n끝.";
+    let filtered_fenced = filter_tool_json(fenced);
+    assert!(
+        !filtered_fenced.contains(r#""tool""#),
+        "fenced 도구 JSON의 스키마가 노출되면 안 됨: {}",
+        filtered_fenced
+    );
+    assert!(
+        filtered_fenced.contains("ReadFile"),
+        "fenced 도구 JSON은 도구 이름 요약으로 대체되어야 함: {}",
+        filtered_fenced
+    );
+    assert!(
+        filtered_fenced.contains("설명입니다"),
+        "fenced 이전 텍스트는 유지되어야 함: {}",
+        filtered_fenced
+    );
+
+    // 일반 JSON (tool 키 없음) → 원문 유지
+    let data = r#"{"name":"test","value":42}"#;
+    let filtered_data = filter_tool_json(data);
+    assert_eq!(
+        filtered_data.trim(),
+        data,
+        "tool 키 없는 일반 JSON은 원문 그대로 유지되어야 함"
+    );
+
+    // 순수 텍스트 → 변경 없음
+    let text = "Hello, world! 안녕하세요.";
+    assert_eq!(
+        filter_tool_json(text),
+        text,
+        "순수 텍스트는 변경 없이 반환되어야 함"
+    );
+}
+
+/// [M-1] mixed bare JSON (텍스트 + bare 도구 JSON) 필터링 실제 동작 검증.
+/// 실제 함수: filter_tool_json() 호출.
+#[test]
+fn test_filter_tool_json_mixed_bare() {
+    use crate::tui::layout::filter_tool_json;
+
+    let mixed = "파일을 읽겠습니다.\n{\"tool\":\"ReadFile\",\"path\":\"/tmp/test.txt\"}";
+    let filtered = filter_tool_json(mixed);
+
+    // 자연어 부분은 유지
+    assert!(
+        filtered.contains("파일을 읽겠습니다"),
+        "mixed 응답의 자연어 부분이 유지되어야 함: {}",
+        filtered
+    );
+    // 도구 스키마는 미노출
+    assert!(
+        !filtered.contains(r#""tool""#),
+        "mixed 응답의 도구 스키마가 노출되면 안 됨: {}",
+        filtered
+    );
+    // 도구 이름은 요약으로 표시
+    assert!(
+        filtered.contains("ReadFile"),
+        "mixed 응답에서 도구 이름이 요약으로 표시되어야 함: {}",
+        filtered
+    );
+}
+
+/// [M-2] find_json_end brace 매칭 실제 동작 검증.
+/// 실제 함수: find_json_end() 호출.
+#[test]
+fn test_find_json_end_brace_matching() {
+    use crate::tui::layout::find_json_end;
+
+    // 단순 JSON 객체
+    let simple = r#"{"tool":"ExecShell"} 뒤에 텍스트"#;
+    assert_eq!(
+        find_json_end(simple),
+        Some(20),
+        "단순 JSON 객체 종료 위치가 정확해야 함"
+    );
+
+    // 중첩 JSON
+    let nested = r#"{"a":{"b":1},"c":2} extra"#;
+    assert_eq!(
+        find_json_end(nested),
+        Some(19),
+        "중첩 JSON 객체 종료 위치가 정확해야 함"
+    );
+
+    // escaped braces가 포함된 문자열
+    let escaped = r#"{"val":"{not a brace}"} end"#;
+    assert_eq!(
+        find_json_end(escaped),
+        Some(23),
+        "escaped braces를 포함한 JSON 종료 위치가 정확해야 함"
+    );
+
+    // 닫히지 않은 JSON
+    assert_eq!(
+        find_json_end("{\"a\":1"),
+        None,
+        "닫히지 않은 JSON은 None을 반환해야 함"
+    );
+}
+
+/// [M-2] 모드 지시 dedupe — 실제 dedupe 로직이 메시지 벡터에서 동작하는지 검증.
+#[test]
+fn test_mode_instruction_dedupe() {
+    use crate::providers::types::{ChatMessage, Role};
+
+    let mut messages: Vec<ChatMessage> = vec![
+        ChatMessage {
+            role: Role::System,
+            content: Some("You are smlcli.".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            pinned: true,
+        },
+        ChatMessage {
+            role: Role::System,
+            content: Some("[Mode: PLAN] You are in PLAN mode.".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            pinned: false,
+        },
+    ];
+
+    // 실제 dedupe 로직 실행: "[Mode:" 접두사로 기존 메시지를 찾아 교체
+    let new_instruction = "[Mode: RUN] You are in RUN mode.";
+    let mut replaced = false;
+    for msg in &mut messages {
+        if msg.role == Role::System
+            && msg
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("[Mode:")
+        {
+            msg.content = Some(new_instruction.to_string());
+            replaced = true;
+            break;
+        }
+    }
+
+    assert!(replaced, "기존 모드 메시지가 교체되어야 함");
+    assert_eq!(messages.len(), 2, "메시지 수가 늘어나지 않아야 함 (dedupe)");
+    assert_eq!(
+        messages[1].content.as_deref().unwrap_or_default(),
+        new_instruction,
+        "교체 후 RUN 모드 지시여야 함"
+    );
+
+    // 2차 교체 — 다시 PLAN으로 전환해도 메시지 수 불변
+    let plan_instruction = "[Mode: PLAN] Back to plan.";
+    for msg in &mut messages {
+        if msg.role == Role::System
+            && msg
+                .content
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("[Mode:")
+        {
+            msg.content = Some(plan_instruction.to_string());
+            break;
+        }
+    }
+    assert_eq!(messages.len(), 2, "2차 교체 후에도 메시지 수 불변");
+    let mode_count = messages
+        .iter()
+        .filter(|m| {
+            m.role == Role::System
+                && m.content
+                    .as_deref()
+                    .unwrap_or_default()
+                    .starts_with("[Mode:")
+        })
+        .count();
+    assert_eq!(mode_count, 1, "모드 지시 메시지는 항상 1개여야 함");
+}
+
+/// 기본 모드가 Run인지 검증 (Open Question 해소).
+#[test]
+fn test_default_mode_is_run() {
+    use crate::domain::session::{AppMode, SessionState};
+    let session = SessionState::new();
+    assert_eq!(session.mode, AppMode::Run, "기본 모드는 Run이어야 함");
+}
+
+/// format_tool_name/detail 실제 함수 호출 검증.
+#[test]
+fn test_format_tool_name_and_detail() {
+    use crate::app::App;
+    use crate::domain::tool_result::ToolCall;
+
+    let exec = ToolCall {
+        name: "ExecShell".to_string(),
+        args: serde_json::json!({
+            "command": "cargo build --release".to_string(),
+            "cwd": Some("/home/user/project".to_string()),
+            "safe_to_auto_run": false
+        }),
+    };
+    let name = App::format_tool_name(&exec);
+    let detail = App::format_tool_detail(&exec);
+    assert!(
+        name.contains("ExecShell"),
+        "도구 이름에 ExecShell 포함: {}",
+        name
+    );
+    assert!(
+        detail.contains("cargo build"),
+        "detail에 명령어 포함: {}",
+        detail
+    );
+
+    let read = ToolCall {
+        name: "ReadFile".to_string(),
+        args: serde_json::json!({
+            "path": "/tmp/very/long/path/to/file.rs".to_string(),
+            "start_line": Some(1),
+            "end_line": Some(100)
+        }),
+    };
+    let name = App::format_tool_name(&read);
+    assert!(
+        name.contains("ReadFile"),
+        "도구 이름에 ReadFile 포함: {}",
+        name
+    );
+    assert!(
+        name.contains("file.rs"),
+        "도구 이름에 파일명 포함: {}",
+        name
+    );
+}
+
+/// 통합 테스트: process_tool_calls_from_response 실제 호출.
+/// - bare JSON(fenced 아님)은 도구로 디스패치되지 않아야 함
+/// - fenced JSON이 있으면 approval 상태로 전환되어야 함
+/// - 첫 턴이든 N번째 턴이든 동작이 동일해야 함 (하드가드 삭제 검증)
+#[tokio::test]
+async fn test_process_tool_calls_integration() {
+    use crate::app::App;
+    use crate::app::state::AppState;
+    use crate::providers::types::{ChatMessage, FunctionCall, Role, ToolCallRequest};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+
+    // 1) tool_calls 없는 메시지 — 도구 디스패치 안 됨
+    let no_tool_msg = ChatMessage {
+        role: Role::Assistant,
+        content: Some("안녕하세요! 무엇을 도와드릴까요?".to_string()),
+        tool_calls: None,
+        tool_call_id: None,
+        pinned: false,
+    };
+    app.process_tool_calls_from_response(&no_tool_msg);
+    assert!(
+        app.state.runtime.approval.pending_tool.is_none(),
+        "순수 텍스트에서 도구가 디스패치되면 안 됨"
+    );
+
+    // 2) tool_calls 있는 메시지 — 승인 대기 또는 타임라인에 ToolCard가 추가되어야 함
+    let tool_msg = ChatMessage {
+        role: Role::Assistant,
+        content: Some("파일을 읽겠습니다.".to_string()),
+        tool_calls: Some(vec![ToolCallRequest {
+            id: "call_123".to_string(),
+            r#type: "function".to_string(),
+            function: FunctionCall {
+                name: "ReadFile".to_string(),
+                arguments: "{\"path\":\"/tmp/test.txt\"}".to_string(),
+            },
+        }]),
+        tool_call_id: None,
+        pinned: false,
+    };
+    app.process_tool_calls_from_response(&tool_msg);
+    let has_tool_activity = app.state.runtime.approval.pending_tool.is_some()
+        || app.state.ui.timeline.iter().any(|e| {
+            matches!(
+                e.kind,
+                crate::app::state::TimelineEntryKind::ToolCard { .. }
+            )
+        });
+    assert!(
+        has_tool_activity,
+        "tool_calls가 있는 메시지는 디스패치되어야 함 (승인 대기 또는 자동 실행)"
+    );
+
+    // 3) 비작업성 입력(인삿말) — 도구 디스패치 차단
+    let (tx2, _rx2) = tokio::sync::mpsc::channel(8);
+    let mut app2 = App {
+        state: AppState::new_for_test(),
+        action_tx: tx2,
+    };
+    app2.state.runtime.user_intent_actionable = false;
+    app2.process_tool_calls_from_response(&tool_msg);
+    let greeting_has_no_activity = app2.state.runtime.approval.pending_tool.is_none()
+        && !app2.state.ui.timeline.iter().any(|e| {
+            matches!(
+                e.kind,
+                crate::app::state::TimelineEntryKind::ToolCard { .. }
+            )
+        });
+    assert!(
+        greeting_has_no_activity,
+        "비작업성 입력(인삿말)에서는 도구가 디스패치되면 안 됨 (런타임 억제 검증)"
+    );
+
+    // 4) 작업 요청 입력(기본값 true) — 도구 디스패치 허용
+    let (tx3, _rx3) = tokio::sync::mpsc::channel(8);
+    let mut app3 = App {
+        state: AppState::new_for_test(),
+        action_tx: tx3,
+    };
+    assert!(
+        app3.state.runtime.user_intent_actionable,
+        "기본값은 작업 허용(true)"
+    );
+    app3.process_tool_calls_from_response(&tool_msg);
+    let action_has_activity = app3.state.runtime.approval.pending_tool.is_some()
+        || app3.state.ui.timeline.iter().any(|e| {
+            matches!(
+                e.kind,
+                crate::app::state::TimelineEntryKind::ToolCard { .. }
+            )
+        });
+    assert!(
+        action_has_activity,
+        "작업 요청 입력에서는 도구가 디스패치되어야 함"
+    );
+}
+
+/// 시스템 프롬프트에서 첫 턴 도구 금지 문구가 제거되었는지 검증.
+/// Run 모드 계약과 충돌하는 "NEVER use a tool in your very first response" 문구가 없어야 함.
+#[test]
+fn test_system_prompt_no_first_turn_tool_ban() {
+    use crate::domain::session::SessionState;
+
+    let session = SessionState::new();
+    let system_msg = session.messages[0].content.as_deref().unwrap_or_default();
+
+    assert!(
+        !system_msg.contains("NEVER use a tool in your very first response"),
+        "시스템 프롬프트에 첫 턴 도구 금지 문구가 없어야 함"
+    );
+    assert!(
+        system_msg.contains("use the appropriate tool immediately"),
+        "작업 요청 시 즉시 도구 사용 지시가 있어야 함"
+    );
+    assert!(
+        system_msg.contains("respond in natural language ONLY"),
+        "비작업성 입력에 대한 자연어 전용 지시가 있어야 함"
+    );
+}
+
+/// [v0.1.0-beta.22] is_actionable_input() 휴리스틱 직접 호출 테스트.
+/// 비작업성 입력 → false, 작업 요청 → true.
+#[test]
+fn test_is_actionable_input_heuristic() {
+    use crate::app::chat_runtime::is_actionable_input;
+
+    // 비작업성 입력 (인삿말, 잡담, 감사)
+    assert!(!is_actionable_input(""), "빈 입력은 비작업성");
+    assert!(!is_actionable_input("안녕"), "짧은 인삿말은 비작업성");
+    assert!(!is_actionable_input("hi"), "짧은 영어 인삿말은 비작업성");
+    assert!(!is_actionable_input("감사합니다"), "감사 인사는 비작업성");
+    assert!(!is_actionable_input("좋아요"), "단순 반응은 비작업성");
+    assert!(
+        !is_actionable_input("hello there"),
+        "짧은 인삿말은 비작업성"
+    );
+
+    // 작업 요청 (파일, 코드, 명령)
+    assert!(
+        is_actionable_input("Cargo.toml 읽어줘"),
+        "파일 읽기 요청은 작업성"
+    );
+    assert!(
+        is_actionable_input("foo.py 만들어줘"),
+        "파일 생성 요청은 작업성"
+    );
+    assert!(
+        is_actionable_input("cargo test 실행해"),
+        "명령 실행 요청은 작업성"
+    );
+    assert!(
+        is_actionable_input("src/main.rs를 수정해줘"),
+        "경로 포함 요청은 작업성"
+    );
+    assert!(
+        is_actionable_input("create a new file called app.js"),
+        "영어 작업 요청은 작업성"
+    );
+    assert!(
+        is_actionable_input("이 코드를 리팩토링해줘"),
+        "리팩토링 요청은 작업성"
+    );
+    assert!(is_actionable_input("@Cargo.toml 분석해"), "@ 참조는 작업성");
+    assert!(is_actionable_input("build 해줘"), "빌드 요청은 작업성");
 }

@@ -61,6 +61,7 @@
 | Structured Tool Call | `registry.rs` 검사 | fenced JSON 스크래핑 외 native contract 존재 |
 | File Read 안전장치 | `file_ops.rs` 검사 | 경로 정규화 + 1MB 제한 |
 | Grep UX | `grep.rs` 검사 | context_lines + max_results |
+| 프롬프트 커맨드 확장 (@, !) | `FuzzyMode` enum 존재 | `ignore::WalkBuilder` 사용 유무, `history_idx` 상태 보존 유무 검사 |
 
 ### 9-C 품질 감사
 
@@ -69,3 +70,23 @@
 | Shell 스트리밍 | `shell.rs` 검사 | spawn + BufReader + ToolOutputChunk |
 | 테스트 확장 | `cargo test` | 22건+ (secret round-trip, cancel/rollback, tool lifecycle, layout snapshot 포함) |
 | 전역 allow 제거 | `main.rs` 검사 | #[allow(dead_code)] 등 0건 |
+
+---
+
+## Phase 13 Agentic Autonomy 개편 감사 기준
+
+### 13-A 도구 및 실행 아키텍처 감사
+
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| Tool Registry | `src/tools/registry.rs` 코드 확인 | `Tool` 트레이트를 구현하는 개별 도구 구조체(`ReadFile`, `WriteFile` 등)가 존재하며 다형성 호출 보장 |
+| Automated Git Checkpoints | `ReplaceFileContent` 실행 시뮬레이션 | 성공적인 파일 쓰기 직후 백그라운드에서 `git commit` 생성 및 `AI: Auto-checkpoint...` 메시지 확인 |
+| Auto-Verify Loop | `smlcli run --auto-verify "테스트 실패 유도"` | 셸 에러가 발생했을 때 최대 3회 이내로 자동 복구 프롬프트가 주입되어 루프를 도는지 검증 |
+
+### 13-B 에이전트 인텔리전스 감사
+
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| Tree-sitter Repo Map | `smlcli` 부팅 후 디버그 로그 점검 | `System` 프롬프트 하단에 `[Repo Map]` 블록으로 추출된 주요 함수/클래스 시그니처 2,000 토큰 이하 주입 확인 |
+| Tree of Thoughts UI | 타임라인 렌더링 확인 | 메인 응답 텍스트 블록 아래에 도구 실행과 에러 이력이 인덴트(`└─`)로 계층화되어 표시됨 |
+| Planner-Executor 분리 | 복합 프롬프트 실행 | 여러 파일 변경 지시 시, Planner의 계획 수립 단계와 Executor의 도구 실행 단계가 분리되어 Action 스트림에 흐르는지 확인 |

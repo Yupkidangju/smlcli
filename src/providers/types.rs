@@ -10,19 +10,44 @@ pub enum Role {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ToolCallRequest {
+    pub id: String,
+    pub r#type: String, // Always "function"
+    pub function: FunctionCall,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChatMessage {
     pub role: Role,
-    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallRequest>>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+
     // [v0.1.0-beta.7] H-4: pinned는 내부용 필드이므로 Provider API 페이로드에 포함되면 안 됨.
-    // 엄격한 OpenAI 호환 서버에서 unknown field 에러를 야기할 수 있으므로 직렬화 제외.
     #[serde(default, skip_serializing)]
     pub pinned: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChatRequest {
     pub messages: Vec<ChatMessage>,
     pub model: String,
+    pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<String>,
 }
 
 #[derive(Debug, Clone)]

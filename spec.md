@@ -122,7 +122,7 @@ smlcli/
 │   │   ├── mod.rs
 │   │   ├── terminal.rs
 │   │   ├── layout.rs
-│   │   ├── palette.rs (Semantic Palette 색상 상수)
+│   │   ├── palette.rs (Semantic Palette + 테마 전환 API)
 │   │   └── widgets/
 │   │       ├── mod.rs
 │   │       ├── config_dashboard.rs
@@ -150,7 +150,7 @@ smlcli/
 │   │   ├── mod.rs
 │   │   ├── config_store.rs
 │   │   ├── secret_store.rs
-│   │   └── session_log.rs (JSONL 세션 영속성)
+│   │   └── session_log.rs (JSONL 세션 영속성 — 동기/비동기 이중 API)
 │   ├── tests/
 │   └── types/
 │       └── mod.rs
@@ -167,6 +167,29 @@ smlcli/
 
 **이벤트 세분화 (14종+ Action)**
 채팅과 도구 호출의 전체 라이프사이클(시작·진행·완료·에러)을 별도 이벤트로 정규화하여 Codex 스타일 진행 표시를 구현한다.
+
+**도구 호출 격리 계층 (v0.1.0-beta.22)**
+LLM 응답에서 도구 호출을 감지할 때 3단계 필터를 적용한다:
+1. **bare JSON 차단**: fenced(`\`\`\`json`)가 아닌 raw JSON 객체는 도구로 인식하지 않는다.
+2. **`"tool"` 키 검증**: fenced JSON 블록 내에 `"tool"` 필드가 존재해야만 도구 후보로 취급한다.
+3. **ToolCall 역직렬화 + 빈 명령 차단**: serde 역직렬화 성공 후에도 `ExecShell.command.trim().is_empty()`이면 즉시 거부한다.
+
+**첫 턴 자연어 가드 (v0.1.0-beta.22)**
+시스템 프롬프트에 다음 정책을 명시한다:
+- 첫 응답은 반드시 자연어 인삿말/확인으로 시작하며, 도구를 사용하지 않는다.
+- 인삿말, 질문, 설명 등 비작업성 입력에는 도구 없이 자연어로만 응답한다.
+- 도구 카탈로그는 이름만 나열하며, 필드 스키마와 예시 JSON은 시스템 프롬프트에 포함하지 않는다.
+
+**bare JSON 렌더링 필터 (v0.1.0-beta.22)**
+`filter_tool_json()`은 fenced JSON 블록뿐 아니라 bare JSON도 감지한다. `"tool"` 키가 있는 bare JSON은 사용자 친화적 요약으로 대체하여 스키마가 사용자에게 직접 노출되지 않도록 한다.
+
+**PLAN/RUN 모드 행동 계약 (v0.1.0-beta.22)**
+채팅 요청 시 현재 모드에 따라 LLM에 행동 지시를 주입한다:
+- **PLAN 모드**: 분석/설명 위주. 코드를 인라인으로 보여주되 자동 파일 쓰기는 하지 않는다.
+- **RUN 모드**: 코드 작성/수정 요청 시 반드시 `WriteFile`/`ReplaceFileContent` 도구를 사용하여 디스크에 기록한다.
+
+**타임라인 스크롤 (v0.1.0-beta.22)**
+`UiState::timeline_scroll` 필드와 `PageUp`/`PageDown` 키 바인딩으로 긴 응답을 세로 탐색한다. 위자드, Fuzzy, 설정 팝업이 열려 있을 때는 비활성.
 
 **SSE 스트리밍**
 Provider 응답을 토큰 단위로 수신하여 실시간 타임라인 렌더링에 반영한다.
@@ -365,23 +388,23 @@ pub struct TimelineEntry {
     pub timestamp: std::time::Instant,
 }
 
-// [v0.1.0-beta.18 개편] 14종+ Action
+// [v0.1.0-beta.18 개편, v0.1.0-beta.21 에러 구조화] 14종+ Action
 pub enum Action {
     // 채팅 라이프사이클
     ChatStarted,
     ChatDelta(String),
-    ChatResponseOk(ChatResponse),
-    ChatResponseErr(String),
+    ChatResponseOk(Box<ChatResponse>),
+    ChatResponseErr(ProviderError),          // [v0.1.0-beta.21] String → ProviderError
     // 도구 라이프사이클
-    ToolQueued(ToolCall),
+    ToolQueued(Box<ToolCall>),
     ToolStarted(String),
     ToolOutputChunk(String),
-    ToolFinished(ToolResult),
+    ToolFinished(Box<ToolResult>),
     ToolSummaryReady(String),
-    ToolError(String),
+    ToolError(ToolError),                    // [v0.1.0-beta.21] String → ToolError
     // 기존 유지
-    ModelsFetched(Result<Vec<String>, String>, FetchSource),
-    CredentialValidated(Result<(), String>),
+    ModelsFetched(Result<Vec<String>, ProviderError>, FetchSource),  // [v0.1.0-beta.21]
+    CredentialValidated(Result<(), ProviderError>),                  // [v0.1.0-beta.21]
     ContextSummaryOk(String),
     ContextSummaryErr(String),
 }
@@ -395,6 +418,7 @@ pub struct PersistedSettings {
     pub network_policy: NetworkPolicy,
     pub safe_commands: Option<Vec<String>>,
     pub encrypted_keys: HashMap<String, String>,
+    pub theme: String,  // [v0.1.0-beta.20] "default" | "high_contrast"
 }
 
 pub enum ProviderKind {
@@ -451,12 +475,197 @@ pub enum NetworkPolicy {
 3. **중요 컨텍스트 핀 지정 (Pinning & Anchor)**
    - `spec.md` 등 핵심 설계 원칙이 담긴 메시지나 사용자가 핀(Pin) 처리한 컨텍스트는 수명 주기를 무한대로 유지하여 압축 대상에서 제외한다.
 
+### 3.11 Extended Prompt Commands (@ and !)
+
+프롬프트 입력창(Composer)에서 `ignore` 기반 파일 검색 및 매크로/히스토리 확장을 지원하기 위한 구조적 명세다. 이 스펙은 "예측 가능한 컨텍스트 주입"과 "안전한 셸 실행"을 목표로 하며, 슬래시 커맨드와의 통합이나 터미널 외의 GUI 확장은 **비목표(Non-goal)**로 한다.
+
+#### 1. 상태 타입 및 계약 (Typed Contracts)
+
+기존 `FuzzyFinderState`의 기능을 분리하기 위해 `FuzzyMode`를 도입한다.
+
+```rust
+// src/app/state.rs
+#[derive(Debug, PartialEq, Clone)]
+pub enum FuzzyMode {
+    Files,
+    Macros,
+}
+
+pub struct FuzzyFinderState {
+    pub is_open: bool,
+    pub mode: FuzzyMode,
+    pub input: String,
+    pub matches: Vec<String>,
+    pub cursor: usize,
+}
+
+pub struct ComposerState {
+    pub input_buffer: String,
+    pub history: Vec<String>,
+    pub history_idx: Option<usize>,
+}
+```
+
+#### 2. `@` 멘션 시스템 (FuzzyMode::Files)
+
+- **재귀적 파일 탐색**: `ignore::WalkBuilder::new(".").hidden(true).build()`를 사용하여 하위 디렉터리를 탐색한다. (`.gitignore` 규칙 강제 적용)
+- **최대 노출 제한 (Concrete Numbers)**: `matches.truncate(100)`를 통해 탐색 결과를 최대 100건으로 하드 리미트한다. UI 렌더링 부하 방지용.
+- **특수 멘션 실데이터 맵핑 (Real Data Samples)**:
+  - `@workspace` 입력/선택 시 치환 결과: `\n--- Workspace Summary ---\n[src, Cargo.toml, README.md 등 현재 디렉터리 항목]\n-------------------------\n`
+  - `@terminal` 입력/선택 시 치환 결과: `\n--- Recent Terminal Logs ---\n[state.runtime.logs_buffer의 최신 20줄 (역순)]\n----------------------------\n`
+- **예외 처리 규칙**: 읽을 수 없는 파일이거나 바이너리일 경우, 예외를 삼키지 않고 타임라인에 삽입한다.
+  - 생성 이벤트: `TimelineEntryKind::SystemNotice(format!("⚠ 파일 멘션 오류 ({}): {}", path, e))`
+
+#### 3. `!` 뱅 커맨드 시스템 (FuzzyMode::Macros)
+
+- **진입 조건**: `ComposerState.input_buffer.is_empty() == true` 일 때 `!`를 입력하면 즉시 `FuzzyMode::Macros`로 전환.
+- **기본 제공 매크로 (Real Data Samples)**:
+  - `build` -> `cargo build`
+  - `test` -> `cargo test`
+  - `run` -> `cargo run`
+  - `check` -> `cargo check`
+  - `fmt` -> `cargo fmt`
+  - `clippy` -> `cargo clippy`
+  - 표시 형식: `build      (cargo build)`
+- **히스토리 정책**:
+  - `Enter` 키로 `!` 명령어가 실행될 때(`input_buffer.starts_with('!')`), `history.push(format!("!{}", cmd))`를 수행한다. 빈 명령(`""`)은 기록하지 않는다.
+  - 방향키 `Up` 누를 시, `history_idx`를 1 감소시키며 버퍼에 즉시 표시.
+  - 방향키 `Down` 누를 시, `history_idx`를 1 증가시키며, 최하단 초과 시 `history_idx = None`, `input_buffer.clear()` 처리.
+- **실행 경로 제한**: `!`로 입력된 명령어는 LLM으로 라우팅되지 않고 즉시 `handle_direct_shell_execution(cmd)`로 우회된다.
+
 ---
 
-## 4. Environment-Specific Configuration (Agent Rules)
+### 3.12 Phase 12: Native Structured Tool Call Integration
+
+현재 정규식 기반의 Fenced JSON 스크래핑 방식을 폐기하고, OpenAI 호환(OpenRouter/Gemini 지원) Native Tool Call API로 전환하기 위한 명세.
+본 명세는 `AI_IMPLEMENTATION_DOC_STANDARD.md`의 규칙에 따라 Typed Contracts와 Concrete Numbers를 정의한다.
+
+#### 1. Typed Contracts (도메인 모델 확장)
+
+기존 `ChatMessage`와 `ChatRequest`를 확장하여 JSON Schema 명세를 지원한다.
+
+```rust
+// crate::providers::types
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    User,
+    Assistant,
+    System,
+    Tool, // [v0.1.0-beta.23] Native Tool 역할 추가
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ToolCallRequest {
+    pub id: String,
+    pub r#type: String, // 항상 "function"
+    pub function: FunctionCall,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FunctionCall {
+    pub name: String,
+    pub arguments: String, // JSON string
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ChatMessage {
+    pub role: Role,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    
+    // Assistant가 Tool Call을 요청할 때
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCallRequest>>,
+    
+    // Role::Tool 로 결과 반환 시 필수
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    
+    #[serde(default, skip_serializing)]
+    pub pinned: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ChatRequest {
+    pub model: String,
+    pub messages: Vec<ChatMessage>,
+    pub stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<serde_json::Value>>, // OpenAI Tools format
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<String>, // "auto"
+}
+```
+
+#### 2. Concrete Numbers (제한 수치)
+
+- **도구 정의 최대 깊이**: 파라미터(properties) 중첩 깊이는 3레벨로 제한한다. (복잡도 통제)
+- **Tool Result 최대 길이**: `Role::Tool`로 반환하는 결과 텍스트는 `truncate(10_000)`으로 제한하여 토큰 낭비를 막는다.
+- **스트리밍 Tool Delta 조립 버퍼**: `tool_calls` 스트리밍 델타 수신 시, JSON 문자열을 조립하기 위한 `String` 버퍼의 한계치는 10MB로 둔다.
+
+#### 3. Execution & Verification Path (실행 및 검증 흐름)
+
+1. **Payload Inject**: `crate::app::chat_runtime::dispatch_chat()` 호출 시, `AppMode::Run` 상태라면 7가지 도구(ReadFile, WriteFile 등)의 JSON Schema를 `ChatRequest.tools` 배열에 삽입한다. 시스템 프롬프트에서 하드코딩된 도구 스키마 설명은 삭제한다.
+2. **Delta Parsing**: `chat_stream()`에서 수신하는 SSE Delta에 `tool_calls` 키가 존재하면, 기존 `ChatDelta(String)` 텍스트 청크가 아닌 **새로운 `ToolCallDelta(id, name, args_chunk)`** 형태로 `action_tx`에 전파한다.
+3. **Buffer Assemble**: `chat_runtime.rs` 루프가 `ToolCallDelta`를 받으면 인메모리 버퍼에 JSON 텍스트를 이어 붙이고, 스트림 종료 시(`ChatResponseOk`) `serde_json::from_str`을 통해 실제 `crate::domain::session::ToolCall` enum으로 역직렬화(Deserialization)하여 `ToolQueued`를 발송한다.
+4. **Verification**: 
+   - 프롬프트에 `!cat src/main.rs`와 같이 자연어로 지시했을 때, 정규식 파서가 반응하지 않고 `Role::Assistant`의 `tool_calls` 필드를 통해 정확한 `ReadFile` JSON이 생성되는지 확인.
+   - 존재하지 않는 도구 이름 반환 시, API 에러가 아니라 `Role::Tool` 로 "지원하지 않는 도구"라는 에러 메시지를 반환하여 자동 복구(Auto-healing)되는지 검증.
+
+---
+
+### 3.13 Phase 13: Agentic Autonomy & Architectural Refactoring
+
+이 페이즈는 `smlcli`를 단순한 프롬프트 기반 도구를 넘어, 자율적으로 에러를 복구하고(Auto-healing), 전체 저장소 구조를 파악하며(Repo Map), 안전한 작업 롤백(Git Checkpoints)을 수행하는 "참조 등급(Reference Grade)" 에이전트로 승격시키기 위한 명세다.
+
+#### 1. Typed Contracts (도메인 모델 및 인터페이스 확장)
+
+**A. Tool Registry Pattern**
+기존 `match` 기반 하드코딩 도구 실행을 다형성 기반 레지스트리로 리팩토링한다.
+```rust
+// src/tools/registry.rs
+#[async_trait]
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn description(&self) -> &'static str;
+    fn schema(&self) -> serde_json::Value; // JSON Schema 반환
+    fn required_policy(&self) -> ToolPolicyLevel; // Safe, Confirm, Blocked
+    async fn execute(&self, args: serde_json::Value, ctx: &mut ToolContext) -> Result<ToolResult, ToolError>;
+}
+```
+
+**B. Auto-Verify State Machine**
+에이전트가 코드를 수정한 뒤 자율적으로 테스트를 수행하고 에러를 피드백하는 상태를 정의한다.
+```rust
+// src/app/state.rs
+pub enum AutoVerifyState {
+    Idle,
+    Verifying { command: String, retries_left: u8 },
+    Failed { last_error: String },
+}
+```
+
+#### 2. Concrete Numbers (제한 수치 및 규칙)
+
+- **자가 치유 재시도(Self-Correction Retries)**: `AutoVerifyState`에서 코드를 수정하고 린터/테스트가 실패했을 때, 인간의 개입 없이 AI가 스스로 에러 로그를 읽고 수정하는 최대 재시도 횟수는 **3회(`retries_left: 3`)**로 하드 리미트한다. 이를 초과하면 사용자 승인 대기로 폴백(Fallback)한다.
+- **Tree-sitter Repo Map 토큰 제한**: `tree-sitter`로 추출한 저장소의 AST(함수, 클래스 시그니처) 맵을 시스템 프롬프트에 주입할 때, 최대 **2,000 토큰**을 넘지 않도록 자른다(Truncate).
+- **Git Checkpoint 보존 기한**: 임시 스냅샷으로 생성한 Git 커밋이나 브랜치는 최대 **5개**까지만 유지하며, LRU 방식으로 오래된 스냅샷은 자동 정리한다.
+
+#### 3. Execution Path (실행 및 검증 흐름)
+
+1. **Tool Registry 도입**: `src/tools/` 내부의 기존 도구들(`ReadFile`, `WriteFile`, `ExecShell` 등)을 `Tool` 트레이트 구현체로 일괄 리팩토링한다.
+2. **Tree-sitter 통합**: `tree-sitter` 크레이트를 도입하여 작업 디렉터리의 Rust, Python, TS 등의 함수/구조체 시그니처를 추출, `[Repo Map]` 블록으로 `System` 프롬프트에 백그라운드 주입한다.
+3. **Automated Git Checkpoints**: `ReplaceFileContent`나 `WriteFile` 실행 직전, 현재 `git status`를 확인하고 워크트리가 더티(dirty)하지 않다면 파일 쓰기 성공 시 자동 커밋(`AI: Auto-checkpoint before modification`)을 생성한다.
+4. **Auto-Verify 루프**: `smlcli run --auto-verify "테스트 통과하게 수정해"` 실행 시, Planner LLM이 수정 계획을 세우고, Executor LLM이 파일을 수정한 뒤, 자동으로 `cargo test` (또는 `npm test`)를 `ExecShell`로 수행하여 `stderr` 발생 시 재귀적으로 프롬프트에 피드백한다.
+5. **Tree of Thoughts UI**: `tui/layout.rs` 타임라인 렌더링에 들여쓰기(Indent) 및 아코디언(Foldable) 개념을 도입. 메인 응답 아래에 AI의 도구 호출 및 에러 수정 내역(`└─ ⚙️ ExecShell (cargo check) -> Error -> Retrying...`)을 트리 형태로 시각화한다.
+
+---## 4. Environment-Specific Configuration (Agent Rules)
 
 **Config Filename:** `.antigravityrules`
 
+### 4.1 General Rules
 ```json
 {
   "project_version": "0.1 BETA",
@@ -474,6 +683,25 @@ pub enum NetworkPolicy {
   "security_level": "strict"
 }
 ```
+
+### 4.2 Mode-Specific Prompt Guidelines (PLAN / RUN)
+
+AI 에이전트는 현재 활성화된 모드(`PLAN` 또는 `RUN`)에 따라 응답 스타일과 도구 사용 전략을 다음과 같이 차별화한다.
+
+**PLAN Mode (설계 및 탐색 중심)**
+- **페르소나:** 신중한 시스템 아키텍트 및 코드 리뷰어.
+- **행동 강령:**
+  - 코드를 직접 수정하는 도구(`write_file`, `replace`) 호출을 지양한다.
+  - 파일 읽기(`read_file`), 검색(`grep`), 구조 분석(`list_dir`)을 통해 충분한 정보를 수집한다.
+  - 모든 변경 제안은 "수정 계획"으로서 텍스트로 먼저 설명하며, 필요한 경우 `diff` 형태의 코드 블록만 제시한다.
+  - 사용자에게 "이 계획대로 진행할까요?"라고 확인을 구하는 것을 원칙으로 한다.
+
+**RUN Mode (실행 및 적용 중심)**
+- **페르소나:** 빠르고 정확한 실무형 엔지니어.
+- **행동 강령:**
+  - 사용자의 요청이나 이미 승인된 계획에 따라 즉각적으로 도구(`write_file`, `replace`, `exec_shell`)를 호출하여 작업을 완수한다.
+  - 불필요한 서술형 응답을 줄이고, 실행된 작업의 결과와 발생한 변화를 요약하여 보고한다.
+  - 오류 발생 시 즉시 원인을 분석하고(읽기 도구 활용), 가능한 경우 자동으로 수정을 재시도하거나 구체적인 복구 방안을 제시한다.
 
 ---
 

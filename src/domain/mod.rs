@@ -1,3 +1,4 @@
+pub mod error;
 pub mod permissions;
 pub mod provider;
 pub mod session;

@@ -30,9 +30,9 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(tx: tokio::sync::mpsc::Sender<event_loop::Event>) -> Self {
+    pub async fn new(tx: tokio::sync::mpsc::Sender<event_loop::Event>) -> Self {
         Self {
-            state: AppState::new(),
+            state: AppState::new_async().await,
             action_tx: tx,
         }
     }
@@ -64,11 +64,11 @@ impl App {
                     }
                     Event::Tick => {
                         // [v0.1.0-beta.18] 애니메이션 틱 카운터 증가
-                        self.state.tick_count = self.state.tick_count.wrapping_add(1);
+                        self.state.ui.tick_count = self.state.ui.tick_count.wrapping_add(1);
 
                         // 컨텍스트 자동 압축 트리거
-                        if self.state.session.needs_auto_compaction {
-                            self.state.session.needs_auto_compaction = false;
+                        if self.state.domain.session.needs_auto_compaction {
+                            self.state.domain.session.needs_auto_compaction = false;
                             self.handle_slash_command("/compact");
                         }
                     }
@@ -90,19 +90,21 @@ impl App {
 
         match action {
             // === [v0.1.0-beta.18] 채팅 라이프사이클 ===
-
             action::Action::ChatStarted => {
                 // thinking indicator 시작 + 타임라인에 스트리밍 준비 엔트리
-                self.state.is_thinking = true;
-                self.state.timeline.push(TimelineEntry::now(
-                    TimelineEntryKind::AssistantDelta(String::new()),
-                ));
+                self.state.runtime.is_thinking = true;
+                self.state
+                    .ui
+                    .timeline
+                    .push(TimelineEntry::now(TimelineEntryKind::AssistantDelta(
+                        String::new(),
+                    )));
             }
 
             action::Action::ChatDelta(token) => {
                 // SSE 토큰 수신: 스트리밍 중간 결과에 append
-                self.state.is_thinking = false;
-                if let Some(last) = self.state.timeline.last_mut()
+                self.state.runtime.is_thinking = false;
+                if let Some(last) = self.state.ui.timeline.last_mut()
                     && let TimelineEntryKind::AssistantDelta(ref mut buf) = last.kind
                 {
                     buf.push_str(&token);
@@ -111,74 +113,98 @@ impl App {
 
             action::Action::ChatResponseOk(res) => {
                 // [v0.1.0-beta.16] 추론 완료: thinking indicator 비활성화
-                self.state.is_thinking = false;
+                self.state.runtime.is_thinking = false;
                 // 토큰 예산 갱신
-                self.state.session.token_budget_used += res.input_tokens + res.output_tokens;
-                self.state.session.add_message(res.message.clone());
+                self.state.domain.session.token_budget_used += res.input_tokens + res.output_tokens;
+                self.state.domain.session.add_message(res.message.clone());
 
-                // [v0.1.0-beta.18] Phase 10: AI 응답을 JSONL 세션 로그에 기록
-                if let Some(ref logger) = self.state.session_logger {
-                    let _ = logger.append_message(&res.message);
+                // [v0.1.0-beta.20] AI 응답을 JSONL 세션 로그에 동기 기록
+                // [v0.1.0-beta.18→20 수정] 비동기 append_message를 동기 API로 교체.
+                if let Some(ref logger) = self.state.domain.session_logger
+                    && let Err(e) = logger.append_message(&res.message)
+                {
+                    self.state
+                        .runtime
+                        .logs_buffer
+                        .push(format!("[SessionLog] AI 응답 기록 실패: {}", e));
                 }
 
                 // 스트리밍 Delta가 있으면 완성된 메시지로 변환
-                if let Some(last) = self.state.timeline.last_mut() {
+                if let Some(last) = self.state.ui.timeline.last_mut() {
                     if matches!(last.kind, TimelineEntryKind::AssistantDelta(_)) {
-                        last.kind = TimelineEntryKind::AssistantMessage(res.message.content.clone());
+                        last.kind = TimelineEntryKind::AssistantMessage(
+                            res.message.content.clone().unwrap_or_default(),
+                        );
                     }
                 } else {
                     // Delta 없이 batch로 수신된 경우
-                    self.state.timeline.push(TimelineEntry::now(
-                        TimelineEntryKind::AssistantMessage(res.message.content.clone()),
+                    self.state.ui.timeline.push(TimelineEntry::now(
+                        TimelineEntryKind::AssistantMessage(
+                            res.message.content.clone().unwrap_or_default(),
+                        ),
                     ));
                 }
 
+                // [v0.1.0-beta.22] assistant_turn_count 삭제됨 (재감사 6차).
+                // 사유: 첫 턴 차단 로직이 제거되어 카운터만 증가하는 데드 코드였음.
+
                 // 응답에서 도구 호출 감지 및 처리 (tool_runtime.rs에 위임)
-                self.process_tool_calls_from_response(&res.message.content);
+                self.process_tool_calls_from_response(&res.message);
             }
 
             action::Action::ChatResponseErr(e) => {
                 // [v0.1.0-beta.16] 추론 완료: thinking indicator 비활성화
-                self.state.is_thinking = false;
+                self.state.runtime.is_thinking = false;
 
                 // 스트리밍 Delta가 있으면 에러 메시지로 변환
-                if let Some(last) = self.state.timeline.last_mut() {
+                if let Some(last) = self.state.ui.timeline.last_mut() {
                     if matches!(last.kind, TimelineEntryKind::AssistantDelta(_)) {
-                        last.kind = TimelineEntryKind::SystemNotice(format!("Provider Error: {}", e));
+                        last.kind =
+                            TimelineEntryKind::SystemNotice(format!("Provider Error: {}", e));
                     }
                 } else {
-                    self.state.timeline.push(TimelineEntry::now(
+                    self.state.ui.timeline.push(TimelineEntry::now(
                         TimelineEntryKind::SystemNotice(format!("Provider Error: {}", e)),
                     ));
                 }
 
                 self.state
+                    .domain
                     .session
                     .add_message(crate::providers::types::ChatMessage {
                         role: crate::providers::types::Role::System,
-                        content: format!("Provider Error: {}", e),
+                        content: Some(format!("Provider Error: {}", e)),
+                        tool_calls: None,
+                        tool_call_id: None,
                         pinned: false,
                     });
             }
 
             // === [v0.1.0-beta.18] 도구 라이프사이클 ===
-
-            action::Action::ToolQueued(ref tool_call) => {
+            action::Action::ToolQueued(ref tool_call, _) => {
                 // 타임라인에 "대기중" 카드 추가
-                let tool_name = format!("{:?}", tool_call).chars().take(30).collect::<String>();
-                self.state.timeline.push(TimelineEntry::now(
-                    TimelineEntryKind::ToolCard {
+                let tool_name = format!("{:?}", tool_call)
+                    .chars()
+                    .take(30)
+                    .collect::<String>();
+                self.state
+                    .ui
+                    .timeline
+                    .push(TimelineEntry::now(TimelineEntryKind::ToolCard {
                         tool_name,
                         status: ToolStatus::Queued,
                         summary: "권한 검사 중...".to_string(),
-                    },
-                ));
+                    }));
             }
 
             action::Action::ToolStarted(name) => {
                 // 마지막 ToolCard의 상태를 Running으로 갱신
-                for entry in self.state.timeline.iter_mut().rev() {
-                    if let TimelineEntryKind::ToolCard { ref tool_name, ref mut status, .. } = entry.kind
+                for entry in self.state.ui.timeline.iter_mut().rev() {
+                    if let TimelineEntryKind::ToolCard {
+                        ref tool_name,
+                        ref mut status,
+                        ..
+                    } = entry.kind
                         && (*tool_name == name || *status == ToolStatus::Queued)
                     {
                         *status = ToolStatus::Running;
@@ -189,7 +215,7 @@ impl App {
 
             action::Action::ToolOutputChunk(chunk) => {
                 // 원문 로그를 logs_buffer에 추가 (Inspector Logs 탭)
-                self.state.logs_buffer.push(chunk);
+                self.state.runtime.logs_buffer.push(chunk);
             }
 
             action::Action::ToolFinished(res) => {
@@ -199,25 +225,37 @@ impl App {
                     res.tool_name, res.exit_code, res.stdout, res.stderr
                 );
                 self.state
+                    .domain
                     .session
                     .add_message(crate::providers::types::ChatMessage {
                         role: crate::providers::types::Role::Tool,
-                        content,
+                        content: Some(content),
+                        tool_calls: None,
+                        tool_call_id: res.tool_call_id.clone(),
                         pinned: false,
                     });
 
                 // 원문은 logs_buffer에 보존
-                self.state.logs_buffer.push(format!(
+                self.state.runtime.logs_buffer.push(format!(
                     "[{}] exit={} stdout={} stderr={}",
-                    res.tool_name, res.exit_code,
+                    res.tool_name,
+                    res.exit_code,
                     res.stdout.chars().take(500).collect::<String>(),
                     res.stderr.chars().take(500).collect::<String>(),
                 ));
 
                 // 타임라인 ToolCard 상태를 Done/Error로 갱신
-                let final_status = if res.is_error { ToolStatus::Error } else { ToolStatus::Done };
-                for entry in self.state.timeline.iter_mut().rev() {
-                    if let TimelineEntryKind::ToolCard { ref mut status, ref mut summary, .. } = entry.kind
+                let final_status = if res.is_error {
+                    ToolStatus::Error
+                } else {
+                    ToolStatus::Done
+                };
+                for entry in self.state.ui.timeline.iter_mut().rev() {
+                    if let TimelineEntryKind::ToolCard {
+                        ref mut status,
+                        ref mut summary,
+                        ..
+                    } = entry.kind
                         && (*status == ToolStatus::Running || *status == ToolStatus::Queued)
                     {
                         *status = final_status.clone();
@@ -234,8 +272,11 @@ impl App {
 
             action::Action::ToolSummaryReady(new_summary) => {
                 // 외부에서 생성된 요약으로 마지막 ToolCard 갱신
-                for entry in self.state.timeline.iter_mut().rev() {
-                    if let TimelineEntryKind::ToolCard { ref mut summary, .. } = entry.kind {
+                for entry in self.state.ui.timeline.iter_mut().rev() {
+                    if let TimelineEntryKind::ToolCard {
+                        ref mut summary, ..
+                    } = entry.kind
+                    {
                         *summary = new_summary;
                         break;
                     }
@@ -244,27 +285,36 @@ impl App {
 
             action::Action::ToolError(e) => {
                 self.state
+                    .domain
                     .session
                     .add_message(crate::providers::types::ChatMessage {
                         role: crate::providers::types::Role::Tool,
-                        content: format!("[Tool Execution Failed] {}", e),
+                        content: Some(format!("[Tool Execution Failed] {}", e)),
+                        tool_calls: None,
+                        tool_call_id: None,
                         pinned: false,
                     });
 
                 // 타임라인 ToolCard 상태를 Error로 갱신
-                for entry in self.state.timeline.iter_mut().rev() {
-                    if let TimelineEntryKind::ToolCard { ref mut status, ref mut summary, .. } = entry.kind
+                for entry in self.state.ui.timeline.iter_mut().rev() {
+                    if let TimelineEntryKind::ToolCard {
+                        ref mut status,
+                        ref mut summary,
+                        ..
+                    } = entry.kind
                         && (*status == ToolStatus::Running || *status == ToolStatus::Queued)
                     {
                         *status = ToolStatus::Error;
-                        *summary = format!("실패: {}", e.chars().take(80).collect::<String>());
+                        *summary = format!(
+                            "실패: {}",
+                            e.to_string().chars().take(80).collect::<String>()
+                        );
                         break;
                     }
                 }
             }
 
             // === 기존 유지 ===
-
             action::Action::ModelsFetched(res, source) => {
                 self.handle_models_fetched(res, source);
             }
@@ -272,13 +322,17 @@ impl App {
                 self.handle_credential_validated(res);
             }
             action::Action::ContextSummaryOk(summary) => {
-                self.state.session.apply_summary(&summary);
-                self.state.timeline.push(TimelineEntry::now(
-                    TimelineEntryKind::CompactSummary(summary),
-                ));
+                self.state.domain.session.apply_summary(&summary);
+                self.state
+                    .ui
+                    .timeline
+                    .push(TimelineEntry::now(TimelineEntryKind::CompactSummary(
+                        summary,
+                    )));
             }
             action::Action::ContextSummaryErr(e) => {
                 self.state
+                    .domain
                     .session
                     .apply_summary(&format!("Fallback due to error: {}", e));
             }
@@ -309,48 +363,46 @@ impl App {
 
     /// [v0.1.0-beta.10] ModelsFetched 이벤트 처리: FetchSource에 따라 정확한 상태 슬롯으로 라우팅.
     /// 이전에는 config.is_open으로 판별하여, 팝업을 닫으면 결과가 wizard로 잘못 흐르는 결함이 있었음.
+    /// [v0.1.0-beta.21] 에러 타입을 String → ProviderError로 구조화.
     fn handle_models_fetched(
         &mut self,
-        res: Result<Vec<String>, String>,
+        res: Result<Vec<String>, crate::domain::error::ProviderError>,
         source: action::FetchSource,
     ) {
         match source {
             action::FetchSource::Config => {
-                self.state.config.is_loading = false;
+                self.state.ui.config.is_loading = false;
                 match res {
                     Ok(models) => {
-                        self.state.config.available_models = models;
-                        self.state.config.cursor_index = 0;
-                        self.state.config.err_msg = None;
-                        // [v0.1.0-beta.12] 8차 감사 H-1: rollback 스냅샷을 여기서 해제하면 안 됨.
-                        // 모델 목록 로드 성공 ≠ 사용자 선택 완료. Esc 취소가 가능하므로
-                        // rollback은 ModelList 선택이 완료되는 시점까지 유지해야 함.
+                        self.state.ui.config.available_models = models;
+                        self.state.ui.config.cursor_index = 0;
+                        self.state.ui.config.err_msg = None;
                     }
                     Err(e) => {
-                        self.state.config.err_msg = Some(e);
+                        self.state.ui.config.err_msg = Some(e.to_string());
                         // [v0.1.0-beta.10] 6차 감사 H-1: 검증 실패 시 in-memory 설정 롤백
                         if let (Some(old_p), Some(old_m)) = (
-                            self.state.config.rollback_provider.take(),
-                            self.state.config.rollback_model.take(),
-                        ) && let Some(s) = &mut self.state.settings
+                            self.state.ui.config.rollback_provider.take(),
+                            self.state.ui.config.rollback_model.take(),
+                        ) && let Some(s) = &mut self.state.domain.settings
                         {
                             s.default_provider = old_p;
                             s.default_model = old_m;
                         }
-                        self.state.config.active_popup = state::ConfigPopup::Dashboard;
+                        self.state.ui.config.active_popup = state::ConfigPopup::Dashboard;
                     }
                 }
             }
             action::FetchSource::Wizard => {
-                self.state.wizard.is_loading_models = false;
+                self.state.ui.wizard.is_loading_models = false;
                 match res {
                     Ok(models) => {
-                        self.state.wizard.available_models = models;
-                        self.state.wizard.cursor_index = 0;
-                        self.state.wizard.err_msg = None;
+                        self.state.ui.wizard.available_models = models;
+                        self.state.ui.wizard.cursor_index = 0;
+                        self.state.ui.wizard.err_msg = None;
                     }
                     Err(e) => {
-                        self.state.wizard.err_msg = Some(e);
+                        self.state.ui.wizard.err_msg = Some(e.to_string());
                     }
                 }
             }
@@ -358,22 +410,27 @@ impl App {
     }
 
     /// CredentialValidated 이벤트 처리: 검증 성공 시 모델 목록 조회 진행, 실패 시 에러 표시.
-    fn handle_credential_validated(&mut self, res: Result<(), String>) {
+    /// [v0.1.0-beta.21] 에러 타입을 String → ProviderError로 구조화.
+    fn handle_credential_validated(
+        &mut self,
+        res: Result<(), crate::domain::error::ProviderError>,
+    ) {
         match res {
             Ok(()) => {
                 // 검증 성공: 이제 fetch_models 진행
-                self.state.wizard.step = state::WizardStep::ModelSelection;
-                self.state.wizard.is_loading_models = true;
-                self.state.wizard.cursor_index = 0;
+                self.state.ui.wizard.step = state::WizardStep::ModelSelection;
+                self.state.ui.wizard.is_loading_models = true;
+                self.state.ui.wizard.cursor_index = 0;
 
                 let tx = self.action_tx.clone();
                 let provider = self
                     .state
+                    .ui
                     .wizard
                     .selected_provider
                     .clone()
                     .unwrap_or(crate::domain::provider::ProviderKind::OpenRouter);
-                let api_key = self.state.wizard.api_key_input.clone();
+                let api_key = self.state.ui.wizard.api_key_input.clone();
 
                 tokio::spawn(async move {
                     let adapter = crate::providers::registry::get_adapter(&provider);
@@ -387,9 +444,12 @@ impl App {
                                 .await;
                         }
                         Err(e) => {
+                            // [v0.1.0-beta.21] ProviderError 구조화
                             let _ = tx
                                 .send(event_loop::Event::Action(action::Action::ModelsFetched(
-                                    Err(e.to_string()),
+                                    Err(crate::domain::error::ProviderError::NetworkFailure(
+                                        e.to_string(),
+                                    )),
                                     action::FetchSource::Wizard,
                                 )))
                                 .await;
@@ -399,9 +459,9 @@ impl App {
             }
             Err(e) => {
                 // 검증 실패: ApiKeyInput 단계로 복귀하고 에러 표시
-                self.state.wizard.is_loading_models = false;
-                self.state.wizard.step = state::WizardStep::ApiKeyInput;
-                self.state.wizard.err_msg = Some(format!("API 키 검증 실패: {}", e));
+                self.state.ui.wizard.is_loading_models = false;
+                self.state.ui.wizard.step = state::WizardStep::ApiKeyInput;
+                self.state.ui.wizard.err_msg = Some(format!("API 키 검증 실패: {}", e));
             }
         }
     }
@@ -417,40 +477,40 @@ impl App {
             KeyCode::Char('i') | KeyCode::Char('I')
                 if key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                self.state.show_inspector = !self.state.show_inspector;
+                self.state.ui.show_inspector = !self.state.ui.show_inspector;
             }
             KeyCode::Esc => {
-                if self.state.slash_menu.is_open {
+                if self.state.ui.slash_menu.is_open {
                     // [v0.1.0-beta.16] 슬래시 메뉴 닫기
-                    self.state.slash_menu.is_open = false;
-                    self.state.slash_menu.filter.clear();
-                } else if self.state.fuzzy.is_open {
-                    self.state.fuzzy.is_open = false;
-                } else if self.state.config.is_open {
-                    if self.state.config.active_popup != state::ConfigPopup::Dashboard {
+                    self.state.ui.slash_menu.is_open = false;
+                    self.state.ui.slash_menu.filter.clear();
+                } else if self.state.ui.fuzzy.is_open {
+                    self.state.ui.fuzzy.is_open = false;
+                } else if self.state.ui.config.is_open {
+                    if self.state.ui.config.active_popup != state::ConfigPopup::Dashboard {
                         // [v0.1.0-beta.11] 7차 감사 H-2: 사용자 취소 시 롤백.
                         // ProviderList→ModelList 진행 중 Esc로 돌아오면,
                         // in-memory settings를 이전 provider/model로 복구해야 함.
                         if let (Some(old_p), Some(old_m)) = (
-                            self.state.config.rollback_provider.take(),
-                            self.state.config.rollback_model.take(),
-                        ) && let Some(s) = &mut self.state.settings
+                            self.state.ui.config.rollback_provider.take(),
+                            self.state.ui.config.rollback_model.take(),
+                        ) && let Some(s) = &mut self.state.domain.settings
                         {
                             s.default_provider = old_p;
                             s.default_model = old_m;
                         }
-                        self.state.config.err_msg = None;
-                        self.state.config.active_popup = state::ConfigPopup::Dashboard;
+                        self.state.ui.config.err_msg = None;
+                        self.state.ui.config.active_popup = state::ConfigPopup::Dashboard;
                     } else {
-                        self.state.config.is_open = false;
-                        self.state.config.err_msg = None;
+                        self.state.ui.config.is_open = false;
+                        self.state.ui.config.err_msg = None;
                     }
-                } else if self.state.is_wizard_open && self.state.wizard.err_msg.is_some() {
+                } else if self.state.ui.is_wizard_open && self.state.ui.wizard.err_msg.is_some() {
                     // [v0.1.0-beta.8] M-1: Error state에서 Esc 시 Wizard 홈으로 회귀
-                    self.state.wizard.step = state::WizardStep::ProviderSelection;
-                    self.state.wizard.err_msg = None;
-                    self.state.wizard.api_key_input.clear();
-                    self.state.wizard.cursor_index = 0;
+                    self.state.ui.wizard.step = state::WizardStep::ProviderSelection;
+                    self.state.ui.wizard.err_msg = None;
+                    self.state.ui.wizard.api_key_input.clear();
+                    self.state.ui.wizard.cursor_index = 0;
                 } else {
                     self.state.should_quit = true;
                 }
@@ -470,13 +530,31 @@ impl App {
             KeyCode::Enter => {
                 self.handle_enter_key();
             }
-            KeyCode::Tab => {
-                if !self.state.is_wizard_open {
+            KeyCode::Tab | KeyCode::BackTab => {
+                if !self.state.ui.is_wizard_open {
                     use crate::domain::session::AppMode;
-                    self.state.session.mode = match self.state.session.mode {
+                    self.state.domain.session.mode = match self.state.domain.session.mode {
                         AppMode::Plan => AppMode::Run,
                         AppMode::Run => AppMode::Plan,
                     };
+                }
+            }
+            // [v0.1.0-beta.22] 타임라인 스크롤: PageUp/PageDown으로 긴 응답을 탐색.
+            // 위자드, Fuzzy, 설정 팝업이 열려 있을 때는 동작하지 않음.
+            KeyCode::PageUp => {
+                if !self.state.ui.is_wizard_open
+                    && !self.state.ui.fuzzy.is_open
+                    && !self.state.ui.config.is_open
+                {
+                    self.state.ui.timeline_scroll = self.state.ui.timeline_scroll.saturating_add(5);
+                }
+            }
+            KeyCode::PageDown => {
+                if !self.state.ui.is_wizard_open
+                    && !self.state.ui.fuzzy.is_open
+                    && !self.state.ui.config.is_open
+                {
+                    self.state.ui.timeline_scroll = self.state.ui.timeline_scroll.saturating_sub(5);
                 }
             }
             _ => {}
@@ -485,159 +563,219 @@ impl App {
 
     /// 문자 입력 처리: 승인 대기 → 위자드 → Slash Menu → Fuzzy Finder → Composer 순으로 라우팅.
     fn handle_char_input(&mut self, c: char) {
-        if self.state.approval.pending_tool.is_some() {
+        if self.state.runtime.approval.pending_tool.is_some() {
             if c == 'y' {
                 self.handle_tool_approval(true);
             } else if c == 'n' {
                 self.handle_tool_approval(false);
             }
-        } else if self.state.is_wizard_open {
-            if self.state.wizard.step == state::WizardStep::ApiKeyInput {
-                self.state.wizard.api_key_input.push(c);
+        } else if self.state.ui.is_wizard_open {
+            if self.state.ui.wizard.step == state::WizardStep::ApiKeyInput {
+                self.state.ui.wizard.api_key_input.push(c);
             }
-        } else if self.state.slash_menu.is_open {
+        } else if self.state.ui.slash_menu.is_open {
             // [v0.1.0-beta.16] 슬래시 메뉴 활성 상태: 필터 문자 추가
-            self.state.slash_menu.filter.push(c);
-            self.state.slash_menu.update_matches();
-        } else if self.state.fuzzy.is_open {
-            self.state.fuzzy.input.push(c);
+            self.state.ui.slash_menu.filter.push(c);
+            self.state.ui.slash_menu.update_matches();
+        } else if self.state.ui.fuzzy.is_open {
+            self.state.ui.fuzzy.input.push(c);
             self.update_fuzzy_matches();
         } else {
-            if c == '/' && self.state.composer.input_buffer.is_empty() {
+            if c == '/' && self.state.ui.composer.input_buffer.is_empty() {
                 // [v0.1.0-beta.16] 빈 Composer에서 / 입력 시 슬래시 메뉴 활성화
-                self.state.slash_menu.is_open = true;
-                self.state.slash_menu.filter.clear();
-                self.state.slash_menu.cursor = 0;
-                self.state.slash_menu.update_matches();
+                self.state.ui.slash_menu.is_open = true;
+                self.state.ui.slash_menu.filter.clear();
+                self.state.ui.slash_menu.cursor = 0;
+                self.state.ui.slash_menu.update_matches();
             } else if c == '@' {
-                self.state.fuzzy.is_open = true;
-                self.state.fuzzy.input.clear();
-                self.state.fuzzy.matches.clear();
-                self.state.fuzzy.cursor = 0;
+                self.state.ui.fuzzy.is_open = true;
+                self.state.ui.fuzzy.mode = crate::app::state::FuzzyMode::Files;
+                self.state.ui.fuzzy.input.clear();
+                self.state.ui.fuzzy.matches.clear();
+                self.state.ui.fuzzy.cursor = 0;
+                self.update_fuzzy_matches();
+            } else if c == '!' && self.state.ui.composer.input_buffer.is_empty() {
+                self.state.ui.composer.input_buffer.push(c); // ! 유지
+                self.state.ui.fuzzy.is_open = true;
+                self.state.ui.fuzzy.mode = crate::app::state::FuzzyMode::Macros;
+                self.state.ui.fuzzy.input.clear();
+                self.state.ui.fuzzy.matches.clear();
+                self.state.ui.fuzzy.cursor = 0;
                 self.update_fuzzy_matches();
             } else {
-                self.state.composer.input_buffer.push(c);
+                self.state.ui.composer.input_buffer.push(c);
             }
         }
     }
 
     /// Up 화살표 키 처리: Slash Menu, Fuzzy Finder, Config, Wizard 각 모드별 커서 이동.
     fn handle_up_key(&mut self) {
-        if self.state.slash_menu.is_open {
-            if self.state.slash_menu.cursor > 0 {
-                self.state.slash_menu.cursor -= 1;
+        if self.state.ui.slash_menu.is_open {
+            if self.state.ui.slash_menu.cursor > 0 {
+                self.state.ui.slash_menu.cursor -= 1;
             }
-        } else if self.state.fuzzy.is_open {
-            if self.state.fuzzy.cursor > 0 {
-                self.state.fuzzy.cursor -= 1;
+        } else if self.state.ui.fuzzy.is_open {
+            if self.state.ui.fuzzy.cursor > 0 {
+                self.state.ui.fuzzy.cursor -= 1;
             }
-        } else if self.state.config.is_open && self.state.config.cursor_index > 0 {
-            self.state.config.cursor_index -= 1;
-        } else if self.state.is_wizard_open && self.state.wizard.cursor_index > 0 {
-            self.state.wizard.cursor_index -= 1;
+        } else if self.state.ui.config.is_open && self.state.ui.config.cursor_index > 0 {
+            self.state.ui.config.cursor_index -= 1;
+        } else if self.state.ui.is_wizard_open && self.state.ui.wizard.cursor_index > 0 {
+            self.state.ui.wizard.cursor_index -= 1;
+        } else if !self.state.ui.composer.history.is_empty() {
+            // Composer History (Up)
+            let len = self.state.ui.composer.history.len();
+            let new_idx = match self.state.ui.composer.history_idx {
+                Some(idx) => idx.saturating_sub(1),
+                None => len.saturating_sub(1),
+            };
+            self.state.ui.composer.history_idx = Some(new_idx);
+            self.state.ui.composer.input_buffer = self.state.ui.composer.history[new_idx].clone();
         }
     }
 
     /// Down 화살표 키 처리: 각 모드별 리스트의 최대값까지 커서 이동.
     fn handle_down_key(&mut self) {
-        if self.state.slash_menu.is_open {
-            if self.state.slash_menu.cursor + 1 < self.state.slash_menu.matches.len() {
-                self.state.slash_menu.cursor += 1;
+        if self.state.ui.slash_menu.is_open {
+            if self.state.ui.slash_menu.cursor + 1 < self.state.ui.slash_menu.matches.len() {
+                self.state.ui.slash_menu.cursor += 1;
             }
-        } else if self.state.fuzzy.is_open {
-            if self.state.fuzzy.cursor + 1 < self.state.fuzzy.matches.len().min(3) {
-                self.state.fuzzy.cursor += 1;
+        } else if self.state.ui.fuzzy.is_open {
+            if self.state.ui.fuzzy.cursor + 1 < self.state.ui.fuzzy.matches.len().min(3) {
+                self.state.ui.fuzzy.cursor += 1;
             }
-        } else if self.state.config.is_open {
-            let max = match self.state.config.active_popup {
+        } else if self.state.ui.config.is_open {
+            let max = match self.state.ui.config.active_popup {
                 state::ConfigPopup::Dashboard => 2,
                 state::ConfigPopup::ProviderList => 1,
-                state::ConfigPopup::ModelList => {
-                    self.state.config.available_models.len().saturating_sub(1)
-                }
+                state::ConfigPopup::ModelList => self
+                    .state
+                    .ui
+                    .config
+                    .available_models
+                    .len()
+                    .saturating_sub(1),
             };
-            if self.state.config.cursor_index < max {
-                self.state.config.cursor_index += 1;
+            if self.state.ui.config.cursor_index < max {
+                self.state.ui.config.cursor_index += 1;
             }
-        } else if self.state.is_wizard_open {
-            let max = match self.state.wizard.step {
+        } else if self.state.ui.is_wizard_open {
+            let max = match self.state.ui.wizard.step {
                 state::WizardStep::ProviderSelection => 1,
-                state::WizardStep::ModelSelection => {
-                    self.state.wizard.available_models.len().saturating_sub(1)
-                }
+                state::WizardStep::ModelSelection => self
+                    .state
+                    .ui
+                    .wizard
+                    .available_models
+                    .len()
+                    .saturating_sub(1),
                 _ => 0,
             };
-            if self.state.wizard.cursor_index < max {
-                self.state.wizard.cursor_index += 1;
+            if self.state.ui.wizard.cursor_index < max {
+                self.state.ui.wizard.cursor_index += 1;
+            }
+        } else if let Some(idx) = self.state.ui.composer.history_idx {
+            // Composer History (Down)
+            let len = self.state.ui.composer.history.len();
+            if idx + 1 < len {
+                self.state.ui.composer.history_idx = Some(idx + 1);
+                self.state.ui.composer.input_buffer =
+                    self.state.ui.composer.history[idx + 1].clone();
+            } else {
+                self.state.ui.composer.history_idx = None;
+                self.state.ui.composer.input_buffer.clear();
             }
         }
     }
 
     /// Backspace 키 처리: Slash Menu, Fuzzy Finder, Wizard API 키, Composer 각각의 버퍼 삭제.
     fn handle_backspace(&mut self) {
-        if self.state.slash_menu.is_open {
+        if self.state.ui.slash_menu.is_open {
             // [v0.1.0-beta.16] 필터가 비면 메뉴 닫기, 아니면 필터 문자 삭제
-            if self.state.slash_menu.filter.is_empty() {
-                self.state.slash_menu.is_open = false;
+            if self.state.ui.slash_menu.filter.is_empty() {
+                self.state.ui.slash_menu.is_open = false;
             } else {
-                self.state.slash_menu.filter.pop();
-                self.state.slash_menu.update_matches();
+                self.state.ui.slash_menu.filter.pop();
+                self.state.ui.slash_menu.update_matches();
             }
-        } else if self.state.fuzzy.is_open {
-            if self.state.fuzzy.input.is_empty() {
-                self.state.fuzzy.is_open = false;
+        } else if self.state.ui.fuzzy.is_open {
+            if self.state.ui.fuzzy.input.is_empty() {
+                self.state.ui.fuzzy.is_open = false;
             } else {
-                self.state.fuzzy.input.pop();
+                self.state.ui.fuzzy.input.pop();
                 self.update_fuzzy_matches();
             }
-        } else if self.state.is_wizard_open {
-            if self.state.wizard.step == state::WizardStep::ApiKeyInput {
-                self.state.wizard.api_key_input.pop();
+        } else if self.state.ui.is_wizard_open {
+            if self.state.ui.wizard.step == state::WizardStep::ApiKeyInput {
+                self.state.ui.wizard.api_key_input.pop();
             }
         } else {
-            self.state.composer.input_buffer.pop();
+            self.state.ui.composer.input_buffer.pop();
         }
     }
 
     /// Enter 키 처리: Slash Menu 선택 → Fuzzy Finder 선택 → Config 팝업 → Wizard → Composer 제출 순으로 라우팅.
     fn handle_enter_key(&mut self) {
-        if self.state.slash_menu.is_open {
+        if self.state.ui.slash_menu.is_open {
             // [v0.1.0-beta.16] 슬래시 메뉴에서 명령어 선택 → 바로 실행
-            if !self.state.slash_menu.matches.is_empty() {
-                let (cmd, _) = self.state.slash_menu.matches[self.state.slash_menu.cursor];
+            if !self.state.ui.slash_menu.matches.is_empty() {
+                let (cmd, _) = self.state.ui.slash_menu.matches[self.state.ui.slash_menu.cursor];
                 let cmd_str = cmd.to_string();
-                self.state.slash_menu.is_open = false;
-                self.state.slash_menu.filter.clear();
+                self.state.ui.slash_menu.is_open = false;
+                self.state.ui.slash_menu.filter.clear();
                 self.handle_slash_command(&cmd_str);
             } else {
-                self.state.slash_menu.is_open = false;
+                self.state.ui.slash_menu.is_open = false;
             }
-        } else if self.state.fuzzy.is_open {
-            // Fuzzy Finder에서 파일 선택 후 Composer에 참조 주입
-            if !self.state.fuzzy.matches.is_empty() {
-                let selected = &self.state.fuzzy.matches[self.state.fuzzy.cursor];
-                self.state
-                    .composer
-                    .input_buffer
-                    .push_str(&format!("@{} ", selected));
+        } else if self.state.ui.fuzzy.is_open {
+            if !self.state.ui.fuzzy.matches.is_empty() {
+                let selected = &self.state.ui.fuzzy.matches[self.state.ui.fuzzy.cursor];
+                match self.state.ui.fuzzy.mode {
+                    crate::app::state::FuzzyMode::Files => {
+                        self.state
+                            .ui
+                            .composer
+                            .input_buffer
+                            .push_str(&format!("@{} ", selected));
+                    }
+                    crate::app::state::FuzzyMode::Macros => {
+                        // "build      (cargo build)" -> "cargo build"
+                        let cmd = selected
+                            .split('(')
+                            .nth(1)
+                            .unwrap_or("")
+                            .trim_end_matches(')');
+                        self.state.ui.composer.input_buffer.clear();
+                        self.state
+                            .ui
+                            .composer
+                            .input_buffer
+                            .push_str(&format!("!{}", cmd));
+                    }
+                }
             }
-            self.state.fuzzy.is_open = false;
-        } else if self.state.config.is_open {
+            self.state.ui.fuzzy.is_open = false;
+        } else if self.state.ui.config.is_open {
             // Config 팝업 Enter 처리 (wizard_controller.rs에 위임)
             self.handle_config_enter();
-        } else if self.state.is_wizard_open {
+        } else if self.state.ui.is_wizard_open {
             // 위자드 Enter 처리 (wizard_controller.rs에 위임)
             self.handle_wizard_enter();
         } else {
             // Composer 제출: 슬래시 커맨드, 직접 셸, 자연어 입력 분기
-            let text = self.state.composer.input_buffer.trim().to_string();
+            let text = self.state.ui.composer.input_buffer.trim().to_string();
             if !text.is_empty() {
-                self.state.composer.input_buffer.clear();
+                self.state.ui.composer.input_buffer.clear();
+                self.state.ui.composer.history_idx = None;
 
                 if text.starts_with('/') {
                     self.handle_slash_command(&text);
                 } else if let Some(stripped) = text.strip_prefix('!') {
-                    self.handle_direct_shell_execution(stripped.trim().to_string());
+                    let cmd_str = stripped.trim().to_string();
+                    if !cmd_str.is_empty() {
+                        self.state.ui.composer.history.push(format!("!{}", cmd_str));
+                    }
+                    self.handle_direct_shell_execution(cmd_str);
                 } else {
                     self.dispatch_chat_request(text);
                 }
@@ -645,28 +783,70 @@ impl App {
         }
     }
 
-    /// Fuzzy Finder 매칭 로직: 현재 디렉터리의 파일 목록을 입력 문자열로 필터링.
-    /// 향후 재귀적 탐색 및 스코어링 알고리즘(Levenshtein, Substring) 적용 예정.
+    /// Fuzzy Finder 매칭 로직
     fn update_fuzzy_matches(&mut self) {
-        let input = self.state.fuzzy.input.clone();
-
+        let input = self.state.ui.fuzzy.input.clone();
         let mut matches = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(".") {
-            for entry in entries.flatten() {
-                if let Ok(file_type) = entry.file_type() {
-                    if !file_type.is_file() {
-                        continue;
+
+        match self.state.ui.fuzzy.mode {
+            crate::app::state::FuzzyMode::Files => {
+                // 1. 특수 멘션 먼저 추가
+                if input.is_empty() || "workspace".contains(&input.to_lowercase()) {
+                    matches.push("workspace".to_string());
+                }
+                if input.is_empty() || "terminal".contains(&input.to_lowercase()) {
+                    matches.push("terminal".to_string());
+                }
+
+                // 2. ignore 크레이트를 활용한 재귀적 파일 탐색
+                use ignore::WalkBuilder;
+                let walker = WalkBuilder::new(".").hidden(true).build();
+
+                for entry in walker.flatten() {
+                    if let Some(file_type) = entry.file_type() {
+                        if !file_type.is_file() {
+                            continue;
+                        }
+
+                        let path_str = entry.path().to_string_lossy().into_owned();
+                        let clean_path = if let Some(stripped) = path_str.strip_prefix("./") {
+                            stripped.to_string()
+                        } else {
+                            path_str
+                        };
+
+                        if input.is_empty()
+                            || clean_path.to_lowercase().contains(&input.to_lowercase())
+                        {
+                            matches.push(clean_path);
+                            if matches.len() > 100 {
+                                break;
+                            }
+                        }
                     }
-                    let name = entry.file_name().into_string().unwrap_or_default();
+                }
+                matches.sort();
+            }
+            crate::app::state::FuzzyMode::Macros => {
+                // ! 모드 매크로 리스트
+                let macros = vec![
+                    ("build", "cargo build"),
+                    ("test", "cargo test"),
+                    ("run", "cargo run"),
+                    ("check", "cargo check"),
+                    ("fmt", "cargo fmt"),
+                    ("clippy", "cargo clippy"),
+                ];
+
+                for (name, cmd) in macros {
                     if input.is_empty() || name.to_lowercase().contains(&input.to_lowercase()) {
-                        matches.push(name);
+                        matches.push(format!("{:<10} ({})", name, cmd));
                     }
                 }
             }
         }
 
-        matches.sort();
-        self.state.fuzzy.matches = matches;
-        self.state.fuzzy.cursor = 0;
+        self.state.ui.fuzzy.matches = matches;
+        self.state.ui.fuzzy.cursor = 0;
     }
 }

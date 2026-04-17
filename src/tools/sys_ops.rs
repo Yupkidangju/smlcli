@@ -27,6 +27,7 @@ pub(crate) fn list_dir(path: &str, depth: Option<usize>) -> Result<ToolResult> {
         stderr: String::new(),
         exit_code: 0,
         is_error: false,
+        tool_call_id: None,
     })
 }
 
@@ -53,7 +54,9 @@ fn list_dir_recursive(
     items.sort_by(|a, b| {
         let a_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let b_dir = b.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        b_dir.cmp(&a_dir).then_with(|| a.file_name().cmp(&b.file_name()))
+        b_dir
+            .cmp(&a_dir)
+            .then_with(|| a.file_name().cmp(&b.file_name()))
     });
 
     let total = items.len();
@@ -81,7 +84,14 @@ fn list_dir_recursive(
                 format!("{}│   ", prefix)
             };
             let child_path = format!("{}/{}", path, name);
-            list_dir_recursive(&child_path, max_depth, current_depth + 1, &child_prefix, out, count);
+            list_dir_recursive(
+                &child_path,
+                max_depth,
+                current_depth + 1,
+                &child_prefix,
+                out,
+                count,
+            );
         }
     }
 }
@@ -107,5 +117,186 @@ pub(crate) fn sys_info() -> Result<ToolResult> {
         stderr: String::new(),
         exit_code: 0,
         is_error: false,
+        tool_call_id: None,
     })
+}
+
+// ==========================================
+// Phase 13: Agentic Autonomy Tool Registry
+// ==========================================
+
+use crate::domain::error::ToolError;
+use crate::domain::permissions::PermissionResult;
+use crate::domain::settings::PersistedSettings;
+use crate::tools::registry::{Tool, ToolContext};
+use async_trait::async_trait;
+use serde_json::{Value, json};
+
+pub struct ListDirTool;
+
+#[async_trait]
+impl Tool for ListDirTool {
+    fn name(&self) -> &'static str {
+        "ListDir"
+    }
+
+    fn description(&self) -> &'static str {
+        "Lists directory contents recursively."
+    }
+
+    fn schema(&self) -> Value {
+        json!({
+            "type": "function",
+            "function": {
+                "name": "ListDir",
+                "description": "List directory contents in a tree format. Returns max 1000 items.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "depth": { "type": "integer", "description": "Max depth to recurse. Default 2." }
+                    },
+                    "required": ["path"]
+                }
+            }
+        })
+    }
+
+    fn check_permission(&self, _args: &Value, _settings: &PersistedSettings) -> PermissionResult {
+        PermissionResult::Allow
+    }
+
+    async fn execute(&self, args: Value, _ctx: &ToolContext<'_>) -> Result<ToolResult, ToolError> {
+        let path = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let depth = args
+            .get("depth")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+        list_dir(&path, depth).map_err(|e| ToolError::ExecutionFailure(e.to_string()))
+    }
+}
+
+pub struct SysInfoTool;
+
+#[async_trait]
+impl Tool for SysInfoTool {
+    fn name(&self) -> &'static str {
+        "SysInfo"
+    }
+
+    fn description(&self) -> &'static str {
+        "Returns basic system info."
+    }
+
+    fn schema(&self) -> Value {
+        json!({
+            "type": "function",
+            "function": {
+                "name": "SysInfo",
+                "description": "Get OS, Memory, and CPU count.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        })
+    }
+
+    fn check_permission(&self, _args: &Value, _settings: &PersistedSettings) -> PermissionResult {
+        PermissionResult::Allow
+    }
+
+    async fn execute(&self, _args: Value, _ctx: &ToolContext<'_>) -> Result<ToolResult, ToolError> {
+        sys_info().map_err(|e| ToolError::ExecutionFailure(e.to_string()))
+    }
+}
+
+pub struct StatTool;
+
+#[async_trait]
+impl Tool for StatTool {
+    fn name(&self) -> &'static str {
+        "Stat"
+    }
+
+    fn description(&self) -> &'static str {
+        "Gets file or directory metadata."
+    }
+
+    fn schema(&self) -> Value {
+        json!({
+            "type": "function",
+            "function": {
+                "name": "Stat",
+                "description": "Get file or directory metadata (size, modified time, readonly, type).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }
+            }
+        })
+    }
+
+    fn check_permission(&self, _args: &Value, _settings: &PersistedSettings) -> PermissionResult {
+        PermissionResult::Allow
+    }
+
+    async fn execute(&self, args: Value, _ctx: &ToolContext<'_>) -> Result<ToolResult, ToolError> {
+        let path = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        match std::fs::metadata(&path) {
+            Ok(meta) => {
+                let file_type = if meta.is_dir() {
+                    "디렉토리"
+                } else if meta.is_symlink() {
+                    "심볼릭 링크"
+                } else {
+                    "파일"
+                };
+                let size = meta.len();
+                let modified = meta
+                    .modified()
+                    .map(|t| {
+                        t.duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                    })
+                    .unwrap_or(0);
+                let readonly = meta.permissions().readonly();
+
+                let info = format!(
+                    "경로: {}\n유형: {}\n크기: {} bytes\n수정일: {} (UNIX epoch)\n읽기전용: {}",
+                    path, file_type, size, modified, readonly
+                );
+
+                Ok(ToolResult {
+                    tool_name: "Stat".to_string(),
+                    stdout: info,
+                    stderr: String::new(),
+                    exit_code: 0,
+                    is_error: false,
+                    tool_call_id: None,
+                })
+            }
+            Err(e) => Ok(ToolResult {
+                tool_name: "Stat".to_string(),
+                stdout: String::new(),
+                stderr: format!("파일 정보 조회 실패: {}", e),
+                exit_code: 1,
+                is_error: true,
+                tool_call_id: None,
+            }),
+        }
+    }
 }

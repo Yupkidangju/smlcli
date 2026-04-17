@@ -230,3 +230,246 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
 ### 남은 이관 항목
 - ⏳ Structured Tool Call (Provider별 native tool call contract)
 - ⏳ Diff 접기/펼치기 UI
+
+---
+
+## Phase 11: 감사 대응 — 안정성 복원 (v0.1.0-beta.20)
+
+**상태**: ✅ 구현 완료
+**완료 일시**: 2026-04-17
+**관련 문서**: audit_report_20260416_1600.report / designs.md §6.7, §21 / DESIGN_DECISIONS.md ADR-011
+
+### 구현 항목 — 5건
+
+#### HIGH-1: 세션 로거 회귀 복구
+- ✅ `SessionLogger::from_file()` 복원: 기존 JSONL 파일로부터 로거 생성
+- ✅ `SessionLogger::restore_messages()` 복원: JSONL → Vec<ChatMessage> 파싱 (손상 라인 건너뛰기)
+- ✅ 동기 `append_message()` 복원: 테스트 및 이벤트 루프 내 안전한 호출용
+- ✅ 비동기 API는 `append_message_async()`로 이름 변경하여 유지
+
+#### HIGH-2: 세션 영속성 런타임 실행 불가 수정
+- ✅ `chat_runtime.rs`: `logger.append_message(&msg)` — 동기 API + 에러 로깅
+- ✅ `mod.rs`: `logger.append_message(&res.message)` — 동기 API + 에러 로깅
+- ✅ clippy `collapsible_if` → `let chain` 패턴으로 축약
+
+#### MEDIUM-1: Inspector Search 탭 실제 구현
+- ✅ 타임라인 전체 대소문자 무시 텍스트 검색 엔진
+- ✅ Composer 입력 버퍼를 검색어로 사용
+- ✅ 검색 결과 최대 50건 표시, 결과 건수 요약
+- ✅ TimelineEntryKind별 라벨/색상 차등 적용 (User/AI/Sys/Tool/Appr/Σ)
+
+#### MEDIUM-2: 테마 시스템 구현
+- ✅ `PersistedSettings.theme` 필드 추가 (`serde(default = "default_theme")`)
+- ✅ `palette.rs`: `Palette` 구조체 + `DEFAULT_PALETTE` + `HIGH_CONTRAST_PALETTE` + `get_palette()`
+- ✅ `/theme` 슬래시 커맨드 핸들러 (`command_router.rs`)
+- ✅ `SlashMenuState::ALL_COMMANDS` 11→12개 (`/theme` 추가)
+
+#### MEDIUM-3: thiserror 에러 체계 연동
+- ✅ `config_store::load_config()`에서 `ConfigError::NotFound`/`ParseFailure` 연결
+- ✅ `map_err` 패턴으로 anyhow 호환성 유지하며 구조화
+
+### 추가 Clippy/품질 수정
+- ✅ `WizardStep`, `ConfigPopup`에 `Debug` derive 추가
+- ✅ `wizard_controller.rs`: 미사용 변수(`old_policy`, `old_model`, `action_tx`) 수정
+- ✅ `layout.rs`: `tick_count % 2 == 0` → `tick_count.is_multiple_of(2)`
+
+### 품질 검증 결과
+```
+cargo build   ✅ 성공
+cargo test    ✅ 28/28 통과 (0 failed)
+cargo clippy  ✅ 0 warnings (-D warnings 게이트 통과)
+```
+
+---
+
+## Phase 11-B: 재감사 대응 — 렌더링 연결 및 에러 구조화 (v0.1.0-beta.21)
+
+**상태**: ✅ 구현 완료
+**완료 일시**: 2026-04-17
+**관련 문서**: DESIGN_DECISIONS.md ADR-012 / designs.md §21.4
+
+### 구현 항목 — 3건
+
+#### HIGH-1: 테마 전환 렌더링 실연결
+- ✅ `AppState::palette()` 헬퍼 메서드 추가 (현재 테마에 맞는 `&'static Palette` 반환)
+- ✅ `layout.rs`: 50+곳의 정적 `pal::CONSTANT` → `state.palette().field` 동적 참조 전환
+- ✅ `inspector_tabs.rs`: render_logs/render_search/render_recent 전면 전환
+- ✅ `config_dashboard.rs`: `Color::Yellow` → `palette().warning` 전환
+- ✅ `setting_wizard.rs`: `Color::Cyan` → `palette().info` 전환
+
+#### MEDIUM-1: 에러 타입 전면 구조화
+- ✅ `Action::ChatResponseErr(String)` → `ChatResponseErr(ProviderError)`
+- ✅ `Action::ToolError(String)` → `ToolError(ToolError)`
+- ✅ `Action::ModelsFetched(Err(String))` → `ModelsFetched(Err(ProviderError))`
+- ✅ `Action::CredentialValidated(Err(String))` → `CredentialValidated(Err(ProviderError))`
+- ✅ 에러 타입 4개에 `Clone` derive 추가, `Io`/`Unknown` variant를 `String` 기반으로 단순화
+- ✅ 발송측 10곳 + 수신 핸들러 2곳 시그니처 전환
+
+#### LOW-1: /help 도움말 갱신
+- ✅ `/help` 출력에 `/theme 테마 전환 (Toggle Theme)` 항목 추가
+
+### 품질 검증 결과
+```
+cargo build   ✅ 성공
+cargo test    ✅ 28/28 통과 (0 failed)
+cargo clippy  ✅ 0 warnings (-D warnings 게이트 통과)
+```
+
+### 남은 이관 항목
+- ⏳ Structured Tool Call (Provider별 native tool call contract)
+- ⏳ Diff 접기/펼치기 UI
+- ⏳ `resolve_credentials()` 반환 타입 `String` → `ProviderError` 마이그레이션
+
+---
+
+## Phase 12: 하네스 구조/보안/UX 감사 대응 (v0.1.0-beta.22)
+
+**상태**: ✅ 구현 완료
+**완료 일시**: 2026-04-17
+**관련 문서**: DESIGN_DECISIONS.md ADR-013 / spec.md §3.2
+
+### 구현 항목 — 7건
+
+#### HIGH-1: 도구 호출 격리 계층
+- ✅ bare JSON 차단 (fenced가 아닌 raw JSON은 도구로 인식하지 않음)
+- ✅ `"tool"` 키 존재 1차 필터
+- ✅ ToolCall serde 역직렬화 2차 필터
+- ✅ ExecShell 빈 명령 3차 필터
+
+#### HIGH-2: 빈 ExecShell 차단
+- ✅ `PermissionEngine::check()` 진입 직후 `command.trim().is_empty()` → 즉시 Deny
+- ✅ `is_safe_command()` 빈 토큰 `true` → `false` 수정
+
+#### HIGH-3: 전체 UI Wrap + 스크롤
+- ✅ 타임라인: `Wrap { trim: false }` + `scroll((timeline_scroll, 0))`
+- ✅ 컴포저: `Wrap { trim: false }`
+- ✅ config_dashboard: `Wrap { trim: false }`
+- ✅ setting_wizard: `Wrap { trim: false }`
+- ✅ `UiState::timeline_scroll: u16` 필드 추가
+
+#### MEDIUM-1: PLAN/RUN 모드 시스템 프롬프트 주입
+- ✅ `dispatch_chat_request()`에서 모드별 시스템 메시지 주입
+- ✅ PLAN: 분석/설명 위주, 자동 파일 쓰기 자제
+- ✅ RUN: WriteFile/ReplaceFileContent 우선 사용 지시
+
+#### MEDIUM-2: 작업 계약 명확화
+- ✅ MEDIUM-1과 동일 메커니즘으로 해소
+
+#### LOW-1: 승인 카드 전체 경로
+- ✅ `format_tool_name()`: 도구별 의미 있는 이름 (최대 120자)
+- ✅ `format_tool_detail()`: 명령/경로/동작 축약 없이 표시
+
+#### LOW-2: 회귀 테스트 5건 추가
+- ✅ `test_empty_exec_shell_denied`: 빈 명령 3케이스 Deny 검증
+- ✅ `test_empty_exec_shell_safe_only_denied`: SafeOnly 빈 명령 Deny 검증
+- ✅ `test_timeline_scroll_initial_value`: 스크롤 오프셋 초기화 검증
+- ✅ `test_plan_run_mode_toggle`: PLAN/RUN 모드 전환 검증
+- ✅ `test_bare_json_not_treated_as_tool`: bare/fenced JSON 구분 검증
+
+### 품질 검증 결과
+```
+cargo build   ✅ 성공
+cargo test    ✅ 33/33 통과 (0 failed)
+cargo clippy  ✅ 0 warnings (-D warnings 게이트 통과)
+```
+
+### 남은 이관 항목
+- ⏳ Structured Tool Call (Provider별 native tool call contract — 근본적 도구 격리)
+- ⏳ Diff 접기/펼치기 UI
+- [x] `resolve_credentials()` 반환 타입 `String` → `ProviderError` 마이그레이션
+- [x] 타임라인 스크롤 키 바인딩 (PageUp/PageDown → timeline_scroll 조작)
+
+## Phase 11: Extended Prompt Commands (@ and !) (완료)
+
+이 페이즈는 LLM 컨텍스트 주입과 백그라운드 셸 실행을 터미널에 맞게 가속화하는 것을 목표로 구현되었다.
+
+### 11.1 시스템 분해표 및 파일 책임
+| 시스템 | 파일 경로 | 변경된 책임 (Responsibilities) |
+| --- | --- | --- |
+| **State Layer** | `src/app/state.rs` | `FuzzyMode` enum 정의 및 `FuzzyFinderState` 확장. `ComposerState` 히스토리 관리. |
+| **Action Route** | `src/app/mod.rs` | `@`, `!` 특수 문자 캡처링 (`handle_char_input`). Fuzzy Mode 분기 및 `Up`/`Down` 이벤트 라우팅. |
+| **Logic Layer** | `src/app/chat_runtime.rs` | `@` 특수 키워드(`workspace`, `terminal`) 및 파일 I/O 파싱 후 컨텍스트 인라인 치환 로직. |
+
+### 11.2 경계 계약 요약 및 동결된 공식
+- **최대 렌더링 한계 (Fuzzy Matches Limit)**:
+  - 파일 시스템 탐색 비용과 렌더링 부하를 막기 위해 공식적으로 일치 항목은 **100개**로 제한한다. (`matches.truncate(100)`)
+- **히스토리 라이프사이클**:
+  - `ComposerState.history`에 보존되며, 애플리케이션 수명 주기와 동일. 디스크 동기화는 하지 않음.
+- **예외 처리 변환 공식**:
+  - 파일 읽기 에러 발생 -> `TimelineEntryKind::SystemNotice(msg)` 변환 -> 타임라인 Push. (UI 블로킹 없음)
+
+### 11.3 핵심 알고리즘 메모
+- **Fuzzy Finder 다형성**: 
+  - TUI 렌더링 컴포넌트는 `FuzzyMode`가 무엇인지 알 필요가 없다. 오직 `app/mod.rs`의 `update_fuzzy_matches()` 루틴만 `FuzzyMode`를 보고 `ignore::WalkBuilder`를 돌릴지, 아니면 하드코딩된 `Macros` 배열을 필터링할지 결정한다. 
+- **매크로 문자열 역분해**:
+  - `build      (cargo build)` 형태로 렌더링된 문자열을 `handle_enter_key`에서 선택할 시, 괄호 안의 실제 명령어 부분만 파싱(`.split('(').nth(1)...`)하여 Composer 버퍼에 `!cargo build` 텍스트로 치환한다.
+
+### 11.4 검증 기준 완료 내역
+- [x] 빈 프롬프트에서 `!`를 쳤을 때 `FuzzyMode::Macros` 팝업이 노출되는가?
+- [x] `@workspace` 선택 시 루트 폴더 파일 목록 요약이 `dispatch_chat_request`에서 주입되는가?
+- [x] `!cargo build` 후, 방향키 위(`Up`)를 눌러 버퍼가 성공적으로 복원되는가?
+- [x] 없는 파일을 `@invalid` 쳤을 때 붉은 에러 노티스가 발생하고 시스템이 패닉되지 않는가?
+
+## Phase 12: Native Structured Tool Call Integration (완료)
+
+이 페이즈는 기존의 취약한 마크다운 정규식 캡처(Fenced JSON) 방식을 폐기하고, 모델이 공식적으로 지원하는 OpenAI 호환 구조화된 도구(Tool Call) API로 안전하게 이관하는 것을 목표로 구현되었다.
+
+### 12.1 시스템 분해표 및 파일 책임
+| 시스템 | 파일 경로 | 변경된 책임 (Responsibilities) |
+| --- | --- | --- |
+| **Domain Layer** | `src/providers/types.rs` | `ToolCallRequest`, `FunctionCall` 등 Native JSON Schema 구조체 추가. `Role::Tool` 추가. |
+| **Provider Layer** | `src/providers/registry.rs` | OpenRouter 및 Gemini SSE 스트림 루프에서 `tool_calls` 델타 이벤트를 파싱 및 수집하여 `action_tx`로 전파. |
+| **Logic Layer** | `src/app/chat_runtime.rs` | 시작 시 도구 JSON Schema 주입. `ToolCallDelta` 수신 및 버퍼링 조립 루프. |
+| **Tool Layer** | `src/app/tool_runtime.rs` | 기존 정규식 스크래핑(`extract_tool_calls_from_markdown`) 함수 삭제 및 Native Payload 처리로 대체. |
+
+### 12.2 경계 계약 요약 및 동결된 공식
+- **SSE Chunk Assembly Protocol**:
+  - `delta.tool_calls`는 여러 개의 작은 문자열 조각으로 파편화되어 오므로, `ChatResponse`가 완료될 때까지 상태 내부의 10MB 버퍼(`String`)에 안전하게 누적(Assemble)해야 한다.
+- **도구 에러 반환 규칙**:
+  - 실행된 도구의 에러(없는 파일 등)는 `TimelineEntryKind::SystemNotice`와 더불어, LLM의 컨텍스트로 롤백될 때 반드시 `Role::Tool` 메시지로 캡슐화되어 전달되어야 한다.
+
+### 12.3 핵심 알고리즘 메모
+- Fenced Markdown 검사 로직(과거의 유산)을 들어내고, `ChatRequest.tools` 필드 유무에 따라 LLM이 자동으로 응답 모드를 스위칭하도록 유도.
+- 시스템 프롬프트에서 도구 사용 설명을 덜어내어 초기 토큰을 절약.
+
+### 12.4 검증 기준 완료 내역
+- [x] `ChatRequest` 직렬화 시 `tools` 배열에 올바른 JSON Schema 규격이 포함되어 전송되는가?
+- [x] LLM 응답 시 `Role::Assistant`에 `tool_calls` 필드가 정상적으로 파싱되는가?
+- [x] 스트리밍 모드(`chat_stream`)에서 여러 개로 분할된 JSON 델타 조각들이 하나의 완전한 객체로 파싱되는가? (OpenRouter SSE 버퍼링 구현)
+- [x] 정규식 스크래핑 로직(`extract_tool_calls_from_markdown`)이 코드베이스에서 완벽히 제거되었는가 (`cargo check` 무결성 검증 완료)?
+- [x] 기존의 회귀 테스트가 Native Tool Call 구조체 필드를 올바르게 반영하여 무결성을 통과하는가 (`cargo test` 42/42 통과)?
+
+---
+
+## Phase 13: Agentic Autonomy & Architectural Refactoring (진행 예정)
+
+이 페이즈는 `smlcli`를 단순한 프롬프트 도구에서 벗어나 자율적으로 코드를 검증하고 복구하는 에이전트(Autonomous Agent)로 도약하기 위해 설계되었습니다.
+
+### 13.1 시스템 분해표 및 파일 책임
+| 시스템 | 파일 경로 | 변경된 책임 (Responsibilities) |
+| --- | --- | --- |
+| **Tool Registry Layer** | `src/tools/registry.rs` | 다형성(Polymorphism)을 갖춘 `Tool` 트레이트 명세 정의. `ReadFile`, `ExecShell` 등의 개별 구조체 이관. |
+| **Git Automation Layer** | `src/tools/git_checkpoint.rs` | 워크스페이스 상태 파악(`git status`) 및 수정 전 자동 스냅샷/커밋 로직. |
+| **Repo Map Layer** | `src/infra/repo_map.rs` | `tree-sitter`를 이용한 AST 파싱 및 컨텍스트 요약(최대 2,000 토큰 한계). |
+| **State Machine** | `src/app/state.rs` | `AutoVerifyState` (Idle, Verifying, Failed) 정의 및 재시도 상태 관리. |
+| **TUI Layer** | `src/tui/layout.rs` | '생각의 트리(Tree of Thoughts)' 렌더링. 도구 호출 로그를 아코디언 형태로 인덴트(`└─`) 처리. |
+
+### 13.2 경계 계약 요약 및 동결된 공식
+- **최대 자가 복구 한계 (Self-Correction Retries)**: 3회 초과 시 사용자 승인 대기로 폴백.
+- **Git Checkpoint 롤백 전략**: 최근 생성된 AI 커밋은 LRU 기반 최대 5개 유지.
+- **Tool 트레이트 시그니처**: `async fn execute(&self, args: Value, ctx: &mut ToolContext) -> Result<ToolResult, ToolError>`
+
+### 13.3 로드맵 체크리스트 (구현 가이드)
+- [ ] **Step 1: Tool Registry 리팩토링**
+  - 기존 `match` 분기를 삭제하고 `tool_runtime.rs`를 다형성 호출 구조로 개편.
+  - 빌드 검증 (`cargo check && cargo test`).
+- [ ] **Step 2: Automated Git Checkpoint 통합**
+  - 파일 쓰기(`ReplaceFileContent`, `WriteFile`) 실행 직전 `git status` 더티(Dirty) 여부 검사.
+  - 성공적으로 쓰기 완료 시 `AI: Auto-checkpoint` 백그라운드 커밋 실행.
+- [ ] **Step 3: Tree-sitter Repo Map 통합**
+  - `tree-sitter` 의존성 주입. 프로젝트 구조를 AST로 추출하여 System 프롬프트 최상단 2,000토큰 이하로 주입.
+- [ ] **Step 4: Auto-Verify & Self-Correction 루프**
+  - `smlcli run --auto-verify` 플래그 인식 및 `AutoVerifyState` 활성화.
+  - 린터/테스트 에러 발생 시 자동 `Role::Tool` 피드백 루프 작동 (최대 3회).
+- [ ] **Step 5: Tree of Thoughts TUI 렌더링**
+  - `TimelineEntry`에 계층 속성(Depth) 부여 및 `layout.rs`에서 시각적 계층화(`└─`) 적용.

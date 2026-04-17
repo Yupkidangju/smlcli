@@ -2,6 +2,8 @@
 // PersistedSettings에 encrypted_keys 필드 추가.
 // 설정은 ~/.smlcli/config.toml에 TOML 평문으로 저장되되,
 // API 키만 ChaCha20Poly1305로 암호화하여 encrypted_keys 맵에 보관.
+// [v0.1.0-beta.20] theme 필드 추가: "default" 또는 "high_contrast".
+//   designs.md §21.4 요구사항 반영.
 
 use super::permissions::{FileWritePolicy, NetworkPolicy, ShellPolicy};
 use serde::{Deserialize, Serialize};
@@ -23,6 +25,15 @@ pub struct PersistedSettings {
     /// 복호화는 ~/.smlcli/.master_key를 사용하여 infra::secret_store에서 수행.
     #[serde(default)]
     pub encrypted_keys: HashMap<String, String>,
+    /// [v0.1.0-beta.20] UI 테마 설정.
+    /// "default" 또는 "high_contrast". designs.md §21 참조.
+    #[serde(default = "default_theme")]
+    pub theme: String,
+}
+
+/// theme 필드의 기본값: "default"
+fn default_theme() -> String {
+    "default".to_string()
 }
 
 impl Default for PersistedSettings {
@@ -36,6 +47,7 @@ impl Default for PersistedSettings {
             network_policy: NetworkPolicy::ProviderOnly,
             safe_commands: None,
             encrypted_keys: HashMap::new(),
+            theme: default_theme(),
         }
     }
 }
