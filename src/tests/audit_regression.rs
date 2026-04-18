@@ -1119,7 +1119,7 @@ fn test_is_actionable_input_heuristic() {
 fn test_f2_inspector_toggle() {
     use crate::app::App;
     use crate::app::state::{AppState, FocusedPane};
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, KeyEventKind, KeyEventState};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
     let mut app = App {
@@ -1132,15 +1132,9 @@ fn test_f2_inspector_toggle() {
     app.state.ui.show_inspector = false;
     app.state.ui.focused_pane = FocusedPane::Composer;
 
-    let f2_key = KeyEvent {
-        code: KeyCode::F(2),
-        modifiers: KeyModifiers::NONE,
-        kind: KeyEventKind::Press,
-        state: KeyEventState::empty(),
-    };
-
-    // 1) F2 누름 -> Inspector 켜지고 포커스 이동
-    app.handle_input(f2_key.clone());
+    // F2 입력 (Inspector 토글 열기)
+    let f2_key = KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE);
+    app.handle_input(f2_key);
     assert!(app.state.ui.show_inspector, "F2를 누르면 인스펙터가 보여야 함");
     assert_eq!(app.state.ui.focused_pane, FocusedPane::Inspector, "인스펙터가 열리면 포커스를 받아야 함");
 
@@ -1154,7 +1148,7 @@ fn test_f2_inspector_toggle() {
 fn test_ctrl_k_command_palette() {
     use crate::app::App;
     use crate::app::state::{AppState, FocusedPane};
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, KeyEventKind, KeyEventState};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
     let mut app = App {
@@ -1165,15 +1159,9 @@ fn test_ctrl_k_command_palette() {
     app.state.ui.palette.is_open = false;
     app.state.ui.focused_pane = FocusedPane::Composer;
 
-    let ctrl_k = KeyEvent {
-        code: KeyCode::Char('k'),
-        modifiers: KeyModifiers::CONTROL,
-        kind: KeyEventKind::Press,
-        state: KeyEventState::empty(),
-    };
-
-    // 1) Ctrl+K 누름 -> Palette 열림
-    app.handle_input(ctrl_k.clone());
+    // Ctrl+K 입력 (커맨드 팔레트 열기)
+    let ctrl_k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
+    app.handle_input(ctrl_k);
     assert!(app.state.ui.palette.is_open, "Ctrl+K로 팔레트가 열려야 함");
     assert_eq!(app.state.ui.focused_pane, FocusedPane::Palette, "팔레트가 열리면 포커스를 받아야 함");
 
@@ -1214,4 +1202,51 @@ fn test_shift_enter_multiline_input() {
         "hello\n",
         "Shift+Enter 입력 시 줄바꿈 문자가 버퍼에 추가되어야 함"
     );
+}
+#[test]
+fn test_mouse_wheel_routing() {
+    use crate::app::App;
+    use crate::app::state::{AppState, FocusedPane};
+    use crossterm::event::{MouseEvent, MouseEventKind};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+
+    // 1) Inspector 포커스 시 마우스 휠 위/아래 테스트
+    app.state.ui.focused_pane = FocusedPane::Inspector;
+    app.state.ui.inspector_scroll = 5;
+
+    let mouse_up = MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 0,
+        row: 0,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    };
+    app.handle_mouse(mouse_up);
+    assert_eq!(app.state.ui.inspector_scroll, 6, "Inspector ScrollUp -> +1");
+
+    let mouse_down = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 0,
+        row: 0,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    };
+    app.handle_mouse(mouse_down);
+    assert_eq!(app.state.ui.inspector_scroll, 5, "Inspector ScrollDown -> -1");
+
+    // 2) Timeline 포커스 시 마우스 휠 테스트
+    app.state.ui.focused_pane = FocusedPane::Timeline;
+    app.state.ui.timeline_scroll_offset = 2;
+
+    let mouse_up_tl = MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 0,
+        row: 0,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    };
+    app.handle_mouse(mouse_up_tl);
+    assert_eq!(app.state.ui.timeline_scroll_offset, 3, "Timeline ScrollUp -> +1");
 }

@@ -103,8 +103,8 @@ pub enum FocusedPane {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputChipKind {
     Mode,
-    Context,
     Path,
+    Context,
     Policy,
     Hint,
 }
@@ -116,19 +116,10 @@ pub struct InputChip {
     pub emphasized: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ComposerToolbarState {
     pub chips: Vec<InputChip>,
     pub multiline: bool,
-}
-
-impl Default for ComposerToolbarState {
-    fn default() -> Self {
-        Self {
-            chips: Vec::new(),
-            multiline: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

@@ -80,7 +80,9 @@ impl App {
                             self.handle_slash_command("/compact");
                         }
                     }
-                    Event::Mouse(_) => {}
+                    Event::Mouse(mouse_event) => {
+                        self.handle_mouse(mouse_event);
+                    }
                 }
             }
 
@@ -793,6 +795,47 @@ impl App {
         }
     }
 
+    /// 마우스 이벤트 처리 (Phase 14-B)
+    pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
+        use crossterm::event::{MouseEventKind, MouseButton};
+
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                match self.state.ui.focused_pane {
+                    crate::app::state::FocusedPane::Timeline => {
+                        self.state.ui.timeline_scroll_offset += 1;
+                        self.state.ui.timeline_follow_tail = false;
+                    }
+                    crate::app::state::FocusedPane::Inspector => {
+                        self.state.ui.inspector_scroll = self.state.ui.inspector_scroll.saturating_add(1);
+                    }
+                    _ => {}
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                match self.state.ui.focused_pane {
+                    crate::app::state::FocusedPane::Timeline => {
+                        if self.state.ui.timeline_scroll_offset > 0 {
+                            self.state.ui.timeline_scroll_offset -= 1;
+                            self.state.ui.timeline_follow_tail = self.state.ui.timeline_scroll_offset == 0;
+                        }
+                    }
+                    crate::app::state::FocusedPane::Inspector => {
+                        self.state.ui.inspector_scroll = self.state.ui.inspector_scroll.saturating_sub(1);
+                    }
+                    _ => {}
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                // 클릭을 통한 간단한 포커스 라우팅 (간이 레이아웃 기반)
+                // 우측 30%가 인스펙터라고 가정 (단순화)
+                // row, column을 기준으로 정확한 레이아웃을 알기 어려우므로, 
+                // 향후 ratatui 이벤트 라우팅 확장 전까지는 임시 구현.
+            }
+            _ => {}
+        }
+    }
+
     /// Enter 키 처리: Slash Menu 선택 → Fuzzy Finder 선택 → Config 팝업 → Wizard → Composer 제출 순으로 라우팅.
     fn handle_enter_key(&mut self) {
         if self.state.ui.palette.is_open {
@@ -803,7 +846,7 @@ impl App {
                 self.state.ui.palette.query.clear();
                 // 팔레트 명령어 라우팅
                 if cmd.starts_with('/') {
-                    self.handle_slash_command(&cmd);
+                    self.handle_slash_command(cmd);
                 } else if cmd == "toggle_inspector" {
                     self.state.ui.show_inspector = !self.state.ui.show_inspector;
                 }
@@ -989,6 +1032,22 @@ impl App {
             label: cwd_raw,
             emphasized: false,
         });
+
+        // 2.5 Context Chips (최대 5개)
+        let mut context_count = 0;
+        for token in self.state.ui.composer.input_buffer.split_whitespace() {
+            if token.starts_with('@') && token.len() > 1 {
+                chips.push(InputChip {
+                    kind: InputChipKind::Context,
+                    label: token.to_string(),
+                    emphasized: false,
+                });
+                context_count += 1;
+                if context_count >= 5 {
+                    break;
+                }
+            }
+        }
 
         // 3. Policy Chip
         let policy_str = if let Some(settings) = &self.state.domain.settings {
