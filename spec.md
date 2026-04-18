@@ -1319,18 +1319,24 @@ pub enum BlockStatus {
 
 pub struct CommandPaletteState {
     pub is_open: bool,
-    pub filter: String,
+    pub query: String,
     pub cursor: usize,
-    pub commands: Vec<PaletteCommand>,
-    pub matched_indices: Vec<usize>,
+    pub results: Vec<PaletteCommand>,
 }
 
 pub struct PaletteCommand {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub category: String,
-    pub shortcut: Option<String>,
+    pub id: &'static str,
+    pub title: &'static str,
+    pub category: PaletteCategory,
+    pub shortcut_hint: Option<&'static str>,
+}
+
+pub enum PaletteCategory {
+    Navigation,
+    Session,
+    Tools,
+    Settings,
+    Context,
 }
 
 pub struct ComposerToolbarState {

@@ -512,7 +512,7 @@ cargo test  ✅ 42 passed (0 failed)
 
 ---
 
-## Phase 15: 2026 CLI UX 현대화 로드맵 (완료: 15-A~F)
+## Phase 15: 2026 CLI UX 현대화 로드맵 (진행 중)
 
 이 페이즈는 이미 구현된 Phase 13~14의 기반을 유지하면서, `smlcli`를 **블록 기반 작업 콘솔**로 승격시키는 계획 단계다. 목적은 "더 화려한 TUI"가 아니라, 빠른 명령 발견, 작업 재참조, 긴 출력 관리, 독립 패널 포커스, 절제된 모션을 갖춘 실사용 CLI UX를 만드는 것이다.
 
@@ -521,11 +521,11 @@ cargo test  ✅ 42 passed (0 failed)
 | --- | --- | --- |
 | **Block Timeline Layer** | `src/app/state.rs`, `src/tui/layout.rs` | [✅ Phase 15-A 완료] `TimelineBlock`, `BlockSection`, `BlockStatus` 구조체 도입 및 렌더링 교체 완료 |
 | **Focus / Scroll State Machine** | `src/app/state.rs`, `src/app/mod.rs` | `FocusedPane`, pane별 scroll/selection/follow 상태, 키/마우스 라우팅 |
-| **Command Palette Layer** | `src/app/state.rs`, `src/app/mod.rs`, `src/tui/layout.rs` | `Ctrl+K` 기반 Quick Actions palette, fuzzy search, 카테고리별 액션 실행 (filter/matched_indices 기반) |
-| **Composer Toolbar Layer** | `src/app/state.rs`, `src/tui/layout.rs` | mode/context/policy/hint chip 렌더링, multiline 입력 상태 표시 |
-| **Adaptive Header Layer** | `src/tui/layout.rs` | 세그먼트 우선순위 기반 상단 바 렌더링, 좌우 정렬, 폭별 중략 |
-| **Inspector Workspace Layer** | `src/tui/widgets/inspector_tabs.rs` | 블록 상세, diff, logs, recent, search를 작업형 패널로 재구성 |
-| **Motion Layer** | `src/tui/layout.rs` | 상태별 ASCII 모션 프로필과 pulse/spinner/settle 효과 |
+| **Command Palette Layer** | `src/app/state.rs`, `src/app/mod.rs`, `src/tui/layout.rs` | [🚧 진행 중] `Ctrl+K` 기반 Quick Actions palette, fuzzy search, 카테고리별 액션 실행 (현재 단순 filter 구현 상태, `PaletteCategory` 미도입) |
+| **Composer Toolbar Layer** | `src/app/state.rs`, `src/tui/layout.rs` | [❌ 미구현] mode/context/policy/hint chip 렌더링, multiline 입력 상태 표시 (`ComposerToolbarState` 등 없음) |
+| **Adaptive Header Layer** | `src/tui/layout.rs` | [✅ 완료] 세그먼트 우선순위 기반 상단 바 렌더링, 좌우 정렬, 폭별 중략 |
+| **Inspector Workspace Layer** | `src/tui/widgets/inspector_tabs.rs` | [✅ 완료] 블록 상세, diff, logs, recent, search를 작업형 패널로 재구성 |
+| **Motion Layer** | `src/tui/layout.rs` | [🚧 진행 중] 상태별 ASCII 모션 프로필과 pulse/spinner/settle 효과 (`MotionProfile` 스펙 미적용) |
 
 ### 15.2 경계 계약 요약
 - **프레임워크 유지**: `ratatui + crossterm` 유지. Phase 15-A~15-C에서는 신규 의존성 도입 금지.
