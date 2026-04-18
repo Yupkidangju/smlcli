@@ -521,11 +521,11 @@ cargo test  ✅ 45 passed (0 failed)
 | --- | --- | --- |
 | **Block Timeline Layer** | `src/app/state.rs`, `src/tui/layout.rs` | [✅ Phase 15-A 완료] `TimelineBlock`, `BlockSection`, `BlockStatus` 구조체 도입 및 렌더링 교체 완료 |
 | **Focus / Scroll State Machine** | `src/app/state.rs`, `src/app/mod.rs` | `FocusedPane`, pane별 scroll/selection/follow 상태, 키/마우스 라우팅 |
-| **Command Palette Layer** | `src/app/state.rs`, `src/app/mod.rs`, `src/tui/layout.rs` | [🚧 진행 중] `Ctrl+K` 기반 Quick Actions palette, fuzzy search, 카테고리별 액션 실행 (현재 단순 filter 구현 상태, `PaletteCategory` 미도입) |
-| **Composer Toolbar Layer** | `src/app/state.rs`, `src/tui/layout.rs` | [❌ 미구현] mode/context/policy/hint chip 렌더링, multiline 입력 상태 표시 (`ComposerToolbarState` 등 없음) |
+| **Command Palette Layer** | `src/app/state.rs`, `src/app/mod.rs`, `src/tui/layout.rs` | [✅ Phase 15-C 완료] `Ctrl+K` 기반 Quick Actions palette, 카테고리별 상태 연동(`PaletteCategory` 도입) |
+| **Composer Toolbar Layer** | `src/app/state.rs`, `src/tui/layout.rs` | [✅ Phase 15-D 완료] `ComposerToolbarState` 연동, mode/path/policy/hint chip 동적 렌더링 및 multiline 표시 |
 | **Adaptive Header Layer** | `src/tui/layout.rs` | [✅ 완료] 세그먼트 우선순위 기반 상단 바 렌더링, 좌우 정렬, 폭별 중략 |
 | **Inspector Workspace Layer** | `src/tui/widgets/inspector_tabs.rs` | [✅ 완료] 블록 상세, diff, logs, recent, search를 작업형 패널로 재구성 |
-| **Motion Layer** | `src/tui/layout.rs` | [🚧 진행 중] 상태별 ASCII 모션 프로필과 pulse/spinner/settle 효과 (`MotionProfile` 스펙 미적용) |
+| **Motion Layer** | `src/tui/layout.rs` | [✅ Phase 15-F 완료] `MotionProfile` 도입, `Running` 스피너 렌더링 및 `NeedsApproval` 펄스 적용 완료 |
 
 ### 15.2 경계 계약 요약
 - **프레임워크 유지**: `ratatui + crossterm` 유지. Phase 15-A~15-C에서는 신규 의존성 도입 금지.

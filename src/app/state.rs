@@ -100,6 +100,54 @@ pub enum FocusedPane {
     Palette,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputChipKind {
+    Mode,
+    Context,
+    Path,
+    Policy,
+    Hint,
+}
+
+#[derive(Debug, Clone)]
+pub struct InputChip {
+    pub kind: InputChipKind,
+    pub label: String,
+    pub emphasized: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComposerToolbarState {
+    pub chips: Vec<InputChip>,
+    pub multiline: bool,
+}
+
+impl Default for ComposerToolbarState {
+    fn default() -> Self {
+        Self {
+            chips: Vec::new(),
+            multiline: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MotionProfile {
+    pub tick_ms: u64,
+    pub spinner_frames: &'static [&'static str],
+    pub pulse_period_ticks: u8,
+}
+
+impl Default for MotionProfile {
+    fn default() -> Self {
+        Self {
+            tick_ms: 120,
+            spinner_frames: &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+            pulse_period_ticks: 6,
+        }
+    }
+}
+
 pub struct UiState {
     pub is_wizard_open: bool,
     pub show_inspector: bool,
@@ -108,9 +156,12 @@ pub struct UiState {
     pub wizard: WizardState,
     pub config: ConfigState,
     pub composer: ComposerState,
+    pub toolbar: ComposerToolbarState,
     pub slash_menu: SlashMenuState,
     pub timeline: Vec<TimelineBlock>,
     pub tick_count: u64,
+    pub motion: MotionProfile,
+    pub timeline_scroll_offset: usize,
     /// [Phase 15-E] 타임라인 내 선택된 블록 커서.
     pub timeline_cursor: usize,
     /// [v0.1.0-beta.24] 타임라인 세로 스크롤 오프셋 (bottom-up: 0 = 최하단/최신, N = 바닥에서 N줄 위).
@@ -136,9 +187,12 @@ impl UiState {
             wizard: WizardState::new(),
             config: ConfigState::new(),
             composer: ComposerState::new(),
+            toolbar: ComposerToolbarState::default(),
             slash_menu: SlashMenuState::new(),
             timeline: Vec::new(),
             tick_count: 0,
+            motion: MotionProfile::default(),
+            timeline_scroll_offset: 0,
             timeline_cursor: 0,
             timeline_scroll: 0,
             inspector_scroll: 0,
@@ -149,64 +203,80 @@ impl UiState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaletteCategory {
+    Navigation,
+    Session,
+    Tools,
+    Settings,
+    Context,
+}
+
+impl std::fmt::Display for PaletteCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Navigation => write!(f, "Navigation"),
+            Self::Session => write!(f, "Session"),
+            Self::Tools => write!(f, "Tools"),
+            Self::Settings => write!(f, "Settings"),
+            Self::Context => write!(f, "Context"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PaletteCommand {
-    pub id: String,
-    pub title: String,
-    pub description: String,
-    pub category: String,
-    pub shortcut: Option<String>,
+    pub id: &'static str,
+    pub title: &'static str,
+    pub category: PaletteCategory,
+    pub shortcut_hint: Option<&'static str>,
 }
 
 #[derive(Debug, Clone)]
 pub struct CommandPaletteState {
     pub is_open: bool,
-    pub filter: String,
+    pub query: String,
     pub cursor: usize,
-    pub commands: Vec<PaletteCommand>,
-    pub matched_indices: Vec<usize>,
+    pub results: Vec<PaletteCommand>,
+    // 전체 커맨드 풀을 내부에 가지고 있다가 query에 맞게 results를 필터링
+    pub all_commands: Vec<PaletteCommand>,
 }
 
 impl CommandPaletteState {
     pub fn new() -> Self {
-        let commands = vec![
+        let all_commands = vec![
             PaletteCommand {
-                id: "/help".to_string(),
-                title: "Show Help".to_string(),
-                description: "Display all available commands".to_string(),
-                category: "System".to_string(),
-                shortcut: None,
+                id: "/help",
+                title: "Help",
+                category: PaletteCategory::Navigation,
+                shortcut_hint: None,
             },
             PaletteCommand {
-                id: "/compact".to_string(),
-                title: "Compact Context".to_string(),
-                description: "Summarize previous messages to save context budget".to_string(),
-                category: "Session".to_string(),
-                shortcut: None,
+                id: "/compact",
+                title: "Compact Context",
+                category: PaletteCategory::Session,
+                shortcut_hint: None,
             },
             PaletteCommand {
-                id: "/clear".to_string(),
-                title: "Clear Session".to_string(),
-                description: "Clear all messages and start a new session".to_string(),
-                category: "Session".to_string(),
-                shortcut: None,
+                id: "/clear",
+                title: "Clear Session",
+                category: PaletteCategory::Session,
+                shortcut_hint: None,
             },
             PaletteCommand {
-                id: "toggle_inspector".to_string(),
-                title: "Toggle Inspector".to_string(),
-                description: "Show or hide the inspector panel".to_string(),
-                category: "UI".to_string(),
-                shortcut: Some("F2".to_string()),
+                id: "toggle_inspector",
+                title: "Toggle Inspector",
+                category: PaletteCategory::Navigation,
+                shortcut_hint: Some("F2"),
             },
         ];
-        let matched_indices = (0..commands.len()).collect();
 
         Self {
             is_open: false,
-            filter: String::new(),
+            query: String::new(),
             cursor: 0,
-            commands,
-            matched_indices,
+            results: all_commands.clone(),
+            all_commands,
         }
     }
 }

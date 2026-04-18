@@ -58,13 +58,16 @@ impl App {
                     }
                     Event::Input(key) => {
                         self.handle_input(key);
+                        self.sync_toolbar();
                     }
                     Event::Action(action) => {
                         self.handle_action(action);
+                        self.sync_toolbar();
                     }
                     Event::Tick => {
                         // [v0.1.0-beta.18] 애니메이션 틱 카운터 증가
                         self.state.ui.tick_count = self.state.ui.tick_count.wrapping_add(1);
+                        self.sync_toolbar();
 
                         // [Phase 15-E] follow_tail일 때 커서를 최신 블록으로 동기화
                         if self.state.ui.timeline_follow_tail && !self.state.ui.timeline.is_empty() {
@@ -478,7 +481,7 @@ impl App {
                 self.state.ui.palette.is_open = !self.state.ui.palette.is_open;
                 if self.state.ui.palette.is_open {
                     self.state.ui.focused_pane = crate::app::state::FocusedPane::Palette;
-                    self.state.ui.palette.filter.clear();
+                    self.state.ui.palette.query.clear();
                     self.state.ui.palette.cursor = 0;
                     self.update_palette_matches();
                 } else if self.state.ui.focused_pane == crate::app::state::FocusedPane::Palette {
@@ -617,7 +620,7 @@ impl App {
                 self.state.ui.wizard.api_key_input.push(c);
             }
         } else if self.state.ui.palette.is_open {
-            self.state.ui.palette.filter.push(c);
+            self.state.ui.palette.query.push(c);
             self.update_palette_matches();
         } else if self.state.ui.slash_menu.is_open {
             // [v0.1.0-beta.16] 슬래시 메뉴 활성 상태: 필터 문자 추가
@@ -693,7 +696,7 @@ impl App {
     /// Down 화살표 키 처리: 각 모드별 리스트의 최대값까지 커서 이동.
     fn handle_down_key(&mut self) {
         if self.state.ui.palette.is_open {
-            if self.state.ui.palette.cursor + 1 < self.state.ui.palette.matched_indices.len() {
+            if self.state.ui.palette.cursor + 1 < self.state.ui.palette.results.len() {
                 self.state.ui.palette.cursor += 1;
             }
         } else if self.state.ui.slash_menu.is_open {
@@ -759,11 +762,11 @@ impl App {
     /// Backspace 키 처리: Slash Menu, Fuzzy Finder, Wizard API 키, Composer 각각의 버퍼 삭제.
     fn handle_backspace(&mut self) {
         if self.state.ui.palette.is_open {
-            if self.state.ui.palette.filter.is_empty() {
+            if self.state.ui.palette.query.is_empty() {
                 self.state.ui.palette.is_open = false;
                 self.state.ui.focused_pane = crate::app::state::FocusedPane::Composer;
             } else {
-                self.state.ui.palette.filter.pop();
+                self.state.ui.palette.query.pop();
                 self.update_palette_matches();
             }
         } else if self.state.ui.slash_menu.is_open {
@@ -793,12 +796,11 @@ impl App {
     /// Enter 키 처리: Slash Menu 선택 → Fuzzy Finder 선택 → Config 팝업 → Wizard → Composer 제출 순으로 라우팅.
     fn handle_enter_key(&mut self) {
         if self.state.ui.palette.is_open {
-            if !self.state.ui.palette.matched_indices.is_empty() {
-                let idx = self.state.ui.palette.matched_indices[self.state.ui.palette.cursor];
-                let cmd = self.state.ui.palette.commands[idx].id.clone();
+            if !self.state.ui.palette.results.is_empty() {
+                let cmd = self.state.ui.palette.results[self.state.ui.palette.cursor].id;
                 self.state.ui.palette.is_open = false;
                 self.state.ui.focused_pane = crate::app::state::FocusedPane::Composer;
-                self.state.ui.palette.filter.clear();
+                self.state.ui.palette.query.clear();
                 // 팔레트 명령어 라우팅
                 if cmd.starts_with('/') {
                     self.handle_slash_command(&cmd);
@@ -878,19 +880,18 @@ impl App {
 
     /// Palette 매칭 로직
     fn update_palette_matches(&mut self) {
-        let input = self.state.ui.palette.filter.to_lowercase();
-        let mut indices = Vec::new();
+        let input = self.state.ui.palette.query.to_lowercase();
+        let mut results = Vec::new();
 
-        for (i, cmd) in self.state.ui.palette.commands.iter().enumerate() {
+        for cmd in self.state.ui.palette.all_commands.iter() {
             if input.is_empty() 
                 || cmd.title.to_lowercase().contains(&input)
-                || cmd.description.to_lowercase().contains(&input)
-                || cmd.category.to_lowercase().contains(&input) 
+                || cmd.category.to_string().to_lowercase().contains(&input) 
             {
-                indices.push(i);
+                results.push(cmd.clone());
             }
         }
-        self.state.ui.palette.matched_indices = indices;
+        self.state.ui.palette.results = results;
         self.state.ui.palette.cursor = 0;
     }
 
@@ -959,5 +960,60 @@ impl App {
 
         self.state.ui.fuzzy.matches = matches;
         self.state.ui.fuzzy.cursor = 0;
+    }
+
+    /// Toolbar 상태 동기화 (Phase 15-D)
+    fn sync_toolbar(&mut self) {
+        use crate::app::state::{InputChip, InputChipKind};
+        use crate::domain::session::AppMode;
+
+        let mut chips = Vec::new();
+
+        // 1. Mode Chip
+        let mode_label = match self.state.domain.session.mode {
+            AppMode::Plan => "PLAN",
+            AppMode::Run => "RUN",
+        };
+        chips.push(InputChip {
+            kind: InputChipKind::Mode,
+            label: mode_label.to_string(),
+            emphasized: true,
+        });
+
+        // 2. Path Chip (CWD)
+        let cwd_raw = std::env::current_dir()
+            .map(|pp| pp.display().to_string())
+            .unwrap_or_else(|_| "?".to_string());
+        chips.push(InputChip {
+            kind: InputChipKind::Path,
+            label: cwd_raw,
+            emphasized: false,
+        });
+
+        // 3. Policy Chip
+        let policy_str = if let Some(settings) = &self.state.domain.settings {
+            match settings.shell_policy {
+                crate::domain::permissions::ShellPolicy::Ask => "Shell: Ask",
+                crate::domain::permissions::ShellPolicy::SafeOnly => "Shell: SafeOnly",
+                crate::domain::permissions::ShellPolicy::Deny => "Shell: Deny",
+            }
+        } else {
+            "Shell: Ask"
+        };
+        chips.push(InputChip {
+            kind: InputChipKind::Policy,
+            label: policy_str.to_string(),
+            emphasized: false,
+        });
+
+        // 4. Hint Chip
+        chips.push(InputChip {
+            kind: InputChipKind::Hint,
+            label: "Ctrl+K Palette".to_string(),
+            emphasized: false,
+        });
+
+        self.state.ui.toolbar.chips = chips;
+        self.state.ui.toolbar.multiline = self.state.ui.composer.input_buffer.contains('\n');
     }
 }

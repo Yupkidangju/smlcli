@@ -15,12 +15,13 @@
 
 ### Added/Partially Implemented (Phase 15: UX / State Machine & Inspector Workspace)
 - **포커스 상태 머신 (`FocusedPane`)**: 타임라인, 인스펙터, 컴포저, 팔레트 등 포커스 기반 독립 스크롤링 및 키보드 이벤트 라우팅 도입 (`src/app/mod.rs`). 활성화된 패널은 Accent 색상 경계선으로 시각화. (Phase 15-B 일부 반영)
-- **커맨드 팔레트 (`Command Palette`)**: `Ctrl+K` 입력 시 팝업되는 빠른 실행 명령 레이어(`src/tui/layout.rs`) 도입. (현재 `PaletteCategory` 미도입 및 단순 텍스트 필터 기반으로 동작, Phase 15-C 일부 반영)
+- **커맨드 팔레트 (`Command Palette`, Phase 15-C 완료)**: `Ctrl+K` 입력 시 팝업되는 빠른 실행 명령 레이어(`src/tui/layout.rs`) 및 `PaletteCategory` 도입 완료. 카테고리별 상태 연동.
 - **다중 라인 프롬프트 지원**: `Shift+Enter` 를 통해 Composer 버퍼에 줄바꿈(`\n`)을 삽입할 수 있도록 멀티라인 입력 처리 추가 (`src/app/mod.rs`).
+- **Composer Toolbar (`ComposerToolbarState`, Phase 15-D 완료)**: Composer 입력창 상단에 mode/path/policy/hint 등을 표시하는 칩(Chip) 동적 렌더링 도입. 멀티라인 입력 상태 실시간 표시.
 - **Adaptive Header**: 윈도우 폭에 맞춰 상단 바 정보가 생략되는 반응형 정책(Adaptive Header) 적용 완료.
 - **타임라인 커서 및 Inspector Preview (`Phase 15-E`)**: 타임라인 내 블록 이동(`Up`/`Down`)을 위한 커서를 추가하고, 선택된 블록의 전체 마크다운 및 코드 펜스를 Inspector의 `Preview` 탭에서 확인할 수 있도록 재구성 (`src/tui/widgets/inspector_tabs.rs`).
 - **Inspector Diff 탭 (`Phase 15-E`)**: 파일 수정 등 승인 대기 중인 변경사항(Diff)을 직관적으로 확인할 수 있도록 `Diff` 탭의 렌더링 구현 추가.
-- **Motion Polish 애니메이션 개선 (`Phase 15-F 일부`)**: LLM 생성 중 보여지는 Thinking 스피너를 점자(`⠁⠂⠄⡀⢀⠠⠐⠈`)로, 도구 실행 상태 배지를 `▶/▷`로 변경. (MotionProfile 전면 도입은 미구현)
+- **Motion Polish 애니메이션 개선 (`Phase 15-F 완료`)**: `MotionProfile`을 전면 도입하여 도구 실행(`Running`) 스피너 렌더링 및 `NeedsApproval` 상태 진입 시 주기적 Pulse 깜빡임 애니메이션 적용.
 
 ## [v0.1.0-beta.23] - 2026-04-18
 

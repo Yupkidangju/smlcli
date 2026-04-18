@@ -243,12 +243,21 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
                 }
                 crate::app::state::TimelineBlockKind::ToolRun => {
                     let (badge, badge_color) = match block.status {
-                        crate::app::state::BlockStatus::Idle => ("◻", p.muted),
                         crate::app::state::BlockStatus::Running => {
-                            if state.ui.tick_count.is_multiple_of(2) { ("▶", p.warning) } else { ("▷", p.warning) }
+                            let frames = state.ui.motion.spinner_frames;
+                            let idx = (state.ui.tick_count as usize) % frames.len();
+                            (frames[idx], p.warning)
                         }
                         crate::app::state::BlockStatus::Done => ("✅", p.success),
                         crate::app::state::BlockStatus::Error => ("❌", p.danger),
+                        crate::app::state::BlockStatus::NeedsApproval => {
+                            let pulse = state.ui.motion.pulse_period_ticks as u64;
+                            if (state.ui.tick_count % pulse) < (pulse / 2) {
+                                ("⏸", p.warning)
+                            } else {
+                                (" ", p.warning)
+                            }
+                        }
                         _ => ("◻", p.muted),
                     };
                     lines.push(Line::from(vec![Span::styled(
@@ -651,37 +660,45 @@ fn draw_inspector(f: &mut Frame, state: &AppState, area: Rect) {
 
 fn draw_composer_toolbar(f: &mut Frame, state: &AppState, area: Rect) {
     let p = state.palette();
-    use crate::domain::session::AppMode;
+    let mut msg = Vec::new();
 
-    let (mode_str, mode_color) = match state.domain.session.mode {
-        AppMode::Plan => (" [PLAN] ", p.info),
-        AppMode::Run => (" [RUN] ", p.success),
-    };
+    for chip in &state.ui.toolbar.chips {
+        let (color, bg) = match chip.kind {
+            crate::app::state::InputChipKind::Mode => {
+                if chip.label == "RUN" {
+                    (p.bg_base, Some(p.success))
+                } else {
+                    (p.bg_base, Some(p.info))
+                }
+            }
+            crate::app::state::InputChipKind::Path => (p.text_secondary, None),
+            crate::app::state::InputChipKind::Policy => (p.text_secondary, None),
+            crate::app::state::InputChipKind::Hint => (p.muted, None),
+            crate::app::state::InputChipKind::Context => (p.accent, None),
+        };
 
-    let cwd_raw = std::env::current_dir()
-        .map(|pp| pp.display().to_string())
-        .unwrap_or_else(|_| "?".to_string());
-    let cwd = truncate_middle(&cwd_raw, 20);
-    
-    let policy_str = if let Some(settings) = &state.domain.settings {
-        match settings.shell_policy {
-            crate::domain::permissions::ShellPolicy::Ask => " [Shell: Ask] ",
-            crate::domain::permissions::ShellPolicy::SafeOnly => " [Shell: SafeOnly] ",
-            crate::domain::permissions::ShellPolicy::Deny => " [Shell: Deny] ",
+        let mut style = Style::default().fg(color);
+        if let Some(b) = bg {
+            style = style.bg(b);
         }
-    } else {
-        " [Shell: Ask] "
-    };
+        if chip.kind == crate::app::state::InputChipKind::Hint {
+            style = style.add_modifier(ratatui::style::Modifier::ITALIC);
+        }
 
-    let msg = vec![
-        Span::styled(mode_str, Style::default().fg(p.bg_base).bg(mode_color)),
-        Span::raw(" "),
-        Span::styled(format!("[{}]", cwd), Style::default().fg(p.text_secondary)),
-        Span::raw(" "),
-        Span::styled(policy_str, Style::default().fg(p.text_secondary)),
-        Span::raw(" "),
-        Span::styled("[Ctrl+K Palette]", Style::default().fg(p.muted).add_modifier(ratatui::style::Modifier::ITALIC)),
-    ];
+        let display_text = match chip.kind {
+            crate::app::state::InputChipKind::Mode => format!(" [{}] ", chip.label),
+            crate::app::state::InputChipKind::Path => format!("[{}]", truncate_middle(&chip.label, 20)),
+            crate::app::state::InputChipKind::Hint => format!("[{}]", chip.label),
+            _ => format!(" [{}] ", chip.label),
+        };
+
+        msg.push(Span::styled(display_text, style));
+        msg.push(Span::raw(" "));
+    }
+
+    if state.ui.toolbar.multiline {
+        msg.push(Span::styled("[Multiline] ", Style::default().fg(p.accent)));
+    }
 
     let pgh = Paragraph::new(Line::from(msg)).style(Style::default().bg(p.bg_base));
     f.render_widget(pgh, area);
@@ -799,19 +816,18 @@ fn draw_command_palette(f: &mut Frame, state: &AppState) {
         .border_style(Style::default().fg(p.accent));
     
     let mut lines = vec![
-        Line::from(vec![Span::raw(format!("> {}_", state.ui.palette.filter))]),
+        Line::from(vec![Span::raw(format!("> {}_", state.ui.palette.query))]),
         Line::from(""),
     ];
 
-    if state.ui.palette.matched_indices.is_empty() {
+    if state.ui.palette.results.is_empty() {
         lines.push(Line::from(vec![Span::styled("No commands found", Style::default().fg(p.danger))]));
     } else {
-        for (idx, &cmd_idx) in state.ui.palette.matched_indices.iter().enumerate().take(10) {
-            let cmd = &state.ui.palette.commands[cmd_idx];
+        for (idx, cmd) in state.ui.palette.results.iter().enumerate().take(10) {
             let prefix = if idx == state.ui.palette.cursor { "▶ " } else { "  " };
             let style = if idx == state.ui.palette.cursor { Style::default().fg(p.accent) } else { Style::default().fg(p.text_primary) };
             
-            let shortcut_str = cmd.shortcut.as_deref().unwrap_or("");
+            let shortcut_str = cmd.shortcut_hint.unwrap_or("");
             lines.push(Line::from(vec![
                 Span::styled(format!("{}{:<18} ", prefix, cmd.title), style),
                 Span::styled(format!("{:<10} ", cmd.category), Style::default().fg(p.muted)),
