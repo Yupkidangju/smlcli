@@ -1,6 +1,11 @@
+// [v0.1.0-beta.24] Phase 14-B: 마우스 캡처 추가.
+// EnableMouseCapture를 통해 마우스 휠 이벤트를 수신하여
+// 타임라인/인스펙터 패널별 독립 스크롤을 지원한다.
+
 use anyhow::Result;
 use crossterm::{
     execute,
+    event::{EnableMouseCapture, DisableMouseCapture},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
@@ -11,7 +16,7 @@ pub type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 pub fn init_terminal() -> Result<TuiTerminal> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let terminal = Terminal::new(backend)?;
     Ok(terminal)
@@ -20,7 +25,7 @@ pub fn init_terminal() -> Result<TuiTerminal> {
 pub fn restore_terminal() -> Result<()> {
     disable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, LeaveAlternateScreen)?;
+    execute!(stdout, LeaveAlternateScreen, DisableMouseCapture)?;
     Ok(())
 }
 

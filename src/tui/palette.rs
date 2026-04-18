@@ -50,7 +50,7 @@ pub const TEXT_SECONDARY: Color = Color::Rgb(156, 163, 175);
 
 /// [v0.1.0-beta.18] tick 기반 thinking 스피너 문자 배열.
 /// tick_count % 4로 인덱싱하여 ◐ ◓ ◑ ◒ 순환 표시.
-pub const SPINNER_FRAMES: [char; 4] = ['◐', '◓', '◑', '◒'];
+pub const SPINNER_FRAMES: [char; 8] = ['⠁', '⠂', '⠄', '⡀', '⢀', '⠠', '⠐', '⠈'];
 
 /// [v0.1.0-beta.18] tool 실행 중 배지 토글 문자.
 /// tick_count % 2로 인덱싱하여 ● / ○ 깜빡임.

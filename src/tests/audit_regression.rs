@@ -302,34 +302,30 @@ fn test_read_file_path_traversal_denied() {
 
 #[test]
 fn test_timeline_entry_creation() {
-    use crate::app::state::{TimelineEntry, TimelineEntryKind, ToolStatus};
-    // TimelineEntry 생성 및 ToolStatus 전이 검증
-    let entry = TimelineEntry::now(TimelineEntryKind::ToolCard {
-        tool_name: "ExecShell".to_string(),
-        status: ToolStatus::Queued,
-        summary: String::new(),
-    });
-    if let TimelineEntryKind::ToolCard { status, .. } = &entry.kind {
-        assert_eq!(*status, ToolStatus::Queued);
-    } else {
-        panic!("ToolCard 엔트리여야 함");
-    }
+    use crate::app::state::{TimelineBlock, TimelineBlockKind, BlockStatus};
+    // TimelineBlock 생성 및 상태 확인
+    let mut block = TimelineBlock::new(TimelineBlockKind::ToolRun, "ExecShell");
+    block.status = BlockStatus::Idle;
+    
+    assert_eq!(block.kind, TimelineBlockKind::ToolRun);
+    assert_eq!(block.status, BlockStatus::Idle);
+    assert_eq!(block.title, "ExecShell");
 }
 
 // --- [v0.1.0-beta.18] Phase 9-C: 확장 테스트 6건 ---
 
 #[test]
 fn test_tool_status_transition() {
-    use crate::app::state::ToolStatus;
-    // ToolStatus 전이 순서: Queued → Running → Done/Error
-    let queued = ToolStatus::Queued;
-    let running = ToolStatus::Running;
-    let done = ToolStatus::Done;
-    let error = ToolStatus::Error;
+    use crate::app::state::BlockStatus;
+    // BlockStatus 전이 순서: Idle → Running → Done/Error
+    let idle = BlockStatus::Idle;
+    let running = BlockStatus::Running;
+    let done = BlockStatus::Done;
+    let error = BlockStatus::Error;
 
     // Clone + PartialEq 검증
-    assert_eq!(queued.clone(), ToolStatus::Queued);
-    assert_ne!(queued, running);
+    assert_eq!(idle.clone(), BlockStatus::Idle);
+    assert_ne!(idle, running);
     assert_ne!(done, error);
 }
 
@@ -376,25 +372,27 @@ fn test_read_file_normal_path_allowed() {
 
 #[test]
 fn test_timeline_entry_user_message() {
-    use crate::app::state::{TimelineEntry, TimelineEntryKind};
-    // UserMessage 타임라인 엔트리 생성 검증
-    let entry = TimelineEntry::now(TimelineEntryKind::UserMessage("hello".to_string()));
-    if let TimelineEntryKind::UserMessage(msg) = &entry.kind {
+    use crate::app::state::{TimelineBlock, TimelineBlockKind, BlockSection};
+    let mut block = TimelineBlock::new(TimelineBlockKind::Conversation, "User");
+    block.body.push(BlockSection::Markdown("hello".to_string()));
+    assert_eq!(block.title, "User");
+    if let BlockSection::Markdown(msg) = &block.body[0] {
         assert_eq!(msg, "hello");
     } else {
-        panic!("UserMessage 엔트리여야 함");
+        panic!("Markdown 섹션이어야 함");
     }
 }
 
 #[test]
 fn test_timeline_entry_system_notice() {
-    use crate::app::state::{TimelineEntry, TimelineEntryKind};
-    // SystemNotice 타임라인 엔트리 생성 검증
-    let entry = TimelineEntry::now(TimelineEntryKind::SystemNotice("경고".to_string()));
-    if let TimelineEntryKind::SystemNotice(msg) = &entry.kind {
+    use crate::app::state::{TimelineBlock, TimelineBlockKind, BlockSection};
+    let mut block = TimelineBlock::new(TimelineBlockKind::Notice, "SystemNotice");
+    block.body.push(BlockSection::Markdown("경고".to_string()));
+    assert_eq!(block.title, "SystemNotice");
+    if let BlockSection::Markdown(msg) = &block.body[0] {
         assert_eq!(msg, "경고");
     } else {
-        panic!("SystemNotice 엔트리여야 함");
+        panic!("Markdown 섹션이어야 함");
     }
 }
 
@@ -994,7 +992,7 @@ async fn test_process_tool_calls_integration() {
         || app.state.ui.timeline.iter().any(|e| {
             matches!(
                 e.kind,
-                crate::app::state::TimelineEntryKind::ToolCard { .. }
+                crate::app::state::TimelineBlockKind::ToolRun
             )
         });
     assert!(
@@ -1014,7 +1012,7 @@ async fn test_process_tool_calls_integration() {
         && !app2.state.ui.timeline.iter().any(|e| {
             matches!(
                 e.kind,
-                crate::app::state::TimelineEntryKind::ToolCard { .. }
+                crate::app::state::TimelineBlockKind::ToolRun
             )
         });
     assert!(
@@ -1037,7 +1035,7 @@ async fn test_process_tool_calls_integration() {
         || app3.state.ui.timeline.iter().any(|e| {
             matches!(
                 e.kind,
-                crate::app::state::TimelineEntryKind::ToolCard { .. }
+                crate::app::state::TimelineBlockKind::ToolRun
             )
         });
     assert!(

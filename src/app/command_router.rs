@@ -149,30 +149,26 @@ impl App {
                     });
             }
             "/help" => {
-                // [v0.1.0-beta.21] /theme 커맨드를 도움말 목록에 추가
-                let help_text = "\
-/config    설정 대시보드 (Settings Dashboard)\n\
-/setting   셋업 위자드 (Setup Wizard)\n\
-/provider  공급자 전환 (Switch Provider)\n\
-/model     모델 전환 (Switch Model)\n\
-/status    세션 상태 (Session Info)\n\
-/mode      PLAN ↔ RUN 전환 (Toggle Mode)\n\
-/tokens    토큰 사용량 (Token Usage)\n\
-/compact   컨텍스트 압축 (Compress Context)\n\
-/theme     테마 전환 (Toggle Theme)\n\
-/clear     대화 초기화 (Clear Chat)\n\
-/help      도움말 (Help)\n\
-/quit      종료 (Exit)";
-                self.state
-                    .domain
-                    .session
-                    .add_message(crate::providers::types::ChatMessage {
-                        role: crate::providers::types::Role::System,
-                        content: Some(help_text.to_string()),
-                        tool_calls: None,
-                        tool_call_id: None,
-                        pinned: false,
-                    });
+                let help_entries = vec![
+                    ("/config".to_string(), "설정 대시보드 (Settings Dashboard)".to_string()),
+                    ("/setting".to_string(), "셋업 위자드 (Setup Wizard)".to_string()),
+                    ("/provider".to_string(), "공급자 전환 (Switch Provider)".to_string()),
+                    ("/model".to_string(), "모델 전환 (Switch Model)".to_string()),
+                    ("/status".to_string(), "세션 상태 (Session Info)".to_string()),
+                    ("/mode".to_string(), "PLAN ↔ RUN 전환 (Toggle Mode)".to_string()),
+                    ("/tokens".to_string(), "토큰 사용량 (Token Usage)".to_string()),
+                    ("/compact".to_string(), "컨텍스트 압축 (Compress Context)".to_string()),
+                    ("/theme".to_string(), "테마 전환 (Toggle Theme)".to_string()),
+                    ("/clear".to_string(), "대화 초기화 (Clear Chat)".to_string()),
+                    ("/help".to_string(), "도움말 (Help)".to_string()),
+                    ("/quit".to_string(), "종료 (Exit)".to_string()),
+                ];
+                let mut block = crate::app::state::TimelineBlock::new(
+                    crate::app::state::TimelineBlockKind::Help,
+                    "도움말",
+                );
+                block.body.push(crate::app::state::BlockSection::KeyValueTable(help_entries));
+                self.state.ui.timeline.push(block);
             }
             "/quit" => {
                 self.state.should_quit = true;

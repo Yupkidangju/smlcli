@@ -30,5 +30,5 @@
 
 ### 3. 이벤트 아키텍처는 처음부터 세분화해야 한다 (v0.1.0-beta.18 분석)
 - **문제:** 초기 설계에서 `Action` enum을 `ToolFinished`/`ChatResponseOk` 등 완료 이벤트 중심으로 7종만 정의했습니다. 이 구조는 MVP에서는 충분했으나, 진행 표시(스피너, 스트리밍, 작업 카드)를 구현하려 하자 시작·진행·완료·에러를 구분할 수 없어 구조적 한계에 부딪혔습니다.
-- **해결/결정:** Action을 14종으로 확장하고 (ChatStarted, ChatDelta, ToolQueued, ToolStarted, ToolOutputChunk, ToolSummaryReady 추가), `session.messages`(LLM 컨텍스트)와 `timeline_entries`(UI 카드)를 분리하는 이중 데이터 모델을 도입합니다.
+- **해결/결정:** Action을 14종으로 확장하고 (ChatStarted, ChatDelta, ToolQueued, ToolStarted, ToolOutputChunk, ToolSummaryReady 추가), `session.messages`(LLM 컨텍스트)와 `timeline`(UI 카드)를 분리하는 이중 데이터 모델을 도입합니다.
 - **교훈:** 비동기 에이전트 시스템에서 이벤트 enum은 "무엇이 끝났는지"만이 아니라 "무엇이 시작되었고 어디까지 진행되었는지"까지 표현할 수 있어야 합니다. MVP 단계에서도 라이프사이클 전체(Queued → Started → Progress → Done/Error)를 설계해두면 이후 UI 확장 시 재작업을 피할 수 있습니다. 또한 LLM 컨텍스트와 사용자 화면 표시는 목적이 다르므로 반드시 분리해야 합니다.

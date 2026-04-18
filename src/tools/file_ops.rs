@@ -165,14 +165,14 @@ impl Tool for ReadFileTool {
                 path
             ));
         }
-        if let Ok(meta) = std::fs::metadata(canonical) {
-            if meta.len() > 1_048_576 {
-                return PermissionResult::Deny(format!(
-                    "파일이 1MB를 초과합니다 ({} bytes): {}",
-                    meta.len(),
-                    path
-                ));
-            }
+        if let Ok(meta) = std::fs::metadata(canonical)
+            && meta.len() > 1_048_576
+        {
+            return PermissionResult::Deny(format!(
+                "파일이 1MB를 초과합니다 ({} bytes): {}",
+                meta.len(),
+                path
+            ));
         }
         PermissionResult::Allow
     }
@@ -251,6 +251,10 @@ impl Tool for WriteFileTool {
         write_file_preview(path, content).ok()
     }
 
+    fn is_destructive(&self, _args: &Value) -> bool {
+        true
+    }
+
     async fn execute(&self, args: Value, _ctx: &ToolContext<'_>) -> Result<ToolResult, ToolError> {
         let path = args
             .get("path")
@@ -326,6 +330,10 @@ impl Tool for ReplaceFileContentTool {
             &old_text,
             &old_text.replace(target, replacement),
         ))
+    }
+
+    fn is_destructive(&self, _args: &Value) -> bool {
+        true
     }
 
     async fn execute(&self, args: Value, _ctx: &ToolContext<'_>) -> Result<ToolResult, ToolError> {

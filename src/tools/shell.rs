@@ -234,15 +234,13 @@ impl Tool for ExecShellTool {
                 let is_custom_safe = settings
                     .safe_commands
                     .as_ref()
-                    .map_or(false, |c| c.iter().any(|cmd| cmd == parts[0]));
+                    .is_some_and(|c| c.iter().any(|cmd| cmd == parts[0]));
                 let os = std::env::consts::OS;
                 let is_builtin_safe = if os == "windows" {
-                    vec!["dir", "echo", "date", "cd", "type", "find"].contains(&parts[0])
+                    ["dir", "echo", "date", "cd", "type", "find"].contains(&parts[0])
                 } else {
-                    vec![
-                        "ls", "pwd", "date", "echo", "cat", "grep", "df", "free", "uname",
-                    ]
-                    .contains(&parts[0])
+                    ["ls", "pwd", "date", "echo", "cat", "grep", "df", "free", "uname"]
+                        .contains(&parts[0])
                 };
 
                 if safe_to_auto_run || is_custom_safe || is_builtin_safe {

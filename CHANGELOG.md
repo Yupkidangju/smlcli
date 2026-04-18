@@ -3,6 +3,51 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [Unreleased]
+
+### Docs
+- **Phase 15: 2026 CLI UX 현대화 로드맵 문서화**: `spec.md`, `designs.md`, `IMPLEMENTATION_SUMMARY.md`, `DESIGN_DECISIONS.md`, `audit_roadmap.md`에 최신 CLI/TUI UX 패턴을 반영한 리팩토링 및 기능 강화 계획을 추가. 블록 기반 타임라인, 커맨드 팔레트, 입력 툴벨트, 반응형 상태바, 절제된 ASCII 애니메이션, 포커스/스크롤 상태 머신을 구현 전용 스펙으로 동결.
+
+### Changed/Improved (Phase 15-A: TimelineBlock 마이그레이션)
+- **블록 기반 타임라인 도입**: 기존 `TimelineEntry` 기반 단일 텍스트 렌더링에서 `TimelineBlock`, `BlockSection`, `BlockStatus` 상태 머신 기반의 모듈식 아키텍처로 완전히 교체. 
+- **컴파일/의존성**: 고유 식별자 할당을 위한 `uuid v4` 의존성 추가.
+- **렌더링 시스템 교체**: `src/tui/layout.rs` 및 `src/tui/widgets/inspector_tabs.rs`가 새로운 `TimelineBlock` 모델을 순회하여 렌더링하도록 재작성. (기존 `TimelineEntry` 및 `ToolStatus` 완전히 제거)
+
+### Added (Phase 15-B/C/D/E: UX / State Machine & Inspector Workspace)
+- **포커스 상태 머신 (`FocusedPane`)**: 타임라인, 인스펙터, 컴포저, 팔레트 등 포커스 기반 독립 스크롤링 및 키보드 이벤트 라우팅 도입 (`src/app/mod.rs`). 활성화된 패널은 Accent 색상 경계선으로 시각화.
+- **커맨드 팔레트 (`Command Palette`)**: `Ctrl+K` 입력 시 팝업되는 퍼지 검색 기반 빠른 실행 명령 레이어(`src/tui/layout.rs`) 도입. (현재 `toggle_inspector`, `compact`, `clear`, `help` 지원)
+- **Composer Toolbar**: 하단 입력창(Composer) 상단에 현재 작업 맥락(`[RUN]/[PLAN]`, `CWD`, `Shell Policy`) 및 `[Ctrl+K]` 힌트 칩을 렌더링하는 툴바 영역 도입.
+- **다중 라인 프롬프트 지원**: `Shift+Enter` 를 통해 Composer 버퍼에 줄바꿈(`\n`)을 삽입할 수 있도록 멀티라인 입력 처리 추가 (`src/app/mod.rs`).
+- **Adaptive Header**: 윈도우 폭에 맞춰 상단 바 정보가 생략되는 반응형 정책(Adaptive Header) 적용 완료.
+- **타임라인 커서 및 Inspector Preview (`Phase 15-E`)**: 타임라인 내 블록 이동(`Up`/`Down`)을 위한 커서를 추가하고, 선택된 블록의 전체 마크다운 및 코드 펜스를 Inspector의 `Preview` 탭에서 확인할 수 있도록 재구성 (`src/tui/widgets/inspector_tabs.rs`).
+- **Inspector Diff 탭 (`Phase 15-E`)**: 파일 수정 등 승인 대기 중인 변경사항(Diff)을 직관적으로 확인할 수 있도록 `Diff` 탭의 렌더링 구현 추가.
+- **Motion Polish 애니메이션 개선 (`Phase 15-F`)**: LLM 생성 중 보여지는 Thinking 스피너를 점자(`⠁⠂⠄⡀⢀⠠⠐⠈`)로, 도구 실행 상태 배지를 `▶/▷`로 변경하여 `designs.md`의 모션 요구사항을 준수.
+
+## [v0.1.0-beta.23] - 2026-04-18
+
+### Added (Phase 13: Agentic Autonomy 개편)
+- **자율 에이전트 아키텍처 (Agentic Autonomy) 도입**: 다형성 기반의 `ToolRegistry` 패턴을 도입하여 기존 하드코딩된 `match` 도구 실행 로직을 동적으로 전환 및 통합 관리 (`src/tools/registry.rs`).
+- **도구 스키마 동적 주입**: AI 모델에게 도구 스키마(Tool Schemas)를 초기 요청뿐 아니라 후속 재전송(`send_chat_message_internal`)에서도 동적으로 주입하도록 `chat_runtime` 구조 개선.
+- **Git 자동 체크포인트 (Automated Git Checkpoint)**: `src/tools/git_checkpoint.rs` 모듈을 추가. `create_checkpoint()`는 강제 커밋 없이 워킹 트리 clean 여부만 검사하여 `Result<bool>`을 반환. WIP 존재 시 롤백을 건너뛰어 사용자 데이터를 보호. `rollback_checkpoint()`는 `git reset --hard HEAD`만 사용하며 `git clean -fd`는 완전 제거.
+- **Tree-sitter Repo Map**: Tree-sitter 기반 `repo_map.rs`를 구현하여 워킹 디렉토리 내 `.rs` 파일들의 AST 구조(struct, enum, fn)를 추출, 8KB 크기 제한 하에 요약하여 프롬프트 상단으로 자동 주입하는 컨텍스트 확장 기능 추가.
+- **Auto-Verify & Self-Healing**: 도구 실행 실패 시 `AutoVerifyState` (Idle, Healing { retries }) 스테이트 머신을 사용. `ToolFinished(is_error=true)`와 `ToolError` 양쪽 경로 모두에서 힐링 프롬프트를 주입하고 LLM에 재전송. 최대 3회 재시도 후 자동 포기(Abort).
+- **Tree of Thoughts TUI 렌더링**: 여러 도구가 연쇄적으로 실행되거나 자가 복구가 진행될 때 시각적으로 인덴트(`└─`)를 부여하여 타임라인에서 계층적으로 표현하도록 기능 추가 (`src/tui/layout.rs`).
+
+### Changed/Improved
+- **ToolCall 리팩토링**: 기존 Enum 기반의 `ToolCall` 구조를 직렬화(Serialization) 없는 단일 구조체(Struct)와 `Value` 파라미터 조합으로 교체하여 유연성 극대화.
+- **권한 검사 책임 이관**: `PermissionEngine` 권한 검사 체계를 `Tool` trait로 위임하여 각 도구가 스스로의 위험도(`is_destructive`)와 검사 로직을 정의하도록 개선.
+- **Repo Map 헤더 포맷**: `"Repository Structure Map (AST based):"` → `"[Repo Map]"` 헤더로 변경하여 감사 기준과 동기화.
+
+### Security
+- **SafeOnly allowlist 바이패스 수정**: 직접 셸 실행(`!`) 경로에서 `safe_to_auto_run: true`가 하드코딩되어 SafeOnly 모드의 allowlist를 우회하던 취약점을 `safe_to_auto_run: false`로 수정.
+- **Auto-Verify Abort 재전송 중단**: 최대 재시도(3회) 도달 시 Abort 메시지만 남기고 `send_chat_message_internal()` 호출을 중단하여 LLM 재전송 무한 루프를 방지. `ToolFinished`와 `ToolError` 양쪽 경로에 동일 적용.
+
+### Added (Phase 14: TUI UX/UI 고도화)
+- **14-A 멀티라인 텍스트 렌더링**: `render_multiline_text()` 공용 헬퍼 도입. `Line::from(msg)` 단일 라인 렌더링 → `\n` 기준 분리 멀티라인 렌더링으로 전환. `/help` 명령어 출력은 `HelpTable` variant로 구조화하고, 좁은 터미널 폭에서도 명령어 컬럼이 밀리지 않도록 수동 단어 wrap 알고리즘 적용.
+- **14-B 스크롤 분리 + Auto-Follow + 마우스**: `inspector_scroll`/`timeline_follow_tail` 필드 분리. `terminal.rs`에 `EnableMouseCapture` 추가. `event_loop.rs`에서 `CrosstermEvent::Mouse` 수신. 마우스 휠을 포인터 X좌표 기반 타임라인/인스펙터 독립 라우팅. Home/End 키 지원. Auto-follow: bottom-up 오프셋 변환을 통해 렌더링에 완벽하게 연동.
+- **14-C 키바인딩 재정렬**: `Ctrl+I`(터미널에서 Tab과 동일한 0x09) 바인딩 제거. 인스펙터 토글을 `F2`로 변경. 상태 바 안내 문구를 실제 키맵과 동기화.
+- **14-D 반응형 레이아웃**: 상단 바를 `Layout::horizontal`로 좌우 강제 분할하여 터미널 폭 감소 시 핵심 정보(mode, ctx%)가 잘리지 않고 우측 정렬을 유지하도록 구조 개선. `provider/model/cwd` 중략 헬퍼 `truncate_middle()` 적용. 인스펙터 폭 Min/Max 클램프(32~48cols) 및 탭 라벨 축약 적용.
+
 ## [0.1.0-beta.23] - 2026-04-17
 
 ### Added (Phase 12: Native Structured Tool Call Integration 완료)
@@ -146,12 +191,12 @@
 
 ### Added (Phase 9-A: 이벤트 아키텍처 기반 — 7건)
 - **Action enum 14종 확장**: ChatStarted, ChatDelta, ToolQueued, ToolStarted, ToolOutputChunk, ToolSummaryReady 추가
-- **TimelineEntry 이중 데이터 모델**: session.messages(LLM)와 timeline_entries(UI 카드) 분리
+- **TimelineEntry 이중 데이터 모델**: session.messages(LLM)와 timeline(UI 카드) 분리
 - **Semantic Palette**: `tui/palette.rs` 신규 — 전경 6색 + 배경 3계층 + 스피너/배지 상수
 - **tick 기반 애니메이션**: thinking 스피너(◐◓◑◒), 도구 배지 깜빡임(●/○), 승인 pulse
 - **Inspector Logs 탭 실체**: logs_buffer 기반 실제 로그 렌더링
 - **Tool 출력 요약 분리**: raw stdout → 2~4줄 타임라인 요약 + 원문 Logs 탭
-- **타임라인 렌더링 전환**: session.messages 기반 → timeline_entries 기반 (폴백 유지)
+- **타임라인 렌더링 전환**: session.messages 기반 → timeline 기반 (폴백 유지)
 
 ### Added (Phase 9-B: 보안 강화 — 4건)
 - **Blocked Command 목록**: sudo/rm -rf/chmod 777/mkfs/dd/fork bomb 등 15개 패턴 무조건 차단
@@ -406,3 +451,4 @@
 
 ### Security
 - 프로젝트 전반에 걸친 보안 검토 가이드 등록 (`audit_roadmap.md`)
+

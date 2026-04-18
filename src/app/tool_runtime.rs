@@ -35,23 +35,21 @@ impl App {
                 let tool_call = crate::domain::tool_result::ToolCall { name, args };
 
                 // [v0.1.0-beta.22] 빈 명령은 권한 검사 이전에 즉시 차단
-                if tool_call.name == "ExecShell" {
-                    if let Some(cmd) = tool_call.args.get("command").and_then(|v| v.as_str()) {
-                        if cmd.trim().is_empty() {
-                            self.state.runtime.logs_buffer.push(
-                                "[Harness] ExecShell 빈 명령 감지 → 실행 차단됨.".to_string(),
-                            );
-                            self.state
-                                .ui
-                                .timeline
-                                .push(crate::app::state::TimelineEntry::now(
-                                    crate::app::state::TimelineEntryKind::SystemNotice(
-                                        "⚠ 빈 명령은 실행할 수 없습니다.".to_string(),
-                                    ),
-                                ));
-                            continue;
-                        }
-                    }
+                if tool_call.name == "ExecShell"
+                    && let Some(cmd) = tool_call.args.get("command").and_then(|v| v.as_str())
+                    && cmd.trim().is_empty()
+                {
+                    self.state.runtime.logs_buffer.push(
+                        "[Harness] ExecShell 빈 명령 감지 → 실행 차단됨.".to_string(),
+                    );
+                    self.state
+                        .ui
+                        .timeline
+                        .push(crate::app::state::TimelineBlock::new(
+                            crate::app::state::TimelineBlockKind::Notice,
+                            "⚠ 빈 명령은 실행할 수 없습니다."
+                        ));
+                    continue;
                 }
 
                 found_count += 1;
@@ -76,16 +74,12 @@ impl App {
         let settings = self.state.domain.settings.clone().unwrap_or_default();
 
         let tool_name = Self::format_tool_name(&tool_call);
-        self.state
-            .ui
-            .timeline
-            .push(crate::app::state::TimelineEntry::now(
-                crate::app::state::TimelineEntryKind::ToolCard {
-                    tool_name: tool_name.clone(),
-                    status: crate::app::state::ToolStatus::Queued,
-                    summary: "권한 검사 중...".to_string(),
-                },
-            ));
+        let mut block = crate::app::state::TimelineBlock::new(
+            crate::app::state::TimelineBlockKind::ToolRun,
+            tool_name.clone()
+        );
+        block.status = crate::app::state::BlockStatus::Running;
+        self.state.ui.timeline.push(block);
 
         let perm = crate::domain::permissions::PermissionEngine::check(&tool_call, &settings);
 
@@ -97,11 +91,11 @@ impl App {
             crate::domain::permissions::PermissionResult::Ask => {
                 // 승인 대기
                 if let Some(last) = self.state.ui.timeline.last_mut() {
-                    last.kind = crate::app::state::TimelineEntryKind::ApprovalCard {
-                        tool_name: tool_name.clone(),
-                        // [v0.1.0-beta.22] 전체 도구 설명을 축약 없이 표시
-                        detail: Self::format_tool_detail(&tool_call),
-                    };
+                    last.kind = crate::app::state::TimelineBlockKind::Approval;
+                    last.status = crate::app::state::BlockStatus::NeedsApproval;
+                    last.body.push(crate::app::state::BlockSection::Markdown(
+                        Self::format_tool_detail(&tool_call)
+                    ));
                 }
                 self.state.runtime.approval.pending_tool = Some(tool_call.clone());
                 self.state.runtime.approval.pending_tool_call_id = tool_call_id;
@@ -117,16 +111,12 @@ impl App {
             }
             crate::domain::permissions::PermissionResult::Deny(reason) => {
                 // 타임라인 ToolCard를 Error 상태로 갱신
-                for entry in self.state.ui.timeline.iter_mut().rev() {
-                    if let crate::app::state::TimelineEntryKind::ToolCard {
-                        ref mut status,
-                        ref mut summary,
-                        ..
-                    } = entry.kind
-                        && *status == crate::app::state::ToolStatus::Queued
+                for block in self.state.ui.timeline.iter_mut().rev() {
+                    if block.kind == crate::app::state::TimelineBlockKind::ToolRun
+                        && block.status == crate::app::state::BlockStatus::Running
                     {
-                        *status = crate::app::state::ToolStatus::Error;
-                        *summary = format!("🛡 {}", reason);
+                        block.status = crate::app::state::BlockStatus::Error;
+                        block.body.push(crate::app::state::BlockSection::Markdown(format!("🛡 {}", reason)));
                         break;
                     }
                 }
@@ -138,7 +128,7 @@ impl App {
                         role: crate::providers::types::Role::System,
                         content: Some(format!("[Security Block] {}", reason)),
                         tool_calls: None,
-                        tool_call_id: tool_call_id,
+                        tool_call_id,
                         pinned: false,
                     });
             }
@@ -236,12 +226,11 @@ impl App {
         tool_call_id: Option<String>,
     ) {
         // [v0.1.0-beta.18] Phase 9-A: ToolStarted — 타임라인 카드를 Running으로 갱신
-        for entry in self.state.ui.timeline.iter_mut().rev() {
-            if let crate::app::state::TimelineEntryKind::ToolCard { ref mut status, .. } =
-                entry.kind
-                && *status == crate::app::state::ToolStatus::Queued
+        for block in self.state.ui.timeline.iter_mut().rev() {
+            if block.kind == crate::app::state::TimelineBlockKind::ToolRun
+                && block.status == crate::app::state::BlockStatus::Idle
             {
-                *status = crate::app::state::ToolStatus::Running;
+                block.status = crate::app::state::BlockStatus::Running;
                 break;
             }
         }
@@ -278,18 +267,13 @@ impl App {
             let tool_call_id = self.state.runtime.approval.pending_tool_call_id.take();
             self.state.runtime.approval.diff_preview = None;
 
-            // [v0.1.0-beta.22] 승인 완료: ApprovalCard를 ToolCard(Running)로 전환 (전체 경로 표시)
             let tool_name = Self::format_tool_name(&tool);
-            self.state
-                .ui
-                .timeline
-                .push(crate::app::state::TimelineEntry::now(
-                    crate::app::state::TimelineEntryKind::ToolCard {
-                        tool_name,
-                        status: crate::app::state::ToolStatus::Running,
-                        summary: "실행 중...".to_string(),
-                    },
-                ));
+            let mut block = crate::app::state::TimelineBlock::new(
+                crate::app::state::TimelineBlockKind::ToolRun,
+                tool_name,
+            );
+            block.status = crate::app::state::BlockStatus::Running;
+            self.state.ui.timeline.push(block);
 
             self.execute_tool_async(tool, tool_call_id.clone());
 
@@ -300,7 +284,7 @@ impl App {
                     role: crate::providers::types::Role::System,
                     content: Some("Tool is running in background...".to_string()),
                     tool_calls: None,
-                    tool_call_id: tool_call_id,
+                    tool_call_id,
                     pinned: false,
                 });
         } else {
@@ -312,10 +296,9 @@ impl App {
             self.state
                 .ui
                 .timeline
-                .push(crate::app::state::TimelineEntry::now(
-                    crate::app::state::TimelineEntryKind::SystemNotice(
-                        "사용자가 도구 실행을 거부했습니다.".to_string(),
-                    ),
+                .push(crate::app::state::TimelineBlock::new(
+                    crate::app::state::TimelineBlockKind::Notice,
+                    "사용자가 도구 실행을 거부했습니다."
                 ));
 
             self.state
@@ -325,7 +308,7 @@ impl App {
                     role: crate::providers::types::Role::System,
                     content: Some("Tool execution rejected by user.".to_string()),
                     tool_calls: None,
-                    tool_call_id: tool_call_id,
+                    tool_call_id,
                     pinned: false,
                 });
         }

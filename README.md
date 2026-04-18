@@ -22,6 +22,8 @@
 - **Inspector Search 탭**: 타임라인 전체를 대소문자 무시로 실시간 검색 (최대 50건 표시).
 - **SSE 스트리밍**: AI 응답을 토큰 단위로 실시간 표시 (OpenRouter/Gemini 대응).
 - **JSONL 세션 로그**: 대화 내용을 `~/.smlcli/sessions/`에 자동 기록하여 세션 복원 지원.
+- **에이전트 자율성 (Agentic Autonomy)**: 파괴적인 동작 전후 Git 자동 체크포인트와 자가 복구 루프(Self-healing)를 통해 안전한 AI 코드 작성을 보장.
+- **Tree-sitter Repo Map**: AST 파싱 기반 저장소 요약 맵을 통해 AI가 전체 프로젝트 구조를 맥락으로 주입받아 정확한 코드를 수정.
 - **플랫폼 지원**: Linux (bash/zsh) 및 Windows (PowerShell/WSL) 동시 지원.
 
 ### 빠른 시작
@@ -59,6 +61,8 @@
 - **Inspector Search Tab**: Real-time, case-insensitive full-text search across your entire timeline (up to 50 results).
 - **SSE Streaming**: Token-by-token real-time display of AI responses (OpenRouter/Gemini).
 - **JSONL Session Logs**: Automatic conversation recording in `~/.smlcli/sessions/` with session restore support.
+- **Agentic Autonomy**: Guarantees safe AI code generation via automated Git checkpoints and self-healing loops before/after destructive actions.
+- **Tree-sitter Repo Map**: Injects AST-parsed repository summary maps into the AI context for accurate code modifications.
 - **Cross-platform**: Full support for Linux and Windows.
 
 ### Quick Start
@@ -91,6 +95,8 @@
 - **Inspector 検索タブ**: タイムライン全体をリアルタイムで全文検索（最大50件表示）。
 - **SSE ストリーミング**: AIの回答をトークン単位でリアルタイム表示。
 - **JSONL セッションログ**: 会話を自動記録し、セッション復元をサポート。
+- **エージェント自律性 (Agentic Autonomy)**: 破壊的な操作の前後で自動化されたGitチェックポイントと自己修復ループにより、安全なAIコード生成を保証します。
+- **Tree-sitter Repo Map**: AST解析ベースのリポジトリ概要マップをAIコンテキストに注入し、正確なコード修正を実現します。
 
 ### クイックスタート
 1. リポジトリをクローンします。
@@ -122,6 +128,8 @@
 - **Inspector 搜索分頁**: 即時全文搜索整個時間線（最多顯示50筆結果）。
 - **SSE 串流**: 逐字符即時顯示 AI 回應。
 - **JSONL 對話記錄**: 自動記錄對話內容並支援工作階段還原。
+- **代理自主性 (Agentic Autonomy)**: 透過破壞性操作前後的自動 Git 檢查點與自我修復循環，確保 AI 程式碼生成的安全性。
+- **Tree-sitter Repo Map**: 將基於 AST 解析的儲存庫摘要地圖注入 AI 上下文中，實現精確的程式碼修改。
 
 ### 快速開始
 1. 複製專案:
@@ -153,6 +161,8 @@
 - **Inspector 搜索选项卡**: 实时全文搜索整个时间线（最多显示50条结果）。
 - **SSE 流式传输**: 逐令牌实时显示 AI 回复。
 - **JSONL 会话日志**: 自动记录对话内容并支持会话恢复。
+- **代理自主性 (Agentic Autonomy)**: 通过破坏性操作前后的自动 Git 检查点与自我修复循环，确保 AI 代码生成的安全性。
+- **Tree-sitter Repo Map**: 将基于 AST 解析的仓库摘要地图注入 AI 上下文中，实现精确的代码修改。
 
 ### 快速开始
 1. 克隆项目

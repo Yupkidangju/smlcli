@@ -170,7 +170,7 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
 
 ### Phase 9-A: 이벤트 기반 구조 — ✅ 완료 (6/7건)
 1. ✅ Action enum 14종 확장 (ChatStarted, ChatDelta, ToolQueued, ToolStarted, ToolOutputChunk, ToolSummaryReady)
-2. ✅ TimelineEntry 모델 도입 (session.messages ↔ timeline_entries 이중 구조)
+2. ✅ TimelineEntry 모델 도입 (session.messages ↔ timeline 이중 구조)
 3. ✅ Semantic Palette 도입 (tui/palette.rs — info/success/warning/danger/muted/accent + bg 3계층)
 4. ✅ tick 기반 애니메이션 (스피너 ◐◓◑◒, 배지 깜빡임 ●/○, 승인 pulse)
 5. ✅ Inspector Logs 탭 실체 구현 (logs_buffer 기반 렌더링)
@@ -441,35 +441,135 @@ cargo clippy  ✅ 0 warnings (-D warnings 게이트 통과)
 
 ---
 
-## Phase 13: Agentic Autonomy & Architectural Refactoring (진행 예정)
+## Phase 13: Agentic Autonomy & Architectural Refactoring (완료)
 
 이 페이즈는 `smlcli`를 단순한 프롬프트 도구에서 벗어나 자율적으로 코드를 검증하고 복구하는 에이전트(Autonomous Agent)로 도약하기 위해 설계되었습니다.
 
 ### 13.1 시스템 분해표 및 파일 책임
 | 시스템 | 파일 경로 | 변경된 책임 (Responsibilities) |
 | --- | --- | --- |
-| **Tool Registry Layer** | `src/tools/registry.rs` | 다형성(Polymorphism)을 갖춘 `Tool` 트레이트 명세 정의. `ReadFile`, `ExecShell` 등의 개별 구조체 이관. |
-| **Git Automation Layer** | `src/tools/git_checkpoint.rs` | 워크스페이스 상태 파악(`git status`) 및 수정 전 자동 스냅샷/커밋 로직. |
-| **Repo Map Layer** | `src/infra/repo_map.rs` | `tree-sitter`를 이용한 AST 파싱 및 컨텍스트 요약(최대 2,000 토큰 한계). |
-| **State Machine** | `src/app/state.rs` | `AutoVerifyState` (Idle, Verifying, Failed) 정의 및 재시도 상태 관리. |
-| **TUI Layer** | `src/tui/layout.rs` | '생각의 트리(Tree of Thoughts)' 렌더링. 도구 호출 로그를 아코디언 형태로 인덴트(`└─`) 처리. |
+| **Tool Registry Layer** | `src/tools/registry.rs` | 다형성(Polymorphism)을 갖춘 `Tool` 트레이트 명세 정의. `ReadFile`, `WriteFile`, `ReplaceFileContent`, `ExecShell` 등의 개별 구조체 이관. |
+| **Git Automation Layer** | `src/tools/git_checkpoint.rs` | 워크스페이스 clean 여부 판단(`git status --porcelain`). 강제 커밋 없이 `Result<bool>` 반환. WIP 존재 시 롤백 건너뜀. `git clean -fd` 미사용. |
+| **Repo Map Layer** | `src/domain/repo_map.rs` | `tree-sitter`를 이용한 Rust(.rs) 전용 AST 파싱 및 컨텍스트 요약(최대 8,000바이트 한계). |
+| **State Machine** | `src/app/state.rs` | `AutoVerifyState` (`Idle`, `Healing { retries: usize }`) 정의 및 최대 3회 재시도 상태 관리. |
+| **TUI Layer** | `src/tui/layout.rs` | '생각의 트리(Tree of Thoughts)' 렌더링. 도구 호출 로그를 `depth` 속성 기반 인덴트(`└─`) 처리. |
 
 ### 13.2 경계 계약 요약 및 동결된 공식
-- **최대 자가 복구 한계 (Self-Correction Retries)**: 3회 초과 시 사용자 승인 대기로 폴백.
-- **Git Checkpoint 롤백 전략**: 최근 생성된 AI 커밋은 LRU 기반 최대 5개 유지.
-- **Tool 트레이트 시그니처**: `async fn execute(&self, args: Value, ctx: &mut ToolContext) -> Result<ToolResult, ToolError>`
+- **최대 자가 복구 한계 (Self-Correction Retries)**: `Healing { retries }` 3회 초과 시 `Idle`로 전환하고 사용자에게 수동 개입을 안내.
+- **Git Checkpoint 롤백 전략**: `create_checkpoint()`는 워킹 트리가 clean일 때만 `true` 반환. `rollback_checkpoint()`는 `git reset --hard HEAD`만 사용하며 종료 코드를 반드시 검사. untracked 파일은 어떤 경우에도 삭제하지 않음.
+- **ExecShell 파괴 판정**: `ExecShell`의 `is_destructive()`는 기본값(`false`)을 사용. 쉘 명령 실패가 Git 롤백을 트리거하지 않음.
+- **도구 스키마 주입**: `send_chat_message`(초기)와 `send_chat_message_internal`(재전송) 양쪽 모두 `GLOBAL_REGISTRY.all_schemas()`를 `req.tools`에 주입.
+- **Tool 트레이트 시그니처**: `async fn execute(&self, args: Value, ctx: &ToolContext<'_>) -> Result<ToolResult, ToolError>`
 
 ### 13.3 로드맵 체크리스트 (구현 가이드)
-- [ ] **Step 1: Tool Registry 리팩토링**
+- [x] **Step 1: Tool Registry 리팩토링**
   - 기존 `match` 분기를 삭제하고 `tool_runtime.rs`를 다형성 호출 구조로 개편.
-  - 빌드 검증 (`cargo check && cargo test`).
-- [ ] **Step 2: Automated Git Checkpoint 통합**
-  - 파일 쓰기(`ReplaceFileContent`, `WriteFile`) 실행 직전 `git status` 더티(Dirty) 여부 검사.
-  - 성공적으로 쓰기 완료 시 `AI: Auto-checkpoint` 백그라운드 커밋 실행.
-- [ ] **Step 3: Tree-sitter Repo Map 통합**
-  - `tree-sitter` 의존성 주입. 프로젝트 구조를 AST로 추출하여 System 프롬프트 최상단 2,000토큰 이하로 주입.
-- [ ] **Step 4: Auto-Verify & Self-Correction 루프**
-  - `smlcli run --auto-verify` 플래그 인식 및 `AutoVerifyState` 활성화.
-  - 린터/테스트 에러 발생 시 자동 `Role::Tool` 피드백 루프 작동 (최대 3회).
-- [ ] **Step 5: Tree of Thoughts TUI 렌더링**
+- [x] **Step 2: Automated Git Checkpoint 통합**
+  - `is_destructive()=true`인 도구 실행 직전 `create_checkpoint()`로 워킹 트리 clean 여부를 검사. clean 상태에서만 `safe_to_rollback=true` 반환. 도구 실패 시 `git reset --hard HEAD`로 tracked 파일만 복원. WIP 존재 시 롤백 건너뜀.
+- [x] **Step 3: Tree-sitter Repo Map 통합**
+  - `tree-sitter`, `tree-sitter-rust`, `ignore` 의존성 주입. Rust(.rs) 파일의 구조를 AST로 추출하여 System 프롬프트 최상단 8KB 제한 하에 주입.
+- [x] **Step 4: Auto-Verify & Self-Correction 루프**
+  - `AutoVerifyState` (`Idle`, `Healing { retries }`) 스테이트 머신 구현. `ToolFinished(is_error=true)`와 `ToolError` 양쪽 경로 모두에서 힐링 프롬프트 주입 및 재전송. 최대 3회 초과 시 Abort.
+- [x] **Step 5: Tree of Thoughts TUI 렌더링**
   - `TimelineEntry`에 계층 속성(Depth) 부여 및 `layout.rs`에서 시각적 계층화(`└─`) 적용.
+
+---
+
+## Phase 14: TUI UX/UI 고도화 (v0.1.0-beta.24)
+
+### 14.1 변경 파일 및 구현 내역
+
+#### 14-A: 멀티라인 텍스트 렌더링 — ✅ 완료
+- ✅ `layout.rs`: `render_multiline_text(text, style) -> Vec<Line<'static>>` 공용 헬퍼 추가
+- ✅ `layout.rs`: UserMessage, AssistantMessage, AssistantDelta 렌더링에서 `Line::from(msg)` → `render_multiline_text()` 전환
+- ✅ `layout.rs`: session.messages 폴백 경로(line 270~291)에도 동일 적용
+- ✅ `command_router.rs`: `/help` 출력을 타임라인 SystemNotice로 직접 추가하여 개행 보존
+
+#### 14-B: 스크롤 분리 + Auto-Follow + 마우스 — ✅ 완료
+- ✅ `state.rs`: `inspector_scroll: u16`, `timeline_follow_tail: bool` 필드 추가
+- ✅ `terminal.rs`: `EnableMouseCapture`/`DisableMouseCapture` 추가
+- ✅ `event_loop.rs`: `CrosstermEvent::Mouse` → `Event::Mouse(MouseEvent)` 전달
+- ✅ `mod.rs`: `handle_mouse()` 메서드 — `is_mouse_in_inspector` 클램프 범위 보정 및 패널별 독립 스크롤 라우팅
+- ✅ `layout.rs`: `timeline_follow_tail` 기반 bottom-up 오프셋을 top-based 렌더링에 동기화, `inspector_scroll` 전면 적용
+- ✅ `mod.rs`: `Home`/`End` 키 지원 + `PageUp`/`PageDown`에 `follow_tail` 연동
+
+#### 14-C: 키바인딩 재정렬 — ✅ 완료
+- ✅ `mod.rs`: `Ctrl+I` 바인딩 제거 → 인스펙터 토글 `F2`로 변경
+- ✅ `layout.rs`: 상태 바 안내 문구 `"(Tab) 모드 전환 | (F2) 인스펙터 토글"` 동기화
+- ✅ `designs.md`: §4.3 키보드 바인딩 테이블을 실제 구현과 동기화
+
+#### 14-D: 반응형 레이아웃 — ✅ 완료
+- ✅ `layout.rs`: 상단 바를 `Layout::horizontal`로 좌우 분리(우측 정렬)하여 폭 감소 시 핵심 정보 잘림 원천 차단
+- ✅ `layout.rs`: `truncate_middle(s, max_len)` 헬퍼 — cwd, provider, model 모두 중략 적용
+- ✅ `layout.rs`: 인스펙터 폭 `Percentage(30)` → `Length` 클램프(32~48cols, 타임라인 최소 72cols)
+- ✅ `layout.rs`: 인스펙터 탭 라벨 축약 (폭 < 40 시 Preview→Prev, Search→Srch 등)
+
+### 14.2 품질 검증 결과
+```
+cargo clippy --all-targets --all-features -- -D warnings  ✅ 0 warnings
+cargo test  ✅ 42 passed (0 failed)
+```
+
+---
+
+## Phase 15: 2026 CLI UX 현대화 로드맵 (완료: 15-A~F)
+
+이 페이즈는 이미 구현된 Phase 13~14의 기반을 유지하면서, `smlcli`를 **블록 기반 작업 콘솔**로 승격시키는 계획 단계다. 목적은 "더 화려한 TUI"가 아니라, 빠른 명령 발견, 작업 재참조, 긴 출력 관리, 독립 패널 포커스, 절제된 모션을 갖춘 실사용 CLI UX를 만드는 것이다.
+
+### 15.1 시스템 분해표 및 파일 책임 (계획)
+| 시스템 | 파일 경로 | 예정 책임 |
+| --- | --- | --- |
+| **Block Timeline Layer** | `src/app/state.rs`, `src/tui/layout.rs` | [✅ Phase 15-A 완료] `TimelineBlock`, `BlockSection`, `BlockStatus` 구조체 도입 및 렌더링 교체 완료 |
+| **Focus / Scroll State Machine** | `src/app/state.rs`, `src/app/mod.rs` | `FocusedPane`, pane별 scroll/selection/follow 상태, 키/마우스 라우팅 |
+| **Command Palette Layer** | `src/app/state.rs`, `src/app/mod.rs`, `src/tui/layout.rs` | `Ctrl+K` 기반 Quick Actions palette, fuzzy search, 카테고리별 액션 실행 (filter/matched_indices 기반) |
+| **Composer Toolbar Layer** | `src/app/state.rs`, `src/tui/layout.rs` | mode/context/policy/hint chip 렌더링, multiline 입력 상태 표시 |
+| **Adaptive Header Layer** | `src/tui/layout.rs` | 세그먼트 우선순위 기반 상단 바 렌더링, 좌우 정렬, 폭별 중략 |
+| **Inspector Workspace Layer** | `src/tui/widgets/inspector_tabs.rs` | 블록 상세, diff, logs, recent, search를 작업형 패널로 재구성 |
+| **Motion Layer** | `src/tui/layout.rs` | 상태별 ASCII 모션 프로필과 pulse/spinner/settle 효과 |
+
+### 15.2 경계 계약 요약
+- **프레임워크 유지**: `ratatui + crossterm` 유지. Phase 15-A~15-C에서는 신규 의존성 도입 금지.
+- **블록 우선 렌더링**: 타임라인의 기본 단위는 `TimelineEntry`가 아니라 `TimelineBlock`.
+- **명령 발견 경로**: `Ctrl+K` = Command Palette, `Ctrl+P` = provider/model 유지.
+- **포커스 모델**: `Timeline`, `Inspector`, `Composer`, `Palette` 4분할.
+- **모션 한도**: 상태 전달용 ASCII 모션만 허용, 과한 전환 애니메이션 금지.
+
+### 15.3 첫 작업 가능 범위 (First Playable Slice)
+- 블록 헤더 + 상태 배지 + 접힘/펼침
+- `Ctrl+K` palette 기본 동작
+- Composer toolbar 4종 칩
+- 타임라인/인스펙터/팔레트 포커스 전환
+- 100/120/140 columns 레이아웃 스냅샷 통과
+
+### 15.4 구현 순서 권장
+- [x] **Step 1: Block Timeline Foundation**
+  - `TimelineBlock`, `BlockSection`, `BlockStatus` 타입 정의
+  - 기존 타임라인 문자열 조립을 블록 렌더링 함수로 대체
+- [x] **Step 2: Focus / Scroll State Machine**
+  - `FocusedPane` 도입
+  - pane별 scroll/selection/follow 상태 완전 분리
+- [x] **Step 3: Command Palette**
+  - `Ctrl+K` 바인딩
+  - category + fuzzy search + action dispatch
+- [x] **Step 4: Composer Toolbar**
+  - mode/path/context/policy/hint 칩 렌더링
+  - `Shift+Enter` 멀티라인 입력
+- [x] **Step 5: Adaptive Header**
+  - 상단 바 세그먼트 우선순위 렌더링
+  - breakpoints별 생략 정책
+- [x] **Step 6: Inspector Workspace**
+  - selected block details / diff / recent / logs 재구성
+- [x] **Step 7: Motion Polish**
+  - spinner/pulse/settle 효과 상태별 1종 도입
+- [x] **Step 8: Verification**
+  - snapshot, focus, palette, scroll, keyboard, mouse 통합 검증
+
+### 15.5 유지보수 규칙
+- palette command 목록은 문자열 상수가 아니라 구조화 데이터 원본을 단일 소스로 유지
+- block renderer와 state reducer를 분리하여, 레이아웃 변경이 상태 머신을 오염시키지 않게 유지
+- 새 애니메이션 추가 시 기존 상태와 중첩 금지
+
+### 15.6 외부 레퍼런스 메모
+- Warp Blocks / Universal Input: 블록 단위 작업 맥락, 입력 툴벨트
+- Textual Command Palette: command discoverability
+- Ratatui Layout / Style / Tachyonfx: 반응형 레이아웃과 경량 모션

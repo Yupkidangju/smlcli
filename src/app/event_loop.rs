@@ -1,5 +1,9 @@
+// [v0.1.0-beta.24] Phase 14-B: 마우스 이벤트 지원 추가.
+// CrosstermEvent::Mouse를 Event::Mouse로 전달하여
+// 마우스 휠 스크롤을 패널별로 라우팅할 수 있게 함.
+
 use anyhow::Result;
-use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, KeyEventKind};
+use crossterm::event::{self, Event as CrosstermEvent, KeyEvent, KeyEventKind, MouseEvent};
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task;
@@ -7,6 +11,8 @@ use tokio::task;
 pub enum Event {
     Tick,
     Input(KeyEvent),
+    /// [v0.1.0-beta.24] Phase 14-B: 마우스 이벤트 (휠 스크롤 등)
+    Mouse(MouseEvent),
     Action(crate::app::action::Action),
     Quit,
 }
@@ -21,7 +27,7 @@ impl EventLoop {
         let tick_tx = tx.clone();
         let app_tx = tx.clone();
 
-        // Timer Task
+        // 타이머 태스크: tick_rate 간격으로 Tick 이벤트 전송
         task::spawn(async move {
             let mut interval = tokio::time::interval(tick_rate);
             loop {
@@ -32,15 +38,24 @@ impl EventLoop {
             }
         });
 
-        // Crossterm Event Polling Task (Blocking)
+        // Crossterm 이벤트 폴링 (블로킹 태스크)
+        // [v0.1.0-beta.24] 키 이벤트와 마우스 이벤트를 모두 수신
         task::spawn_blocking(move || {
             loop {
-                if event::poll(Duration::from_millis(50)).unwrap_or(false)
-                    && let Ok(CrosstermEvent::Key(key)) = event::read()
-                    && key.kind == KeyEventKind::Press
-                    && tx.blocking_send(Event::Input(key)).is_err()
-                {
-                    break;
+                if event::poll(Duration::from_millis(50)).unwrap_or(false) {
+                    match event::read() {
+                        Ok(CrosstermEvent::Key(key)) if key.kind == KeyEventKind::Press => {
+                            if tx.blocking_send(Event::Input(key)).is_err() {
+                                break;
+                            }
+                        }
+                        Ok(CrosstermEvent::Mouse(mouse)) => {
+                            if tx.blocking_send(Event::Mouse(mouse)).is_err() {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
         });

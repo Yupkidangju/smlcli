@@ -66,12 +66,18 @@ impl App {
                         // [v0.1.0-beta.18] 애니메이션 틱 카운터 증가
                         self.state.ui.tick_count = self.state.ui.tick_count.wrapping_add(1);
 
+                        // [Phase 15-E] follow_tail일 때 커서를 최신 블록으로 동기화
+                        if self.state.ui.timeline_follow_tail && !self.state.ui.timeline.is_empty() {
+                            self.state.ui.timeline_cursor = self.state.ui.timeline.len() - 1;
+                        }
+
                         // 컨텍스트 자동 압축 트리거
                         if self.state.domain.session.needs_auto_compaction {
                             self.state.domain.session.needs_auto_compaction = false;
                             self.handle_slash_command("/compact");
                         }
                     }
+                    Event::Mouse(_) => {}
                 }
             }
 
@@ -86,26 +92,24 @@ impl App {
     /// 비동기 액션 이벤트를 각 도메인별 핸들러로 라우팅.
     /// 도구 결과, 채팅 응답, 모델 목록, 인증 결과, 컨텍스트 요약 등 처리.
     fn handle_action(&mut self, action: action::Action) {
-        use crate::app::state::{TimelineEntry, TimelineEntryKind, ToolStatus};
+
 
         match action {
             // === [v0.1.0-beta.18] 채팅 라이프사이클 ===
             action::Action::ChatStarted => {
-                // thinking indicator 시작 + 타임라인에 스트리밍 준비 엔트리
+                // thinking indicator 시작 + 블록 상태 갱신
                 self.state.runtime.is_thinking = true;
-                self.state
-                    .ui
-                    .timeline
-                    .push(TimelineEntry::now(TimelineEntryKind::AssistantDelta(
-                        String::new(),
-                    )));
+                if let Some(block) = self.state.ui.timeline.last_mut() {
+                    block.status = crate::app::state::BlockStatus::Running;
+                    block.body.push(crate::app::state::BlockSection::Markdown(String::new()));
+                }
             }
 
             action::Action::ChatDelta(token) => {
                 // SSE 토큰 수신: 스트리밍 중간 결과에 append
                 self.state.runtime.is_thinking = false;
-                if let Some(last) = self.state.ui.timeline.last_mut()
-                    && let TimelineEntryKind::AssistantDelta(ref mut buf) = last.kind
+                if let Some(block) = self.state.ui.timeline.last_mut()
+                    && let Some(crate::app::state::BlockSection::Markdown(buf)) = block.body.last_mut()
                 {
                     buf.push_str(&token);
                 }
@@ -130,19 +134,13 @@ impl App {
                 }
 
                 // 스트리밍 Delta가 있으면 완성된 메시지로 변환
-                if let Some(last) = self.state.ui.timeline.last_mut() {
-                    if matches!(last.kind, TimelineEntryKind::AssistantDelta(_)) {
-                        last.kind = TimelineEntryKind::AssistantMessage(
-                            res.message.content.clone().unwrap_or_default(),
-                        );
+                if let Some(block) = self.state.ui.timeline.last_mut() {
+                    block.status = crate::app::state::BlockStatus::Done;
+                    if let Some(crate::app::state::BlockSection::Markdown(buf)) = block.body.last_mut() {
+                        *buf = res.message.content.clone().unwrap_or_default();
+                    } else {
+                        block.body.push(crate::app::state::BlockSection::Markdown(res.message.content.clone().unwrap_or_default()));
                     }
-                } else {
-                    // Delta 없이 batch로 수신된 경우
-                    self.state.ui.timeline.push(TimelineEntry::now(
-                        TimelineEntryKind::AssistantMessage(
-                            res.message.content.clone().unwrap_or_default(),
-                        ),
-                    ));
                 }
 
                 // [v0.1.0-beta.22] assistant_turn_count 삭제됨 (재감사 6차).
@@ -157,15 +155,17 @@ impl App {
                 self.state.runtime.is_thinking = false;
 
                 // 스트리밍 Delta가 있으면 에러 메시지로 변환
-                if let Some(last) = self.state.ui.timeline.last_mut() {
-                    if matches!(last.kind, TimelineEntryKind::AssistantDelta(_)) {
-                        last.kind =
-                            TimelineEntryKind::SystemNotice(format!("Provider Error: {}", e));
-                    }
+                if let Some(block) = self.state.ui.timeline.last_mut() {
+                    block.status = crate::app::state::BlockStatus::Error;
+                    block.body.push(crate::app::state::BlockSection::Markdown(format!("Provider Error: {}", e)));
                 } else {
-                    self.state.ui.timeline.push(TimelineEntry::now(
-                        TimelineEntryKind::SystemNotice(format!("Provider Error: {}", e)),
-                    ));
+                    let mut block = crate::app::state::TimelineBlock::new(
+                        crate::app::state::TimelineBlockKind::Notice,
+                        "Provider Error",
+                    );
+                    block.status = crate::app::state::BlockStatus::Error;
+                    block.body.push(crate::app::state::BlockSection::Markdown(e.to_string()));
+                    self.state.ui.timeline.push(block);
                 }
 
                 self.state
@@ -187,27 +187,22 @@ impl App {
                     .chars()
                     .take(30)
                     .collect::<String>();
-                self.state
-                    .ui
-                    .timeline
-                    .push(TimelineEntry::now(TimelineEntryKind::ToolCard {
-                        tool_name,
-                        status: ToolStatus::Queued,
-                        summary: "권한 검사 중...".to_string(),
-                    }));
+                let mut block = crate::app::state::TimelineBlock::new(
+                    crate::app::state::TimelineBlockKind::ToolRun,
+                    tool_name,
+                );
+                block.status = crate::app::state::BlockStatus::Idle;
+                block.body.push(crate::app::state::BlockSection::Markdown("권한 검사 중...".to_string()));
+                self.state.ui.timeline.push(block);
             }
 
             action::Action::ToolStarted(name) => {
-                // 마지막 ToolCard의 상태를 Running으로 갱신
-                for entry in self.state.ui.timeline.iter_mut().rev() {
-                    if let TimelineEntryKind::ToolCard {
-                        ref tool_name,
-                        ref mut status,
-                        ..
-                    } = entry.kind
-                        && (*tool_name == name || *status == ToolStatus::Queued)
+                // 마지막 ToolRun 블록의 상태를 Running으로 갱신
+                for block in self.state.ui.timeline.iter_mut().rev() {
+                    if block.kind == crate::app::state::TimelineBlockKind::ToolRun
+                        && (block.title == name || block.status == crate::app::state::BlockStatus::Idle)
                     {
-                        *status = ToolStatus::Running;
+                        block.status = crate::app::state::BlockStatus::Running;
                         break;
                     }
                 }
@@ -244,23 +239,22 @@ impl App {
                     res.stderr.chars().take(500).collect::<String>(),
                 ));
 
-                // 타임라인 ToolCard 상태를 Done/Error로 갱신
+                // 타임라인 ToolRun 상태를 Done/Error로 갱신
                 let final_status = if res.is_error {
-                    ToolStatus::Error
+                    crate::app::state::BlockStatus::Error
                 } else {
-                    ToolStatus::Done
+                    crate::app::state::BlockStatus::Done
                 };
-                for entry in self.state.ui.timeline.iter_mut().rev() {
-                    if let TimelineEntryKind::ToolCard {
-                        ref mut status,
-                        ref mut summary,
-                        ..
-                    } = entry.kind
-                        && (*status == ToolStatus::Running || *status == ToolStatus::Queued)
+                for block in self.state.ui.timeline.iter_mut().rev() {
+                    if block.kind == crate::app::state::TimelineBlockKind::ToolRun
+                        && (block.status == crate::app::state::BlockStatus::Running || block.status == crate::app::state::BlockStatus::Idle)
                     {
-                        *status = final_status.clone();
-                        // 2~4줄 요약 생성
-                        *summary = Self::generate_tool_summary(&res);
+                        block.status = final_status.clone();
+                        let summary = Self::generate_tool_summary(&res);
+                        block.body.push(crate::app::state::BlockSection::ToolSummary {
+                            tool_name: res.tool_name.clone(),
+                            summary,
+                        });
                         break;
                     }
                 }
@@ -271,11 +265,10 @@ impl App {
             }
 
             action::Action::ToolSummaryReady(new_summary) => {
-                // 외부에서 생성된 요약으로 마지막 ToolCard 갱신
-                for entry in self.state.ui.timeline.iter_mut().rev() {
-                    if let TimelineEntryKind::ToolCard {
-                        ref mut summary, ..
-                    } = entry.kind
+                // 외부에서 생성된 요약으로 마지막 ToolRun 갱신
+                for block in self.state.ui.timeline.iter_mut().rev() {
+                    if block.kind == crate::app::state::TimelineBlockKind::ToolRun
+                        && let Some(crate::app::state::BlockSection::ToolSummary { summary, .. }) = block.body.last_mut()
                     {
                         *summary = new_summary;
                         break;
@@ -295,20 +288,16 @@ impl App {
                         pinned: false,
                     });
 
-                // 타임라인 ToolCard 상태를 Error로 갱신
-                for entry in self.state.ui.timeline.iter_mut().rev() {
-                    if let TimelineEntryKind::ToolCard {
-                        ref mut status,
-                        ref mut summary,
-                        ..
-                    } = entry.kind
-                        && (*status == ToolStatus::Running || *status == ToolStatus::Queued)
+                // 타임라인 ToolRun 상태를 Error로 갱신
+                for block in self.state.ui.timeline.iter_mut().rev() {
+                    if block.kind == crate::app::state::TimelineBlockKind::ToolRun
+                        && (block.status == crate::app::state::BlockStatus::Running || block.status == crate::app::state::BlockStatus::Idle)
                     {
-                        *status = ToolStatus::Error;
-                        *summary = format!(
+                        block.status = crate::app::state::BlockStatus::Error;
+                        block.body.push(crate::app::state::BlockSection::Markdown(format!(
                             "실패: {}",
                             e.to_string().chars().take(80).collect::<String>()
-                        );
+                        )));
                         break;
                     }
                 }
@@ -323,12 +312,12 @@ impl App {
             }
             action::Action::ContextSummaryOk(summary) => {
                 self.state.domain.session.apply_summary(&summary);
-                self.state
-                    .ui
-                    .timeline
-                    .push(TimelineEntry::now(TimelineEntryKind::CompactSummary(
-                        summary,
-                    )));
+                let mut block = crate::app::state::TimelineBlock::new(
+                    crate::app::state::TimelineBlockKind::Notice,
+                    "컨텍스트 압축 완료",
+                );
+                block.body.push(crate::app::state::BlockSection::Markdown(summary));
+                self.state.ui.timeline.push(block);
             }
             action::Action::ContextSummaryErr(e) => {
                 self.state
@@ -474,13 +463,35 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.state.should_quit = true;
             }
-            KeyCode::Char('i') | KeyCode::Char('I')
+
+            KeyCode::F(2) => {
+                self.state.ui.show_inspector = !self.state.ui.show_inspector;
+                if self.state.ui.show_inspector {
+                    self.state.ui.focused_pane = crate::app::state::FocusedPane::Inspector;
+                } else if self.state.ui.focused_pane == crate::app::state::FocusedPane::Inspector {
+                    self.state.ui.focused_pane = crate::app::state::FocusedPane::Composer;
+                }
+            }
+            KeyCode::Char('k') | KeyCode::Char('K')
                 if key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                self.state.ui.show_inspector = !self.state.ui.show_inspector;
+                self.state.ui.palette.is_open = !self.state.ui.palette.is_open;
+                if self.state.ui.palette.is_open {
+                    self.state.ui.focused_pane = crate::app::state::FocusedPane::Palette;
+                    self.state.ui.palette.filter.clear();
+                    self.state.ui.palette.cursor = 0;
+                    self.update_palette_matches();
+                } else if self.state.ui.focused_pane == crate::app::state::FocusedPane::Palette {
+                    self.state.ui.focused_pane = crate::app::state::FocusedPane::Composer;
+                }
             }
             KeyCode::Esc => {
-                if self.state.ui.slash_menu.is_open {
+                if self.state.ui.palette.is_open {
+                    self.state.ui.palette.is_open = false;
+                    if self.state.ui.focused_pane == crate::app::state::FocusedPane::Palette {
+                        self.state.ui.focused_pane = crate::app::state::FocusedPane::Composer;
+                    }
+                } else if self.state.ui.slash_menu.is_open {
                     // [v0.1.0-beta.16] 슬래시 메뉴 닫기
                     self.state.ui.slash_menu.is_open = false;
                     self.state.ui.slash_menu.filter.clear();
@@ -528,7 +539,19 @@ impl App {
                 self.handle_backspace();
             }
             KeyCode::Enter => {
-                self.handle_enter_key();
+                if key.modifiers.contains(KeyModifiers::SHIFT)
+                    && !self.state.ui.is_wizard_open
+                    && !self.state.ui.fuzzy.is_open
+                    && !self.state.ui.slash_menu.is_open
+                    && !self.state.ui.config.is_open
+                    && !self.state.ui.palette.is_open
+                {
+                    if self.state.ui.focused_pane == crate::app::state::FocusedPane::Composer {
+                        self.state.ui.composer.input_buffer.push('\n');
+                    }
+                } else {
+                    self.handle_enter_key();
+                }
             }
             KeyCode::Tab | KeyCode::BackTab => {
                 if !self.state.ui.is_wizard_open {
@@ -546,7 +569,16 @@ impl App {
                     && !self.state.ui.fuzzy.is_open
                     && !self.state.ui.config.is_open
                 {
-                    self.state.ui.timeline_scroll = self.state.ui.timeline_scroll.saturating_add(5);
+                    match self.state.ui.focused_pane {
+                        crate::app::state::FocusedPane::Timeline => {
+                            self.state.ui.timeline_scroll = self.state.ui.timeline_scroll.saturating_add(5);
+                            self.state.ui.timeline_follow_tail = false;
+                        }
+                        crate::app::state::FocusedPane::Inspector => {
+                            self.state.ui.inspector_scroll = self.state.ui.inspector_scroll.saturating_add(5);
+                        }
+                        _ => {}
+                    }
                 }
             }
             KeyCode::PageDown => {
@@ -554,7 +586,18 @@ impl App {
                     && !self.state.ui.fuzzy.is_open
                     && !self.state.ui.config.is_open
                 {
-                    self.state.ui.timeline_scroll = self.state.ui.timeline_scroll.saturating_sub(5);
+                    match self.state.ui.focused_pane {
+                        crate::app::state::FocusedPane::Timeline => {
+                            self.state.ui.timeline_scroll = self.state.ui.timeline_scroll.saturating_sub(5);
+                            if self.state.ui.timeline_scroll == 0 {
+                                self.state.ui.timeline_follow_tail = true;
+                            }
+                        }
+                        crate::app::state::FocusedPane::Inspector => {
+                            self.state.ui.inspector_scroll = self.state.ui.inspector_scroll.saturating_sub(5);
+                        }
+                        _ => {}
+                    }
                 }
             }
             _ => {}
@@ -573,6 +616,9 @@ impl App {
             if self.state.ui.wizard.step == state::WizardStep::ApiKeyInput {
                 self.state.ui.wizard.api_key_input.push(c);
             }
+        } else if self.state.ui.palette.is_open {
+            self.state.ui.palette.filter.push(c);
+            self.update_palette_matches();
         } else if self.state.ui.slash_menu.is_open {
             // [v0.1.0-beta.16] 슬래시 메뉴 활성 상태: 필터 문자 추가
             self.state.ui.slash_menu.filter.push(c);
@@ -610,7 +656,11 @@ impl App {
 
     /// Up 화살표 키 처리: Slash Menu, Fuzzy Finder, Config, Wizard 각 모드별 커서 이동.
     fn handle_up_key(&mut self) {
-        if self.state.ui.slash_menu.is_open {
+        if self.state.ui.palette.is_open {
+            if self.state.ui.palette.cursor > 0 {
+                self.state.ui.palette.cursor -= 1;
+            }
+        } else if self.state.ui.slash_menu.is_open {
             if self.state.ui.slash_menu.cursor > 0 {
                 self.state.ui.slash_menu.cursor -= 1;
             }
@@ -622,7 +672,13 @@ impl App {
             self.state.ui.config.cursor_index -= 1;
         } else if self.state.ui.is_wizard_open && self.state.ui.wizard.cursor_index > 0 {
             self.state.ui.wizard.cursor_index -= 1;
-        } else if !self.state.ui.composer.history.is_empty() {
+        } else if self.state.ui.focused_pane == crate::app::state::FocusedPane::Timeline {
+            if self.state.ui.timeline_cursor > 0 {
+                self.state.ui.timeline_cursor -= 1;
+            }
+        } else if self.state.ui.focused_pane == crate::app::state::FocusedPane::Inspector {
+            self.state.ui.inspector_scroll = self.state.ui.inspector_scroll.saturating_add(1);
+        } else if !self.state.ui.composer.history.is_empty() && self.state.ui.focused_pane == crate::app::state::FocusedPane::Composer {
             // Composer History (Up)
             let len = self.state.ui.composer.history.len();
             let new_idx = match self.state.ui.composer.history_idx {
@@ -636,7 +692,11 @@ impl App {
 
     /// Down 화살표 키 처리: 각 모드별 리스트의 최대값까지 커서 이동.
     fn handle_down_key(&mut self) {
-        if self.state.ui.slash_menu.is_open {
+        if self.state.ui.palette.is_open {
+            if self.state.ui.palette.cursor + 1 < self.state.ui.palette.matched_indices.len() {
+                self.state.ui.palette.cursor += 1;
+            }
+        } else if self.state.ui.slash_menu.is_open {
             if self.state.ui.slash_menu.cursor + 1 < self.state.ui.slash_menu.matches.len() {
                 self.state.ui.slash_menu.cursor += 1;
             }
@@ -674,7 +734,15 @@ impl App {
             if self.state.ui.wizard.cursor_index < max {
                 self.state.ui.wizard.cursor_index += 1;
             }
-        } else if let Some(idx) = self.state.ui.composer.history_idx {
+        } else if self.state.ui.focused_pane == crate::app::state::FocusedPane::Timeline {
+            if self.state.ui.timeline_cursor + 1 < self.state.ui.timeline.len() {
+                self.state.ui.timeline_cursor += 1;
+            }
+        } else if self.state.ui.focused_pane == crate::app::state::FocusedPane::Inspector {
+            self.state.ui.inspector_scroll = self.state.ui.inspector_scroll.saturating_sub(1);
+        } else if let Some(idx) = self.state.ui.composer.history_idx
+            && self.state.ui.focused_pane == crate::app::state::FocusedPane::Composer
+        {
             // Composer History (Down)
             let len = self.state.ui.composer.history.len();
             if idx + 1 < len {
@@ -690,7 +758,15 @@ impl App {
 
     /// Backspace 키 처리: Slash Menu, Fuzzy Finder, Wizard API 키, Composer 각각의 버퍼 삭제.
     fn handle_backspace(&mut self) {
-        if self.state.ui.slash_menu.is_open {
+        if self.state.ui.palette.is_open {
+            if self.state.ui.palette.filter.is_empty() {
+                self.state.ui.palette.is_open = false;
+                self.state.ui.focused_pane = crate::app::state::FocusedPane::Composer;
+            } else {
+                self.state.ui.palette.filter.pop();
+                self.update_palette_matches();
+            }
+        } else if self.state.ui.slash_menu.is_open {
             // [v0.1.0-beta.16] 필터가 비면 메뉴 닫기, 아니면 필터 문자 삭제
             if self.state.ui.slash_menu.filter.is_empty() {
                 self.state.ui.slash_menu.is_open = false;
@@ -716,7 +792,24 @@ impl App {
 
     /// Enter 키 처리: Slash Menu 선택 → Fuzzy Finder 선택 → Config 팝업 → Wizard → Composer 제출 순으로 라우팅.
     fn handle_enter_key(&mut self) {
-        if self.state.ui.slash_menu.is_open {
+        if self.state.ui.palette.is_open {
+            if !self.state.ui.palette.matched_indices.is_empty() {
+                let idx = self.state.ui.palette.matched_indices[self.state.ui.palette.cursor];
+                let cmd = self.state.ui.palette.commands[idx].id.clone();
+                self.state.ui.palette.is_open = false;
+                self.state.ui.focused_pane = crate::app::state::FocusedPane::Composer;
+                self.state.ui.palette.filter.clear();
+                // 팔레트 명령어 라우팅
+                if cmd.starts_with('/') {
+                    self.handle_slash_command(&cmd);
+                } else if cmd == "toggle_inspector" {
+                    self.state.ui.show_inspector = !self.state.ui.show_inspector;
+                }
+            } else {
+                self.state.ui.palette.is_open = false;
+                self.state.ui.focused_pane = crate::app::state::FocusedPane::Composer;
+            }
+        } else if self.state.ui.slash_menu.is_open {
             // [v0.1.0-beta.16] 슬래시 메뉴에서 명령어 선택 → 바로 실행
             if !self.state.ui.slash_menu.matches.is_empty() {
                 let (cmd, _) = self.state.ui.slash_menu.matches[self.state.ui.slash_menu.cursor];
@@ -781,6 +874,24 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Palette 매칭 로직
+    fn update_palette_matches(&mut self) {
+        let input = self.state.ui.palette.filter.to_lowercase();
+        let mut indices = Vec::new();
+
+        for (i, cmd) in self.state.ui.palette.commands.iter().enumerate() {
+            if input.is_empty() 
+                || cmd.title.to_lowercase().contains(&input)
+                || cmd.description.to_lowercase().contains(&input)
+                || cmd.category.to_lowercase().contains(&input) 
+            {
+                indices.push(i);
+            }
+        }
+        self.state.ui.palette.matched_indices = indices;
+        self.state.ui.palette.cursor = 0;
     }
 
     /// Fuzzy Finder 매칭 로직

@@ -160,10 +160,9 @@ impl App {
                                 self.state
                                     .ui
                                     .timeline
-                                    .push(crate::app::state::TimelineEntry::now(
-                                        crate::app::state::TimelineEntryKind::SystemNotice(
-                                            format!("⚠ 파일 멘션 오류 ({}): {}", path, e),
-                                        ),
+                                    .push(crate::app::state::TimelineBlock::new(
+                                        crate::app::state::TimelineBlockKind::Notice,
+                                        format!("⚠ 파일 멘션 오류 ({}): {}", path, e),
                                     ));
                             }
                         }
@@ -198,13 +197,14 @@ impl App {
                 .push(format!("[SessionLog] 사용자 메시지 기록 실패: {}", e));
         }
 
-        // [v0.1.0-beta.18] 사용자 메시지를 타임라인에도 추가
-        self.state
-            .ui
-            .timeline
-            .push(crate::app::state::TimelineEntry::now(
-                crate::app::state::TimelineEntryKind::UserMessage(final_text),
-            ));
+        // [v0.1.0-beta.24] Phase 15: 사용자 메시지를 블록으로 생성
+        let title = final_text.lines().next().unwrap_or("User Input").to_string();
+        let mut block = crate::app::state::TimelineBlock::new(
+            crate::app::state::TimelineBlockKind::Conversation,
+            title,
+        );
+        block.body.push(crate::app::state::BlockSection::Markdown(final_text.clone()));
+        self.state.ui.timeline.push(block);
 
         // [v0.1.0-beta.22] PLAN/RUN 모드별 시스템 프롬프트 주입 — dedupe 방식.
         // 이전 모드 지시 메시지를 찾아 교체하여 장기 세션에서 누적되지 않도록 한다.
@@ -278,21 +278,20 @@ impl App {
                 self.state
                     .ui
                     .timeline
-                    .push(crate::app::state::TimelineEntry::now(
-                        crate::app::state::TimelineEntryKind::SystemNotice(err_msg_str),
+                    .push(crate::app::state::TimelineBlock::new(
+                        crate::app::state::TimelineBlockKind::Notice,
+                        err_msg_str,
                     ));
                 return;
             }
         };
 
-        // [v0.1.0-beta.18] ChatStarted 이벤트 발송
+        // [v0.1.0-beta.18] ChatStarted 이벤트 발송 (블록에 Markdown body 추가)
         self.state.runtime.is_thinking = true;
-        self.state
-            .ui
-            .timeline
-            .push(crate::app::state::TimelineEntry::now(
-                crate::app::state::TimelineEntryKind::AssistantDelta(String::new()),
-            ));
+        if let Some(block) = self.state.ui.timeline.last_mut() {
+            block.status = crate::app::state::BlockStatus::Running;
+            block.body.push(crate::app::state::BlockSection::Markdown(String::new()));
+        }
 
         let tx = self.action_tx.clone();
         let messages = self.state.domain.session.messages.clone();
@@ -359,12 +358,10 @@ impl App {
         };
 
         self.state.runtime.is_thinking = true;
-        self.state
-            .ui
-            .timeline
-            .push(crate::app::state::TimelineEntry::now(
-                crate::app::state::TimelineEntryKind::AssistantDelta(String::new()),
-            ));
+        if let Some(block) = self.state.ui.timeline.last_mut() {
+            block.status = crate::app::state::BlockStatus::Running;
+            block.body.push(crate::app::state::BlockSection::Markdown(String::new()));
+        }
 
         let tx = self.action_tx.clone();
         let messages = self.state.domain.session.messages.clone();

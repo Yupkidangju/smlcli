@@ -37,6 +37,12 @@ pub trait Tool: Send + Sync {
         None
     }
 
+    /// 이 도구 실행이 코드 베이스를 파괴적(destructive)으로 변경하는지 여부
+    /// (Phase 13: Git Checkpoint 자동 생성 트리거에 활용됨)
+    fn is_destructive(&self, _args: &Value) -> bool {
+        false
+    }
+
     /// 도구 실제 실행
     async fn execute(&self, args: Value, ctx: &ToolContext<'_>) -> Result<ToolResult, ToolError>;
 }

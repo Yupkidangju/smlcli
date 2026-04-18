@@ -134,13 +134,16 @@ smlcli/
 │   │   ├── provider.rs
 │   │   ├── settings.rs
 │   │   ├── permissions.rs (Permission Engine + Blocked Command List)
-│   │   └── tool_result.rs
+│   │   ├── tool_result.rs
+│   │   └── repo_map.rs (Tree-sitter AST Context)
 │   ├── providers/
 │   │   ├── mod.rs
 │   │   ├── registry.rs
 │   │   └── types.rs
 │   ├── tools/
 │   │   ├── mod.rs
+│   │   ├── registry.rs (Polymorphic Tool Registry)
+│   │   ├── git_checkpoint.rs (Auto-healing & State rollback)
 │   │   ├── file_ops.rs
 │   │   ├── shell.rs
 │   │   ├── grep.rs
@@ -163,7 +166,7 @@ smlcli/
 애플리케이션은 단일 `AppState`를 중심으로 동작한다. 입력 이벤트, 렌더 요청, AI 응답, 툴 결과, modal 상태를 모두 `Action` 단위로 정규화한다. 이벤트 루프는 TUI 렌더링과 비동기 작업을 분리하되, 사용자에게는 하나의 연속된 터미널 경험처럼 보이게 유지한다.
 
 **이중 데이터 모델 (Dual Data Model)**
-`session.messages`는 LLM 컨텍스트 전용이며, 사용자 화면 표시는 `timeline_entries`로 분리한다. 이 분리를 통해 도구 실행 요약 카드, 승인 카드, 실행 로그, 결과 요약을 독립적으로 관리한다.
+`session.messages`는 LLM 컨텍스트 전용이며, 사용자 화면 표시는 `timeline: Vec<TimelineEntry>`로 분리한다. 이 분리를 통해 도구 실행 요약 카드, 승인 카드, 실행 로그, 결과 요약을 독립적으로 관리한다. timeline이 비어있을 때만 session.messages 폴백을 허용한다(하위 호환).
 
 **이벤트 세분화 (14종+ Action)**
 채팅과 도구 호출의 전체 라이프사이클(시작·진행·완료·에러)을 별도 이벤트로 정규화하여 Codex 스타일 진행 표시를 구현한다.
@@ -353,7 +356,7 @@ pub struct AppState {
     pub provider: ProviderState,
     pub tool_runtime: ToolRuntimeState,
     // [v0.1.0-beta.18 개편] 이중 데이터 모델
-    pub timeline_entries: Vec<TimelineEntry>,
+    pub timeline: Vec<TimelineEntry>,
     pub logs_buffer: Vec<String>,
     pub tick_count: u64,
 }
@@ -637,29 +640,30 @@ pub trait Tool: Send + Sync {
 ```
 
 **B. Auto-Verify State Machine**
-에이전트가 코드를 수정한 뒤 자율적으로 테스트를 수행하고 에러를 피드백하는 상태를 정의한다.
+에이전트가 도구 실행 실패 시 자율적으로 에러를 분석하고 복구를 시도하는 상태를 정의한다.
 ```rust
-// src/app/state.rs
+// src/app/state.rs — 실제 구현 (v0.1.0-beta.23)
+#[derive(Debug, Clone, PartialEq)]
 pub enum AutoVerifyState {
-    Idle,
-    Verifying { command: String, retries_left: u8 },
-    Failed { last_error: String },
+    Idle,                       // 정상 상태
+    Healing { retries: usize }, // 자가 복구 중 (최대 3회)
 }
 ```
 
 #### 2. Concrete Numbers (제한 수치 및 규칙)
 
-- **자가 치유 재시도(Self-Correction Retries)**: `AutoVerifyState`에서 코드를 수정하고 린터/테스트가 실패했을 때, 인간의 개입 없이 AI가 스스로 에러 로그를 읽고 수정하는 최대 재시도 횟수는 **3회(`retries_left: 3`)**로 하드 리미트한다. 이를 초과하면 사용자 승인 대기로 폴백(Fallback)한다.
-- **Tree-sitter Repo Map 토큰 제한**: `tree-sitter`로 추출한 저장소의 AST(함수, 클래스 시그니처) 맵을 시스템 프롬프트에 주입할 때, 최대 **2,000 토큰**을 넘지 않도록 자른다(Truncate).
-- **Git Checkpoint 보존 기한**: 임시 스냅샷으로 생성한 Git 커밋이나 브랜치는 최대 **5개**까지만 유지하며, LRU 방식으로 오래된 스냅샷은 자동 정리한다.
+- **자가 치유 재시도(Self-Correction Retries)**: `AutoVerifyState::Healing { retries }` 상태에서 도구 실행이 실패할 때마다 `retries`를 1씩 증가시킨다. **3회(`retries == 3`)**에 도달하면 자동 복구를 포기하고 `Idle`로 전환하며 사용자에게 수동 개입을 요청한다. `ToolFinished(is_error=true)`와 `ToolError` 양쪽 경로 모두에서 동일한 상한을 적용한다. **Abort 시에는 `send_chat_message_internal()` 호출을 중단**하여 LLM 재전송 루프를 완전히 종료한다.
+- **Tree-sitter Repo Map**: `tree-sitter`로 추출한 저장소의 Rust(.rs) AST(함수, 구조체 시그니처) 맵을 시스템 프롬프트에 `[Repo Map]` 헤더로 주입한다. 최대 **8,000바이트**를 넘지 않도록 자른다(Truncate).
+- **Git Checkpoint 안전 정책**: `create_checkpoint()`는 강제 커밋을 수행하지 **않는다**. 워킹 트리가 깨끗한지만 검사하여 `bool`을 반환하고, `true`일 때만 롤백(`git reset --hard HEAD`)이 허용된다. `git clean -fd`는 사용하지 **않으며**, untracked 파일은 어떤 경우에도 삭제되지 않는다.
+- **직접 셸 실행(`!`) 정책**: 사용자가 `!` 접두사로 직접 입력한 명령에 대해서도 `safe_to_auto_run: false`를 설정하여 `SafeOnly` 모드의 allowlist 정책을 반드시 존중한다. 블랙리스트와 allowlist 모두 동일하게 적용된다.
 
 #### 3. Execution Path (실행 및 검증 흐름)
 
-1. **Tool Registry 도입**: `src/tools/` 내부의 기존 도구들(`ReadFile`, `WriteFile`, `ExecShell` 등)을 `Tool` 트레이트 구현체로 일괄 리팩토링한다.
-2. **Tree-sitter 통합**: `tree-sitter` 크레이트를 도입하여 작업 디렉터리의 Rust, Python, TS 등의 함수/구조체 시그니처를 추출, `[Repo Map]` 블록으로 `System` 프롬프트에 백그라운드 주입한다.
-3. **Automated Git Checkpoints**: `ReplaceFileContent`나 `WriteFile` 실행 직전, 현재 `git status`를 확인하고 워크트리가 더티(dirty)하지 않다면 파일 쓰기 성공 시 자동 커밋(`AI: Auto-checkpoint before modification`)을 생성한다.
-4. **Auto-Verify 루프**: `smlcli run --auto-verify "테스트 통과하게 수정해"` 실행 시, Planner LLM이 수정 계획을 세우고, Executor LLM이 파일을 수정한 뒤, 자동으로 `cargo test` (또는 `npm test`)를 `ExecShell`로 수행하여 `stderr` 발생 시 재귀적으로 프롬프트에 피드백한다.
-5. **Tree of Thoughts UI**: `tui/layout.rs` 타임라인 렌더링에 들여쓰기(Indent) 및 아코디언(Foldable) 개념을 도입. 메인 응답 아래에 AI의 도구 호출 및 에러 수정 내역(`└─ ⚙️ ExecShell (cargo check) -> Error -> Retrying...`)을 트리 형태로 시각화한다.
+1. **Tool Registry 도입**: `src/tools/` 내부의 기존 도구들(`ReadFile`, `WriteFile`, `ExecShell` 등)을 `Tool` 트레이트 구현체로 일괄 리팩토링. 각 도구의 `is_destructive()` 메서드로 파괴적 여부를 판별한다. `ExecShell`은 기본값(`false`)을 사용하여 쉘 명령이 Git 롤백을 트리거하지 않도록 한다.
+2. **Tree-sitter 통합**: `tree-sitter` 크레이트를 도입하여 작업 디렉터리의 Rust 소스의 함수/구조체 시그니처를 추출, `[Repo Map]` 블록으로 `System` 프롬프트에 백그라운드 주입한다.
+3. **Automated Git Checkpoints**: `WriteFile`이나 `ReplaceFileContent` 같은 파괴적 도구(`is_destructive()=true`) 실행 직전, `create_checkpoint()`가 워킹 트리 상태를 검사한다. 변경사항이 없는(clean) 상태에서만 `safe_to_rollback=true`를 반환하며, 도구 실행 실패 시 `git reset --hard HEAD`로 tracked 파일만 복원한다. WIP가 있으면 롤백 자체를 건너뛴다.
+4. **Auto-Verify 루프**: 도구 실행 실패 시(`ToolFinished.is_error=true` 또는 `ToolError`), 힐링 프롬프트를 세션에 주입하고 `send_chat_message_internal()`로 LLM에 재전송한다. 이때 도구 스키마(`tools`)를 반드시 포함하여 모델이 후속 도구를 호출할 수 있게 한다. 최대 3회 실패 시 `Idle`로 전환하고 사용자에게 안내한다.
+5. **Tree of Thoughts UI**: `tui/layout.rs` 타임라인 렌더링에 `depth` 속성 기반 들여쓰기를 적용. 메인 응답 아래에 AI의 도구 호출 및 에러 수정 내역(`└─ ⚙️ ExecShell (cargo check) → Error → Retrying...`)을 트리 형태로 시각화한다.
 
 ---## 4. Environment-Specific Configuration (Agent Rules)
 
@@ -1109,7 +1113,7 @@ Linux QA / Windows QA / release gate
 #### Phase 9-A: 이벤트 기반 구조 (기반 작업)
 
 1. **Action enum 14종 확장**: ChatStarted/ChatDelta/ToolQueued/ToolStarted/ToolOutputChunk/ToolSummaryReady 추가
-2. **TimelineEntry 모델 도입**: session.messages(LLM 컨텍스트)와 timeline_entries(UI 카드) 이중 구조
+2. **TimelineEntry 모델 도입**: session.messages(LLM 컨텍스트)와 timeline(UI 카드) 이중 구조. timeline이 비어있을 때만 session.messages 폴백 허용
 3. **Semantic Palette 도입**: info/success/warning/danger/muted + bg_base/bg_panel/bg_elevated 색상 체계
 4. **tick 기반 애니메이션**: thinking 스피너, 도구 실행 배지 깜빡임, diff 승인 pulse, compact progress
 5. **Inspector 탭 실체 구현**: Preview/Diff/Search/Logs/Recent 각 탭에 실제 콘텐츠 렌더링
@@ -1141,4 +1145,360 @@ Linux QA / Windows QA / release gate
 * 이 프로젝트는 **채팅 UI**가 아니라 **작업형 터미널 에이전트**다.
 * 핵심 완성도 기준은 답변 품질보다 **설정 신뢰성**, **권한 통제**, **파일 변경 가시성**, **종료 복구 안정성**이다.
 * MVP 범위에서는 플러그인 시스템, LSP, 멀티에이전트, 원격 서버 모드는 넣지 않는다.
-* v0.1 BETA의 성공 기준은 “매일 쓸 수 있는 안전한 `smlcli`”다.
+* v0.1 BETA의 성공 기준은 "매일 쓸 수 있는 안전한 `smlcli`"다.
+
+---
+
+### Phase 14: TUI UX/UI 고도화 (v0.1.0-beta.24)
+
+#### 14-A: 멀티라인 텍스트 렌더링 정상화
+
+**문제**: `layout.rs`에서 `Line::from(msg.as_str())`로 멀티라인 문자열을 단일 Line에 밀어 넣어 개행이 구조적으로 보존되지 않음.
+
+**수정 범위**: `layout.rs`, `command_router.rs`, `state.rs`
+
+**구현 사양**:
+- `layout.rs`에 공용 헬퍼 `render_multiline_text(text: &str, style: Style) -> Vec<Line>` 추가.
+- `TimelineEntryKind::UserMessage`, `AssistantMessage`, `AssistantDelta` 렌더링에서 `Line::from(msg)` 대신 사용.
+- `/help` 출력을 타임라인에 `SystemNotice`로 직접 추가.
+
+**완료 기준**: `/help` 명령 하나당 한 줄. AI 응답의 줄바꿈·문단 구분 보존.
+
+#### 14-B: 스크롤 상태 분리 + Auto-Follow + 마우스
+
+**문제**: `timeline_scroll: u16` 하나로 타임라인/인스펙터 공유. 마우스 이벤트 미수신.
+
+**수정 범위**: `state.rs`, `event_loop.rs`, `terminal.rs`, `mod.rs`, `layout.rs`
+
+**구현 사양**:
+- `inspector_scroll: u16`, `timeline_follow_tail: bool` 추가.
+- `terminal.rs`: `EnableMouseCapture`/`DisableMouseCapture` 추가.
+- `event_loop.rs`: `CrosstermEvent::Mouse` 전달.
+- Auto-follow: 새 콘텐츠 시 맨 아래, 위 스크롤 시 고정.
+
+**완료 기준**: 바닥 자동추적, 위로 올리면 고정. 마우스 휠·PageUp/Down·Home/End 동작. 인스펙터/타임라인 스크롤 미간섭.
+
+#### 14-C: 키바인딩 재정렬 (Ctrl+I/Tab 충돌 해소)
+
+**문제**: 터미널에서 `Ctrl+I`는 `Tab`(0x09)과 동일. 인스펙터 토글과 모드 전환이 사실상 충돌.
+
+**수정 범위**: `mod.rs`, `layout.rs`, `designs.md`
+
+**구현 사양**:
+- `Ctrl+I` 바인딩 제거. 인스펙터 토글: `F2`. PLAN/RUN 전환: `Tab`/`Shift+Tab` 유지.
+- 상태 바 안내 문구 동기화.
+
+**완료 기준**: `Ctrl+I` 입력 시 모드 불변. `F2`로만 인스펙터 토글. 안내 문구 일치.
+
+#### 14-D: 반응형 레이아웃
+
+**문제**: 상단 바 긴 문자열 잘림. 인스펙터 고정 30% 문제.
+
+**수정 범위**: `layout.rs`
+
+**구현 사양**:
+- cwd 중략 헬퍼 `truncate_middle()`. 인스펙터 폭 클램프(32~48cols, 타임라인 최소 72cols). 탭 라벨 축약.
+
+**완료 기준**: 100/120/140 columns에서 상단 바·인스펙터 탭 잘림 없음.
+
+#### 구현 순서
+1. **14-C** 키바인딩 재정렬
+2. **14-A** 멀티라인 렌더링
+3. **14-B** 스크롤 분리 + 마우스
+4. **14-D** 반응형 레이아웃
+
+---
+
+### Phase 15: 2026 CLI UX 현대화 로드맵 (계획)
+
+#### 15.1 목표와 성공 기준
+
+**목표**
+- `smlcli`를 단순한 "채팅형 TUI"에서 벗어나, 2026년 기준의 작업형 CLI 에이전트 UX를 갖춘 **블록 기반 작업 콘솔**로 고도화한다.
+- 현재 구현된 PLAN/RUN, Inspector, Tool Registry, Auto-Verify를 유지하면서도, 사용자가 **명령 발견, 컨텍스트 주입, 결과 재참조, 긴 출력 탐색**을 더 빠르게 수행하도록 인터랙션을 재설계한다.
+
+**성공 기준**
+- 사용자는 최근 1턴의 입력/AI 응답/도구 결과를 하나의 블록으로 인식하고 재사용할 수 있다.
+- `/help` 없이도 커맨드 팔레트에서 주요 동작을 3초 이내에 발견할 수 있다.
+- 100/120/140 칼럼에서 상단 바, 인스펙터, 입력 툴벨트가 모두 잘리지 않고 우선순위 기반으로 적응한다.
+- 포커스된 패널만 스크롤되고, 블록 단위 이동/접기/복사/재실행이 가능하다.
+- 애니메이션은 상태 전달용으로만 사용되며, 시각적 소음 없이 실행/대기/오류/승인 상태를 구분한다.
+
+#### 15.2 비목표
+
+- WebView, Electron, GUI 프론트엔드로 전환하지 않는다.
+- Ratatui/Crossterm을 버리고 Textual/Bubble Tea로 프레임워크를 교체하지 않는다.
+- 클라우드 동기화, 멀티 유저 협업, 블록 공유 링크, 원격 텔레메트리 수집은 이번 페이즈의 범위가 아니다.
+- 과한 그래디언트, 그림자, 반투명 효과 등 "웹 UI를 억지로 터미널에 흉내내는" 시각 효과는 도입하지 않는다.
+
+#### 15.3 외부 레퍼런스 (2026-04 조사 기준)
+
+- **Warp Blocks / Universal Input**
+  - https://docs.warp.dev/terminal/blocks
+  - https://docs.warp.dev/terminal/universal-input
+  - 채택 요점: 입력/출력/실행 결과를 블록 단위로 묶고, 입력창 주변에 컨텍스트/액션 상태를 노출하는 패턴
+- **Textual Command Palette**
+  - https://textual.textualize.io/guide/command_palette/
+  - 채택 요점: 긴 도움말보다 fuzzy command palette를 우선 제공하는 패턴
+- **Ratatui Layout / Style / Ecosystem**
+  - https://ratatui.rs/concepts/layout/
+  - https://ratatui.rs/examples/style/
+  - https://ratatui.rs/ecosystem/tachyonfx/
+  - 채택 요점: 반응형 레이아웃, 의미 기반 색상 토큰, 절제된 애니메이션 계층
+
+#### 15.4 동결된 핵심 결정
+
+1. **프레임워크 유지**
+   - 렌더링 계층은 `ratatui + crossterm`을 유지한다.
+   - 최소 Phase 15-A~15-C에서는 신규 의존성을 추가하지 않는다.
+
+2. **블록 우선 타임라인**
+   - 타임라인은 더 이상 "메시지 리스트"가 아니라 `TimelineBlock` 리스트를 기본 단위로 한다.
+   - 한 블록은 최소 `사용자 입력`, `AI 결과`, `도구 실행 결과(0개 이상)`를 묶어 표현한다.
+
+3. **명령 발견 방식**
+   - `/help`는 유지하되, 주 진입점은 `Ctrl+K` 기반 **Command Palette**로 동결한다.
+   - `Ctrl+P`는 provider/model 빠른 전환을 계속 담당한다.
+
+4. **입력 툴벨트**
+   - Composer 위에는 `mode`, `cwd`, `attached context`, `pending policy`, `palette hint`를 칩(chip) 형태로 표시한다.
+   - `Shift+Enter`는 멀티라인 입력, `Enter`는 제출로 동결한다.
+
+5. **패널 포커스 모델**
+   - 패널 포커스는 `Timeline`, `Inspector`, `Composer`, `Palette` 4개로 동결한다.
+   - 키보드/마우스 스크롤은 반드시 포커스된 패널 또는 포인터가 올라간 패널에만 적용한다.
+
+6. **모션 정책**
+   - 애니메이션은 상태 전달용 ASCII 모션만 허용한다.
+   - 풀스크린 전환 애니메이션, 무한 점멸, 과도한 색 반전은 금지한다.
+
+#### 15.5 Typed Contracts
+
+```rust
+pub enum FocusedPane {
+    Timeline,
+    Inspector,
+    Composer,
+    Palette,
+}
+
+pub enum TimelineBlockKind {
+    Conversation,
+    ToolRun,
+    Approval,
+    Help,
+    Notice,
+}
+
+pub struct TimelineBlock {
+    pub id: String,
+    pub kind: TimelineBlockKind,
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub body: Vec<BlockSection>,
+    pub status: BlockStatus,
+    pub collapsed: bool,
+    pub pinned: bool,
+    pub created_at_ms: u64,
+}
+
+pub enum BlockSection {
+    Markdown(String),
+    CodeFence { language: Option<String>, content: String },
+    KeyValueTable(Vec<(String, String)>),
+    ToolSummary { tool_name: String, summary: String },
+}
+
+pub enum BlockStatus {
+    Idle,
+    Running,
+    Done,
+    Error,
+    NeedsApproval,
+}
+
+pub struct CommandPaletteState {
+    pub is_open: bool,
+    pub filter: String,
+    pub cursor: usize,
+    pub commands: Vec<PaletteCommand>,
+    pub matched_indices: Vec<usize>,
+}
+
+pub struct PaletteCommand {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub category: String,
+    pub shortcut: Option<String>,
+}
+
+pub struct ComposerToolbarState {
+    pub focused_pane: FocusedPane,
+    pub chips: Vec<InputChip>,
+    pub multiline: bool,
+}
+
+pub struct InputChip {
+    pub kind: InputChipKind,
+    pub label: String,
+    pub emphasized: bool,
+}
+
+pub enum InputChipKind {
+    Mode,
+    Context,
+    Path,
+    Policy,
+    Hint,
+}
+
+pub struct MotionProfile {
+    pub tick_ms: u64,
+    pub spinner_frames: &'static [&'static str],
+    pub pulse_period_ticks: u8,
+}
+```
+
+#### 15.6 Concrete Numbers
+
+- **Breakpoints**
+  - `compact`: `< 100 cols`
+  - `standard`: `100..=139 cols`
+  - `wide`: `>= 140 cols`
+- **인스펙터 폭**
+  - `compact`: overlay/drawer
+  - `standard/wide`: `32..=48 cols`
+- **상단 바 중략 길이**
+  - provider: `12`
+  - model: `20`
+  - cwd: `30`
+  - branch/tag: `12`
+- **Command Palette**
+  - 기본 표시 결과 수: `8`
+  - 최대 fuzzy 매칭 수: `50`
+- **블록 접힘**
+  - 기본 미리보기 라인 수: `6`
+  - stdout/stderr는 `12줄` 초과 시 자동 접힘
+- **모션**
+  - 기본 tick: `120ms`
+  - thinking spinner 프레임 수: `8`
+  - approval pulse 주기: `6 ticks`
+- **입력 툴벨트**
+  - context chip 최대 가시 수: `5`
+  - chip 라벨 최대 길이: `18`
+
+#### 15.7 Real Data Samples
+
+```rust
+TimelineBlock {
+    id: "blk_20260418_001".to_string(),
+    kind: TimelineBlockKind::Conversation,
+    title: "1부터 100까지 더하는 파이썬 코드 작성".to_string(),
+    subtitle: Some("RUN · Python · 2 files touched".to_string()),
+    body: vec![
+        BlockSection::Markdown("사용자 요청을 분석하고 코드 파일을 생성했습니다.".to_string()),
+        BlockSection::CodeFence {
+            language: Some("python".to_string()),
+            content: "total = sum(range(1, 101))\nprint(total)".to_string(),
+        },
+        BlockSection::ToolSummary {
+            tool_name: "WriteFile".to_string(),
+            summary: "sum_1_to_100.py 생성 완료".to_string(),
+        },
+    ],
+    status: BlockStatus::Done,
+    collapsed: false,
+    pinned: false,
+    created_at_ms: 1776470400000,
+}
+
+CommandPaletteState {
+    is_open: true,
+    query: "theme".to_string(),
+    cursor: 0,
+    results: vec![
+        PaletteCommand {
+            id: "theme.toggle",
+            title: "테마 전환",
+            category: PaletteCategory::Settings,
+            shortcut_hint: Some("/theme"),
+        },
+        PaletteCommand {
+            id: "theme.high_contrast",
+            title: "고대비 테마 적용",
+            category: PaletteCategory::Settings,
+            shortcut_hint: None,
+        },
+    ],
+}
+
+ComposerToolbarState {
+    focused_pane: FocusedPane::Composer,
+    multiline: false,
+    chips: vec![
+        InputChip { kind: InputChipKind::Mode, label: "RUN".to_string(), emphasized: true },
+        InputChip { kind: InputChipKind::Path, label: "~/Projects/rust/smlcli".to_string(), emphasized: false },
+        InputChip { kind: InputChipKind::Context, label: "@src/tui/layout.rs".to_string(), emphasized: false },
+        InputChip { kind: InputChipKind::Hint, label: "Ctrl+K Actions".to_string(), emphasized: false },
+    ],
+}
+```
+
+#### 15.8 실행 경로 (Execution Path)
+
+1. **15-A Block Timeline Foundation**
+   - `TimelineEntry` 기반 렌더링을 `TimelineBlock` 기반으로 승격
+   - `layout.rs` 문자열 렌더링 분기 제거
+2. **15-B Focus & Scroll State Machine**
+   - `FocusedPane`, pane별 selection/scroll/follow 상태 분리
+   - 마우스/키보드 라우팅 통합
+3. **15-C Command Palette**
+   - `Ctrl+K` palette, fuzzy search, command/action catalog
+4. **15-D Composer Toolbar**
+   - 입력 툴벨트, chip 렌더링, multiline 입력, context chip
+5. **15-E Adaptive Top Bar**
+   - 세그먼트 우선순위 렌더링, 좌/우 정렬, 폭별 축약 정책
+6. **15-F Inspector Workspace**
+   - Preview/Diff/Search/Logs/Recent를 블록/파일/세션 중심으로 재구성
+7. **15-G Motion & Theme Polish**
+   - 승인/실행/오류/스트리밍 상태용 ASCII 모션 추가
+8. **15-H Verification & Snapshots**
+   - 레이아웃 스냅샷, 상태 전이 테스트, 마우스 라우팅 테스트
+
+#### 15.9 파일별 작업 범위
+
+- `src/app/state.rs`
+  - `FocusedPane`, `TimelineBlock`, `CommandPaletteState`, `ComposerToolbarState` 추가
+- `src/app/mod.rs`
+  - 포커스 전환, pane별 키 라우팅, palette 토글, 블록 조작 입력 처리
+- `src/app/command_router.rs`
+  - `/help`는 palette와 동기화되는 구조화 데이터 소스로 전환
+- `src/tui/layout.rs`
+  - block renderer, toolbar, adaptive top bar, palette overlay, compact/wide breakpoints
+- `src/tui/widgets/inspector_tabs.rs`
+  - inspector를 블록 세부정보/검색/로그 작업 공간으로 재구성
+- `src/tests/audit_regression.rs`
+  - block/focus/palette/toolbar/layout snapshot 회귀 테스트 추가
+
+#### 15.10 Verification Path
+
+**명령 검증**
+```bash
+cargo check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+```
+
+**수동 검증**
+1. `100/120/140 cols`에서 상단 바/인스펙터/입력 툴벨트가 잘리지 않는지 확인
+2. `Ctrl+K`로 palette가 열리고 fuzzy search가 동작하는지 확인
+3. 긴 stdout/stderr가 블록 단위로 접히고 펼쳐지는지 확인
+4. 타임라인과 인스펙터가 포커스/마우스 기준으로 독립 스크롤되는지 확인
+5. `Shift+Enter` 멀티라인 입력과 `Enter` 제출이 분리되는지 확인
+
+#### 15.11 잔여 리스크
+
+- 신규 의존성 없이 구현할 경우 palette/animation 품질이 제한될 수 있다.
+- 블록 모델 도입으로 `session.messages ↔ timeline` 동기화 경계가 다시 복잡해질 수 있다.
+- Phase 15-A~15-C 완료 전에는 일부 UX가 "과도기 형태"가 될 수 있으므로, 중간 단계에서도 항상 빌드 가능 상태를 유지해야 한다.

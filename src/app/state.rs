@@ -10,46 +10,64 @@ pub enum InspectorTab {
     Recent,
 }
 
+
+
 #[derive(Debug, Clone, PartialEq)]
-pub enum ToolStatus {
-    Queued,
+pub enum TimelineBlockKind {
+    Conversation,
+    ToolRun,
+    Approval,
+    Help,
+    Notice,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockSection {
+    Markdown(String),
+    CodeFence { language: Option<String>, content: String },
+    KeyValueTable(Vec<(String, String)>),
+    ToolSummary { tool_name: String, summary: String },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockStatus {
+    Idle,
     Running,
     Done,
     Error,
+    NeedsApproval,
 }
 
 #[derive(Debug, Clone)]
-pub enum TimelineEntryKind {
-    UserMessage(String),
-    AssistantMessage(String),
-    AssistantDelta(String),
-    SystemNotice(String),
-    ToolCard {
-        tool_name: String,
-        status: ToolStatus,
-        summary: String,
-    },
-    ApprovalCard {
-        tool_name: String,
-        detail: String,
-    },
-    CompactSummary(String),
+pub struct TimelineBlock {
+    pub id: String,
+    pub kind: TimelineBlockKind,
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub body: Vec<BlockSection>,
+    pub status: BlockStatus,
+    pub collapsed: bool,
+    pub pinned: bool,
+    pub created_at_ms: u64,
 }
 
-#[derive(Debug, Clone)]
-pub struct TimelineEntry {
-    pub kind: TimelineEntryKind,
-    pub timestamp: std::time::Instant,
-}
-
-impl TimelineEntry {
-    pub fn now(kind: TimelineEntryKind) -> Self {
+impl TimelineBlock {
+    pub fn new(kind: TimelineBlockKind, title: impl Into<String>) -> Self {
         Self {
+            id: uuid::Uuid::new_v4().to_string(),
             kind,
-            timestamp: std::time::Instant::now(),
+            title: title.into(),
+            subtitle: None,
+            body: Vec::new(),
+            status: BlockStatus::Idle,
+            collapsed: false,
+            pinned: false,
+            created_at_ms: std::time::UNIX_EPOCH.elapsed().unwrap().as_millis() as u64,
         }
     }
 }
+
+
 
 pub struct DomainState {
     pub session: crate::domain::session::SessionState,
@@ -74,6 +92,14 @@ impl DomainState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum FocusedPane {
+    Timeline,
+    Inspector,
+    Composer,
+    Palette,
+}
+
 pub struct UiState {
     pub is_wizard_open: bool,
     pub show_inspector: bool,
@@ -83,10 +109,21 @@ pub struct UiState {
     pub config: ConfigState,
     pub composer: ComposerState,
     pub slash_menu: SlashMenuState,
-    pub timeline: Vec<TimelineEntry>,
+    pub timeline: Vec<TimelineBlock>,
     pub tick_count: u64,
-    /// [v0.1.0-beta.22] 타임라인 세로 스크롤 오프셋 (0 = 최하단/최신)
+    /// [Phase 15-E] 타임라인 내 선택된 블록 커서.
+    pub timeline_cursor: usize,
+    /// [v0.1.0-beta.24] 타임라인 세로 스크롤 오프셋 (bottom-up: 0 = 최하단/최신, N = 바닥에서 N줄 위).
+    /// 렌더링 시 layout.rs에서 top-based offset으로 변환됨.
     pub timeline_scroll: u16,
+    /// [v0.1.0-beta.24] Phase 14-B: 인스펙터 전용 스크롤 오프셋
+    pub inspector_scroll: u16,
+    /// [v0.1.0-beta.24] Phase 14-B: 타임라인 자동 추적 플래그.
+    /// true이면 새 콘텐츠 추가 시 스크롤을 맨 아래로 이동.
+    /// 사용자가 위로 스크롤하면 false, End 키 또는 맨 아래 도달 시 다시 true.
+    pub timeline_follow_tail: bool,
+    pub focused_pane: FocusedPane,
+    pub palette: CommandPaletteState,
 }
 
 impl UiState {
@@ -102,9 +139,82 @@ impl UiState {
             slash_menu: SlashMenuState::new(),
             timeline: Vec::new(),
             tick_count: 0,
+            timeline_cursor: 0,
             timeline_scroll: 0,
+            inspector_scroll: 0,
+            timeline_follow_tail: true,
+            focused_pane: FocusedPane::Composer,
+            palette: CommandPaletteState::new(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct PaletteCommand {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub category: String,
+    pub shortcut: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandPaletteState {
+    pub is_open: bool,
+    pub filter: String,
+    pub cursor: usize,
+    pub commands: Vec<PaletteCommand>,
+    pub matched_indices: Vec<usize>,
+}
+
+impl CommandPaletteState {
+    pub fn new() -> Self {
+        let commands = vec![
+            PaletteCommand {
+                id: "/help".to_string(),
+                title: "Show Help".to_string(),
+                description: "Display all available commands".to_string(),
+                category: "System".to_string(),
+                shortcut: None,
+            },
+            PaletteCommand {
+                id: "/compact".to_string(),
+                title: "Compact Context".to_string(),
+                description: "Summarize previous messages to save context budget".to_string(),
+                category: "Session".to_string(),
+                shortcut: None,
+            },
+            PaletteCommand {
+                id: "/clear".to_string(),
+                title: "Clear Session".to_string(),
+                description: "Clear all messages and start a new session".to_string(),
+                category: "Session".to_string(),
+                shortcut: None,
+            },
+            PaletteCommand {
+                id: "toggle_inspector".to_string(),
+                title: "Toggle Inspector".to_string(),
+                description: "Show or hide the inspector panel".to_string(),
+                category: "UI".to_string(),
+                shortcut: Some("F2".to_string()),
+            },
+        ];
+        let matched_indices = (0..commands.len()).collect();
+
+        Self {
+            is_open: false,
+            filter: String::new(),
+            cursor: 0,
+            commands,
+            matched_indices,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AutoVerifyState {
+    Idle,
+    Healing { retries: usize },
 }
 
 pub struct RuntimeState {
@@ -117,6 +227,7 @@ pub struct RuntimeState {
     /// [v0.1.0-beta.22] 사용자의 마지막 입력이 작업 요청인지 여부.
     /// false이면 인삿말/잡담으로 판단하여 도구 디스패치를 런타임에서 억제한다.
     pub user_intent_actionable: bool,
+    pub auto_verify: AutoVerifyState,
 }
 
 impl RuntimeState {
@@ -126,6 +237,7 @@ impl RuntimeState {
             approval: ApprovalState::new(),
             logs_buffer: Vec::new(),
             user_intent_actionable: true,
+            auto_verify: AutoVerifyState::Idle,
         }
     }
 }

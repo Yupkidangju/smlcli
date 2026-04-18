@@ -11,6 +11,94 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
+pub fn render_preview(f: &mut Frame, state: &AppState, area: Rect) {
+    let p = state.palette();
+    
+    if state.ui.timeline.is_empty() {
+        let text = "No active blocks.\n\nTimeline is empty.";
+        let paragraph = Paragraph::new(text).style(Style::default().fg(p.muted));
+        f.render_widget(paragraph, area);
+        return;
+    }
+
+    let cursor = state.ui.timeline_cursor.min(state.ui.timeline.len().saturating_sub(1));
+    let block = &state.ui.timeline[cursor];
+    
+    let mut lines = Vec::new();
+    lines.push(Line::from(vec![
+        Span::styled(format!("Block: {}", block.title), Style::default().fg(p.accent).add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(""));
+    
+    for section in &block.body {
+        match section {
+            crate::app::state::BlockSection::Markdown(msg) => {
+                for line in msg.lines() {
+                    lines.push(Line::from(Span::styled(line, Style::default().fg(p.text_primary))));
+                }
+            }
+            crate::app::state::BlockSection::ToolSummary { tool_name, summary } => {
+                lines.push(Line::from(Span::styled(format!("Tool: {}", tool_name), Style::default().fg(p.info))));
+                for line in summary.lines() {
+                    lines.push(Line::from(Span::styled(line, Style::default().fg(p.text_secondary))));
+                }
+            }
+            crate::app::state::BlockSection::KeyValueTable(entries) => {
+                for (k, v) in entries {
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{}: ", k), Style::default().fg(p.accent)),
+                        Span::styled(v.clone(), Style::default().fg(p.text_primary)),
+                    ]));
+                }
+            }
+            crate::app::state::BlockSection::CodeFence { language, content } => {
+                let lang_str = language.as_deref().unwrap_or("text");
+                lines.push(Line::from(Span::styled(format!("```{}", lang_str), Style::default().fg(p.muted))));
+                for line in content.lines() {
+                    lines.push(Line::from(Span::styled(line, Style::default().fg(p.text_primary))));
+                }
+                lines.push(Line::from(Span::styled("```", Style::default().fg(p.muted))));
+            }
+        }
+        lines.push(Line::from(""));
+    }
+
+    let para = Paragraph::new(lines)
+        .block(Block::default().borders(Borders::NONE))
+        .wrap(Wrap { trim: false })
+        .scroll((state.ui.inspector_scroll, 0));
+
+    f.render_widget(para, area);
+}
+
+/// Diff 탭 렌더링: 승인 대기 중인 변경사항 미리보기.
+pub fn render_diff(f: &mut Frame, state: &AppState, area: Rect) {
+    let p = state.palette();
+    
+    if let Some(diff) = &state.runtime.approval.diff_preview {
+        let lines: Vec<Line> = diff.lines().map(|line| {
+            let color = if line.starts_with('+') {
+                p.success
+            } else if line.starts_with('-') {
+                p.danger
+            } else {
+                p.text_primary
+            };
+            Line::from(Span::styled(line, Style::default().fg(color)))
+        }).collect();
+
+        let para = Paragraph::new(lines)
+            .block(Block::default().borders(Borders::NONE))
+            .wrap(Wrap { trim: false })
+            .scroll((state.ui.inspector_scroll, 0));
+        f.render_widget(para, area);
+    } else {
+        let text = "No pending diffs.\n\nDiffs will appear here after file write proposals.";
+        let paragraph = Paragraph::new(text).style(Style::default().fg(p.muted));
+        f.render_widget(paragraph, area);
+    }
+}
+
 /// Logs 탭 렌더링: runtime.logs_buffer의 내용을 스트리밍 스타일로 표시.
 pub fn render_logs(f: &mut Frame, state: &AppState, area: Rect) {
     // [v0.1.0-beta.21] 동적 팔레트 참조
@@ -38,11 +126,11 @@ pub fn render_logs(f: &mut Frame, state: &AppState, area: Rect) {
         }
     }
 
-    // [v0.1.0-beta.22] Wrap + scroll 적용 — PageUp/PageDown으로 탐색 가능
+    // [v0.1.0-beta.24] Phase 14-B 감사 보정: inspector_scroll 사용으로 독립 스크롤
     let para = Paragraph::new(log_lines)
         .block(Block::default().borders(Borders::NONE))
         .wrap(Wrap { trim: false })
-        .scroll((state.ui.timeline_scroll, 0));
+        .scroll((state.ui.inspector_scroll, 0));
 
     f.render_widget(para, area);
 }
@@ -51,7 +139,7 @@ pub fn render_logs(f: &mut Frame, state: &AppState, area: Rect) {
 /// Composer 입력 버퍼를 검색어로 사용하여 타임라인 전체를 대소문자 무시로 필터링.
 /// 검색어가 비어있으면 전체 텍스트 콘텐츠를 인덱스 형태로 표시한다.
 pub fn render_search(f: &mut Frame, state: &AppState, area: Rect) {
-    use crate::app::state::TimelineEntryKind;
+
 
     // [v0.1.0-beta.21] 동적 팔레트 참조
     let p = state.palette();
@@ -78,57 +166,37 @@ pub fn render_search(f: &mut Frame, state: &AppState, area: Rect) {
 
     // 타임라인 엔트리에서 텍스트를 추출하고 검색 필터링
     let mut match_count = 0usize;
-    for (idx, entry) in state.ui.timeline.iter().enumerate() {
-        let (label, text) = match &entry.kind {
-            TimelineEntryKind::UserMessage(s) => ("User", s.as_str()),
-            TimelineEntryKind::AssistantMessage(s) => ("AI", s.as_str()),
-            TimelineEntryKind::AssistantDelta(s) => ("AI…", s.as_str()),
-            TimelineEntryKind::SystemNotice(s) => ("Sys", s.as_str()),
-            TimelineEntryKind::ToolCard {
-                tool_name, summary, ..
-            } => {
-                // 도구 카드: 이름과 요약을 결합하여 검색
-                let combined = format!("{}: {}", tool_name, summary);
-                if query.is_empty() || combined.to_lowercase().contains(&query) {
-                    match_count += 1;
-                    if match_count <= 50 {
-                        lines.push(Line::from(vec![
-                            Span::styled(
-                                format!(" #{:<3} ", idx + 1),
-                                Style::default().fg(p.muted),
-                            ),
-                            Span::styled("Tool ", Style::default().fg(p.warning)),
-                            Span::styled(
-                                truncate_str(&combined, 60),
-                                Style::default().fg(p.text_primary),
-                            ),
-                        ]));
-                    }
-                }
-                continue;
-            }
-            TimelineEntryKind::ApprovalCard { tool_name, detail } => {
-                let combined = format!("Approve {}: {}", tool_name, detail);
-                if query.is_empty() || combined.to_lowercase().contains(&query) {
-                    match_count += 1;
-                    if match_count <= 50 {
-                        lines.push(Line::from(vec![
-                            Span::styled(
-                                format!(" #{:<3} ", idx + 1),
-                                Style::default().fg(p.muted),
-                            ),
-                            Span::styled("Appr ", Style::default().fg(p.warning)),
-                            Span::styled(
-                                truncate_str(&combined, 60),
-                                Style::default().fg(p.text_primary),
-                            ),
-                        ]));
-                    }
-                }
-                continue;
-            }
-            TimelineEntryKind::CompactSummary(s) => ("Σ", s.as_str()),
+    for (idx, block) in state.ui.timeline.iter().enumerate() {
+        let label = match block.kind {
+            crate::app::state::TimelineBlockKind::Conversation => "Conv",
+            crate::app::state::TimelineBlockKind::ToolRun => "Tool",
+            crate::app::state::TimelineBlockKind::Approval => "Appr",
+            crate::app::state::TimelineBlockKind::Notice => "Sys",
+            crate::app::state::TimelineBlockKind::Help => "Help",
         };
+
+        let mut text = block.title.clone();
+        for section in &block.body {
+            match section {
+                crate::app::state::BlockSection::Markdown(s) => {
+                    text.push(' ');
+                    text.push_str(s);
+                }
+                crate::app::state::BlockSection::ToolSummary { summary, .. } => {
+                    text.push(' ');
+                    text.push_str(summary);
+                }
+                crate::app::state::BlockSection::KeyValueTable(entries) => {
+                    for (k, v) in entries {
+                        text.push_str(&format!(" {}:{}", k, v));
+                    }
+                }
+                crate::app::state::BlockSection::CodeFence { content, .. } => {
+                    text.push(' ');
+                    text.push_str(content);
+                }
+            }
+        }
 
         // 대소문자 무시 검색 필터
         if !query.is_empty() && !text.to_lowercase().contains(&query) {
@@ -141,7 +209,7 @@ pub fn render_search(f: &mut Frame, state: &AppState, area: Rect) {
         }
 
         // 텍스트 첫 줄만 잘라서 표시
-        let preview = truncate_str(text, 60);
+        let preview = truncate_str(&text, 60);
         let label_color = match label {
             "User" => p.accent,
             "AI" | "AI…" => p.success,
@@ -174,11 +242,11 @@ pub fn render_search(f: &mut Frame, state: &AppState, area: Rect) {
         Style::default().fg(p.muted).add_modifier(Modifier::ITALIC),
     )));
 
-    // [v0.1.0-beta.22] Wrap + scroll 적용
+    // [v0.1.0-beta.24] Phase 14-B 감사 보정: inspector_scroll 사용으로 독립 스크롤
     let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::NONE))
         .wrap(Wrap { trim: false })
-        .scroll((state.ui.timeline_scroll, 0));
+        .scroll((state.ui.inspector_scroll, 0));
     f.render_widget(para, area);
 }
 
@@ -209,14 +277,16 @@ pub fn render_recent(f: &mut Frame, state: &AppState, area: Rect) {
         .ui
         .timeline
         .iter()
-        .filter_map(|e| {
-            if let crate::app::state::TimelineEntryKind::ToolCard {
-                tool_name,
-                status,
-                summary,
-            } = &e.kind
-            {
-                Some((tool_name, status, summary))
+        .filter_map(|block| {
+            if block.kind == crate::app::state::TimelineBlockKind::ToolRun {
+                let mut summary = "";
+                for section in &block.body {
+                    if let crate::app::state::BlockSection::ToolSummary { summary: s, .. } = section {
+                        summary = s;
+                        break;
+                    }
+                }
+                Some((&block.title, &block.status, summary))
             } else {
                 None
             }
@@ -230,8 +300,8 @@ pub fn render_recent(f: &mut Frame, state: &AppState, area: Rect) {
     } else {
         for (name, status, summary) in tool_entries {
             let status_char = match status {
-                crate::app::state::ToolStatus::Done => "✅",
-                crate::app::state::ToolStatus::Error => "❌",
+                crate::app::state::BlockStatus::Done => "✅",
+                crate::app::state::BlockStatus::Error => "❌",
                 _ => "⏳",
             };
             lines.push(Line::from(vec![
@@ -245,10 +315,10 @@ pub fn render_recent(f: &mut Frame, state: &AppState, area: Rect) {
         }
     }
 
-    // [v0.1.0-beta.22] Wrap + scroll 적용
+    // [v0.1.0-beta.24] Phase 14-B 감사 보정: inspector_scroll 사용으로 독립 스크롤
     let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::NONE))
         .wrap(Wrap { trim: false })
-        .scroll((state.ui.timeline_scroll, 0));
+        .scroll((state.ui.inspector_scroll, 0));
     f.render_widget(para, area);
 }
