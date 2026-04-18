@@ -507,7 +507,7 @@ cargo clippy  ✅ 0 warnings (-D warnings 게이트 통과)
 ### 14.2 품질 검증 결과
 ```
 cargo clippy --all-targets --all-features -- -D warnings  ✅ 0 warnings
-cargo test  ✅ 42 passed (0 failed)
+cargo test  ✅ 45 passed (0 failed)
 ```
 
 ---

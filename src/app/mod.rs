@@ -456,10 +456,10 @@ impl App {
     }
 
     /// 키보드 입력 이벤트 처리: 전역 단축키, 승인 UI, 위자드, Fuzzy Finder, Composer를 순차 라우팅.
-    fn handle_input(&mut self, key: crossterm::event::KeyEvent) {
+    pub(crate) fn handle_input(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
         match key.code {
-            // 전역 단축키: Ctrl+C 종료, Ctrl+I 인스펙터 토글
+            // 전역 단축키: Ctrl+C 종료
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.state.should_quit = true;
             }

@@ -1112,3 +1112,106 @@ fn test_is_actionable_input_heuristic() {
     assert!(is_actionable_input("@Cargo.toml 분석해"), "@ 참조는 작업성");
     assert!(is_actionable_input("build 해줘"), "빌드 요청은 작업성");
 }
+
+// --- Phase 15 추가 회귀 테스트 ---
+
+#[test]
+fn test_f2_inspector_toggle() {
+    use crate::app::App;
+    use crate::app::state::{AppState, FocusedPane};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, KeyEventKind, KeyEventState};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+
+    // 초기 상태: inspector가 보이지 않고(or 기본값), focused_pane는 기본값(Composer)이라 가정.
+    // 명시적으로 설정:
+    app.state.ui.show_inspector = false;
+    app.state.ui.focused_pane = FocusedPane::Composer;
+
+    let f2_key = KeyEvent {
+        code: KeyCode::F(2),
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::empty(),
+    };
+
+    // 1) F2 누름 -> Inspector 켜지고 포커스 이동
+    app.handle_input(f2_key.clone());
+    assert!(app.state.ui.show_inspector, "F2를 누르면 인스펙터가 보여야 함");
+    assert_eq!(app.state.ui.focused_pane, FocusedPane::Inspector, "인스펙터가 열리면 포커스를 받아야 함");
+
+    // 2) F2 다시 누름 -> Inspector 꺼지고 포커스 Composer로 복귀
+    app.handle_input(f2_key);
+    assert!(!app.state.ui.show_inspector, "F2를 다시 누르면 인스펙터가 닫혀야 함");
+    assert_eq!(app.state.ui.focused_pane, FocusedPane::Composer, "인스펙터가 닫히면 포커스가 Composer로 복귀해야 함");
+}
+
+#[test]
+fn test_ctrl_k_command_palette() {
+    use crate::app::App;
+    use crate::app::state::{AppState, FocusedPane};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, KeyEventKind, KeyEventState};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+
+    app.state.ui.palette.is_open = false;
+    app.state.ui.focused_pane = FocusedPane::Composer;
+
+    let ctrl_k = KeyEvent {
+        code: KeyCode::Char('k'),
+        modifiers: KeyModifiers::CONTROL,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::empty(),
+    };
+
+    // 1) Ctrl+K 누름 -> Palette 열림
+    app.handle_input(ctrl_k.clone());
+    assert!(app.state.ui.palette.is_open, "Ctrl+K로 팔레트가 열려야 함");
+    assert_eq!(app.state.ui.focused_pane, FocusedPane::Palette, "팔레트가 열리면 포커스를 받아야 함");
+
+    // 2) Ctrl+K 다시 누름 -> Palette 닫힘
+    app.handle_input(ctrl_k);
+    assert!(!app.state.ui.palette.is_open, "Ctrl+K를 다시 누르면 팔레트가 닫혀야 함");
+    assert_eq!(app.state.ui.focused_pane, FocusedPane::Composer, "팔레트가 닫히면 포커스가 Composer로 복귀해야 함");
+}
+
+#[test]
+fn test_shift_enter_multiline_input() {
+    use crate::app::App;
+    use crate::app::state::{AppState, FocusedPane};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, KeyEventKind, KeyEventState};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+
+    // 준비: 입력창 포커스, 위자드 등 방해 요소 제거
+    app.state.ui.focused_pane = FocusedPane::Composer;
+    app.state.ui.is_wizard_open = false;
+    app.state.ui.composer.input_buffer = "hello".to_string();
+
+    let shift_enter = KeyEvent {
+        code: KeyCode::Enter,
+        modifiers: KeyModifiers::SHIFT,
+        kind: KeyEventKind::Press,
+        state: KeyEventState::empty(),
+    };
+
+    app.handle_input(shift_enter);
+
+    assert_eq!(
+        app.state.ui.composer.input_buffer,
+        "hello\n",
+        "Shift+Enter 입력 시 줄바꿈 문자가 버퍼에 추가되어야 함"
+    );
+}
