@@ -1206,8 +1206,8 @@ fn test_shift_enter_multiline_input() {
 #[test]
 fn test_mouse_wheel_routing() {
     use crate::app::App;
-    use crate::app::state::{AppState, FocusedPane};
-    use crossterm::event::{MouseEvent, MouseEventKind};
+    use crate::app::state::AppState;
+    use crossterm::event::{MouseEvent, MouseEventKind, KeyModifiers};
 
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
     let mut app = App {
@@ -1215,38 +1215,32 @@ fn test_mouse_wheel_routing() {
         action_tx: tx,
     };
 
-    // 1) Inspector 포커스 시 마우스 휠 위/아래 테스트
-    app.state.ui.focused_pane = FocusedPane::Inspector;
+    // Inspector 활성화
+    app.state.ui.show_inspector = true;
     app.state.ui.inspector_scroll = 5;
-
-    let mouse_up = MouseEvent {
-        kind: MouseEventKind::ScrollUp,
-        column: 0,
-        row: 0,
-        modifiers: crossterm::event::KeyModifiers::NONE,
-    };
-    app.handle_mouse(mouse_up);
-    assert_eq!(app.state.ui.inspector_scroll, 6, "Inspector ScrollUp -> +1");
-
-    let mouse_down = MouseEvent {
-        kind: MouseEventKind::ScrollDown,
-        column: 0,
-        row: 0,
-        modifiers: crossterm::event::KeyModifiers::NONE,
-    };
-    app.handle_mouse(mouse_down);
-    assert_eq!(app.state.ui.inspector_scroll, 5, "Inspector ScrollDown -> -1");
-
-    // 2) Timeline 포커스 시 마우스 휠 테스트
-    app.state.ui.focused_pane = FocusedPane::Timeline;
     app.state.ui.timeline_scroll_offset = 2;
 
+    // 1) column = 80 (Timeline width >= 72 이므로 Inspector 위)
+    let mouse_up_insp = MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 80,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(mouse_up_insp);
+    assert_eq!(app.state.ui.inspector_scroll, 6, "Inspector 위에서 ScrollUp -> +1");
+    // 타임라인은 그대로여야 함
+    assert_eq!(app.state.ui.timeline_scroll_offset, 2);
+
+    // 2) column = 10 (Timeline 위)
     let mouse_up_tl = MouseEvent {
         kind: MouseEventKind::ScrollUp,
-        column: 0,
+        column: 10,
         row: 0,
-        modifiers: crossterm::event::KeyModifiers::NONE,
+        modifiers: KeyModifiers::NONE,
     };
     app.handle_mouse(mouse_up_tl);
-    assert_eq!(app.state.ui.timeline_scroll_offset, 3, "Timeline ScrollUp -> +1");
+    assert_eq!(app.state.ui.timeline_scroll_offset, 3, "Timeline 위에서 ScrollUp -> +1");
+    // 인스펙터는 그대로여야 함
+    assert_eq!(app.state.ui.inspector_scroll, 6);
 }

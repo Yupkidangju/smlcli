@@ -799,38 +799,40 @@ impl App {
     pub fn handle_mouse(&mut self, mouse: crossterm::event::MouseEvent) {
         use crossterm::event::{MouseEventKind, MouseButton};
 
+        let (term_cols, _) = crossterm::terminal::size().unwrap_or((100, 30));
+        let inspector_active = self.state.ui.show_inspector || self.state.runtime.approval.pending_tool.is_some();
+        
+        let inspector_width = (term_cols as f32 * 0.30).clamp(32.0, 48.0) as u16;
+        let timeline_width = term_cols.saturating_sub(inspector_width).max(72);
+        
+        let over_inspector = inspector_active && mouse.column >= timeline_width;
+
         match mouse.kind {
             MouseEventKind::ScrollUp => {
-                match self.state.ui.focused_pane {
-                    crate::app::state::FocusedPane::Timeline => {
-                        self.state.ui.timeline_scroll_offset += 1;
-                        self.state.ui.timeline_follow_tail = false;
-                    }
-                    crate::app::state::FocusedPane::Inspector => {
-                        self.state.ui.inspector_scroll = self.state.ui.inspector_scroll.saturating_add(1);
-                    }
-                    _ => {}
+                if over_inspector {
+                    self.state.ui.inspector_scroll = self.state.ui.inspector_scroll.saturating_add(1);
+                } else {
+                    self.state.ui.timeline_scroll_offset += 1;
+                    self.state.ui.timeline_follow_tail = false;
                 }
             }
             MouseEventKind::ScrollDown => {
-                match self.state.ui.focused_pane {
-                    crate::app::state::FocusedPane::Timeline => {
-                        if self.state.ui.timeline_scroll_offset > 0 {
-                            self.state.ui.timeline_scroll_offset -= 1;
-                            self.state.ui.timeline_follow_tail = self.state.ui.timeline_scroll_offset == 0;
-                        }
+                if over_inspector {
+                    self.state.ui.inspector_scroll = self.state.ui.inspector_scroll.saturating_sub(1);
+                } else {
+                    if self.state.ui.timeline_scroll_offset > 0 {
+                        self.state.ui.timeline_scroll_offset -= 1;
+                        self.state.ui.timeline_follow_tail = self.state.ui.timeline_scroll_offset == 0;
                     }
-                    crate::app::state::FocusedPane::Inspector => {
-                        self.state.ui.inspector_scroll = self.state.ui.inspector_scroll.saturating_sub(1);
-                    }
-                    _ => {}
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                // 클릭을 통한 간단한 포커스 라우팅 (간이 레이아웃 기반)
-                // 우측 30%가 인스펙터라고 가정 (단순화)
-                // row, column을 기준으로 정확한 레이아웃을 알기 어려우므로, 
-                // 향후 ratatui 이벤트 라우팅 확장 전까지는 임시 구현.
+                // 클릭을 통한 포커스 라우팅
+                if over_inspector {
+                    self.state.ui.focused_pane = crate::app::state::FocusedPane::Inspector;
+                } else {
+                    self.state.ui.focused_pane = crate::app::state::FocusedPane::Timeline;
+                }
             }
             _ => {}
         }
