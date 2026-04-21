@@ -9,6 +9,7 @@ use crate::domain::tool_result::ToolResult;
 /// 도구 실행에 필요한 문맥(Context)
 pub struct ToolContext<'a> {
     pub token: &'a crate::domain::permissions::PermissionToken,
+    pub cancel_token: tokio_util::sync::CancellationToken,
 }
 
 /// [v0.1.0-beta.23] Phase 13: Agentic Autonomy
@@ -81,13 +82,35 @@ impl ToolRegistry {
 
 /// Provider 방언(Dialect)에 맞게 JSON 스키마를 가공한다.
 fn apply_dialect(schema: &mut Value, dialect: &crate::domain::provider::ToolDialect) {
-    if dialect == &crate::domain::provider::ToolDialect::Gemini {
-        // Gemini: parameters 객체가 있을 경우, required 배열이 없으면 명시적으로 빈 배열이라도 넣어주는 것이 안전함
-        if let Some(func) = schema.get_mut("function")
-            && let Some(params) = func.get_mut("parameters")
-                && params.get("required").is_none() {
-                    params["required"] = serde_json::json!([]);
+    match dialect {
+        crate::domain::provider::ToolDialect::Gemini => {
+            if let Some(func) = schema.get_mut("function")
+                && let Some(params) = func.get_mut("parameters")
+                && params.get("required").is_none()
+            {
+                params["required"] = serde_json::json!([]);
+            }
+        }
+        crate::domain::provider::ToolDialect::Anthropic => {
+            // Transform OpenAI format: { "type": "function", "function": { "name": "...", "description": "...", "parameters": { ... } } }
+            // To Anthropic format: { "name": "...", "description": "...", "input_schema": { ... } }
+            if let Some(func) = schema.get("function").cloned() {
+                let mut anthropic_schema = serde_json::Map::new();
+                if let Some(name) = func.get("name") {
+                    anthropic_schema.insert("name".to_string(), name.clone());
                 }
+                if let Some(description) = func.get("description") {
+                    anthropic_schema.insert("description".to_string(), description.clone());
+                }
+                if let Some(parameters) = func.get("parameters") {
+                    anthropic_schema.insert("input_schema".to_string(), parameters.clone());
+                } else {
+                    anthropic_schema.insert("input_schema".to_string(), serde_json::json!({ "type": "object", "properties": {} }));
+                }
+                *schema = Value::Object(anthropic_schema);
+            }
+        }
+        crate::domain::provider::ToolDialect::OpenAICompat => {}
     }
 }
 
@@ -100,6 +123,7 @@ pub static GLOBAL_REGISTRY: std::sync::LazyLock<ToolRegistry> = std::sync::LazyL
     registry.register(Box::new(crate::tools::sys_ops::SysInfoTool));
     registry.register(Box::new(crate::tools::sys_ops::StatTool));
     registry.register(Box::new(crate::tools::grep::GrepSearchTool));
+    registry.register(Box::new(crate::tools::fetch::FetchUrlTool));
     registry.register(Box::new(crate::tools::shell::ExecShellTool));
     registry
 });

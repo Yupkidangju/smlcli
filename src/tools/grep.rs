@@ -16,9 +16,9 @@ const DEFAULT_MAX_RESULTS: usize = 100;
 /// 매칭 라인의 위아래로 이 수만큼 추가 표시.
 const DEFAULT_CONTEXT_LINES: usize = 2;
 
-/// Grep 검색 실행. pattern 매칭 결과에 주변 문맥(context_lines)을 포함하여 반환.
+/// Grep 검색 실행. query 매칭 결과에 주변 문맥(context_lines)을 포함하여 반환.
 /// max_results 도달 시 조기 종료하고 truncated 알림 표시.
-pub(crate) fn grep_search(pattern: &str, path: &str, case_insensitive: bool) -> Result<ToolResult> {
+pub(crate) fn grep_search(query: &str, path: &str, is_regex: bool) -> Result<ToolResult> {
     let mut output = String::new();
     let mut total_matches = 0;
     let mut files_matched = 0;
@@ -41,12 +41,25 @@ pub(crate) fn grep_search(pattern: &str, path: &str, case_insensitive: bool) -> 
 
                 let all_lines: Vec<&str> = content.lines().collect();
                 let mut file_has_match = false;
+                
+                let re = if is_regex {
+                    match regex::Regex::new(query) {
+                        Ok(r) => Some(r),
+                        Err(e) => return Err(anyhow::anyhow!("Invalid regex pattern: {}", e)),
+                    }
+                } else {
+                    None
+                };
 
                 for (i, line) in all_lines.iter().enumerate() {
-                    let matches = if case_insensitive {
-                        line.to_lowercase().contains(&pattern.to_lowercase())
+                    let matches = if is_regex {
+                        if let Some(r) = &re {
+                            r.is_match(line)
+                        } else {
+                            line.contains(query)
+                        }
                     } else {
-                        line.contains(pattern)
+                        line.contains(query)
                     };
 
                     if matches {
@@ -100,7 +113,7 @@ pub(crate) fn grep_search(pattern: &str, path: &str, case_insensitive: bool) -> 
         };
         format!(
             "🔍 '{}' — {}건 매칭, {}개 파일{}\n{}",
-            pattern, total_matches, files_matched, trunc_msg, output
+            query, total_matches, files_matched, trunc_msg, output
         )
     };
 
@@ -146,11 +159,11 @@ impl Tool for GrepSearchTool {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "pattern": { "type": "string" },
+                        "query": { "type": "string" },
                         "path": { "type": "string" },
-                        "case_insensitive": { "type": "boolean" }
+                        "is_regex": { "type": "boolean" }
                     },
-                    "required": ["pattern", "path"]
+                    "required": ["query", "path"]
                 }
             }
         })
@@ -161,8 +174,8 @@ impl Tool for GrepSearchTool {
     }
 
     async fn execute(&self, args: Value, _ctx: &ToolContext<'_>) -> Result<ToolResult, ToolError> {
-        let pattern = args
-            .get("pattern")
+        let query = args
+            .get("query")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
@@ -171,12 +184,12 @@ impl Tool for GrepSearchTool {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let case_insensitive = args
-            .get("case_insensitive")
+        let is_regex = args
+            .get("is_regex")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        grep_search(&pattern, &path, case_insensitive)
+        grep_search(&query, &path, is_regex)
             .map_err(|e| ToolError::ExecutionFailure(e.to_string()))
     }
 }

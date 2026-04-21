@@ -465,6 +465,18 @@ impl App {
 
     pub(crate) fn handle_action(&mut self, action: action::Action) {
         match action {
+            action::Action::SubmitChatRequest(final_text) => {
+                self.submit_chat_request(final_text);
+            }
+            action::Action::AddTimelineNotice(msg) => {
+                self.state
+                    .ui
+                    .timeline
+                    .push(crate::app::state::TimelineBlock::new(
+                        crate::app::state::TimelineBlockKind::Notice,
+                        msg,
+                    ));
+            }
             action::Action::ChatStarted => {
                 // thinking indicator 시작 + 블록 상태 갱신
                 self.state.runtime.is_thinking = true;
@@ -621,9 +633,34 @@ impl App {
             action::Action::ToolOutputChunk(chunk) => {
                 // 원문 로그를 logs_buffer에 추가 (Inspector Logs 탭)
                 self.state.runtime.logs_buffer.push(chunk);
+
+                // [v1.2.0] OOM 방지 및 Pruning 시 Sticky Scroll Sync
+                let max_lines = 10000;
+                let mut trimmed = 0;
+                if self.state.runtime.logs_buffer.len() > max_lines {
+                    trimmed = self.state.runtime.logs_buffer.len() - max_lines;
+                    self.state.runtime.logs_buffer.drain(0..trimmed);
+                }
+
+                if !self.state.ui.timeline_follow_tail {
+                    let mut current_scroll = self.state.ui.inspector_scroll as i32;
+                    // 새 청크가 1개 추가되었으므로 offset +1.
+                    // 상단이 trimmed개 지워졌으므로 offset -trimmed.
+                    current_scroll += 1 - (trimmed as i32);
+                    
+                    if current_scroll < 0 {
+                        // 보고 있던 라인이 삭제된 경우, 새로운 상단(가장 큰 값)에 위치시킴
+                        self.state.ui.inspector_scroll = u16::MAX; 
+                    } else {
+                        self.state.ui.inspector_scroll = current_scroll as u16;
+                    }
+                } else {
+                    self.state.ui.inspector_scroll = 0;
+                }
             }
 
             action::Action::ToolFinished(res) => {
+                self.state.runtime.active_tool_cancel_token = None;
                 // LLM 컨텍스트에 도구 결과 추가
                 let content = format!(
                     "[Tool Result] {}\nExit Code: {}\nSTDOUT: {}\nSTDERR: {}",
@@ -725,6 +762,7 @@ impl App {
             }
 
             action::Action::ToolError(e) => {
+                self.state.runtime.active_tool_cancel_token = None;
                 let failure_detail = e.to_string();
                 self.mark_repo_map_stale();
                 self.refresh_repo_map_if_needed(false);
@@ -924,6 +962,8 @@ impl App {
                 self.state.ui.wizard.is_loading_models = false;
                 self.state.ui.wizard.step = state::WizardStep::ApiKeyInput;
                 self.state.ui.wizard.err_msg = Some(format!("API 키 검증 실패: {}", e));
+                // [v1.0.0] State 누수 방지: 인증 실패 시 입력 버퍼 초기화 (ClearBuffer)
+                self.state.ui.wizard.api_key_input.clear();
             }
         }
     }
@@ -957,9 +997,14 @@ impl App {
         }
 
         match key.code {
-            // 전역 단축키: Ctrl+C 종료
+            // 전역 단축키: Ctrl+C 종료 또는 실행 취소
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.state.should_quit = true;
+                if let Some(token) = self.state.runtime.active_tool_cancel_token.take() {
+                    token.cancel();
+                    self.state.runtime.logs_buffer.push("[App] 사용자 취소 요청 (Ctrl+C): 도구 실행 중단".to_string());
+                } else {
+                    self.state.should_quit = true;
+                }
             }
 
             KeyCode::F(2) => {
@@ -1020,6 +1065,9 @@ impl App {
                     self.state.ui.wizard.err_msg = None;
                     self.state.ui.wizard.api_key_input.clear();
                     self.state.ui.wizard.cursor_index = 0;
+                } else if let Some(token) = self.state.runtime.active_tool_cancel_token.take() {
+                    token.cancel();
+                    self.state.runtime.logs_buffer.push("[App] 사용자 취소 요청 (ESC): 도구 실행 중단".to_string());
                 } else {
                     self.state.should_quit = true;
                 }
@@ -1052,7 +1100,25 @@ impl App {
                 }
             }
             KeyCode::Tab | KeyCode::BackTab => {
-                if !self.state.ui.is_wizard_open {
+                if self.state.ui.is_wizard_open {
+                    // [v1.0.0] 위저드 탭 포커스 순환 강제 (순서 꼬임 해결)
+                    // Provider -> ApiKey -> Model -> SaveButton
+                    let reverse = key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
+                    self.state.ui.wizard.step = match self.state.ui.wizard.step {
+                        state::WizardStep::ProviderSelection => {
+                            if reverse { state::WizardStep::Saving } else { state::WizardStep::ApiKeyInput }
+                        }
+                        state::WizardStep::ApiKeyInput => {
+                            if reverse { state::WizardStep::ProviderSelection } else { state::WizardStep::ModelSelection }
+                        }
+                        state::WizardStep::ModelSelection => {
+                            if reverse { state::WizardStep::ApiKeyInput } else { state::WizardStep::Saving }
+                        }
+                        state::WizardStep::Saving => {
+                            if reverse { state::WizardStep::ModelSelection } else { state::WizardStep::ProviderSelection }
+                        }
+                    };
+                } else {
                     use crate::domain::session::AppMode;
                     self.state.domain.session.mode = match self.state.domain.session.mode {
                         AppMode::Plan => AppMode::Run,
@@ -1107,6 +1173,8 @@ impl App {
             }
         } else if self.state.ui.is_wizard_open {
             if self.state.ui.wizard.step == state::WizardStep::ApiKeyInput {
+                // [v1.0.0] 에러 잔류 방지: 첫 입력 시 에러 메시지 초기화
+                self.state.ui.wizard.err_msg = None;
                 self.state.ui.wizard.api_key_input.push(c);
             }
         } else if self.state.ui.palette.is_open {
@@ -1214,7 +1282,7 @@ impl App {
         } else if self.state.ui.config.is_open {
             let max = match self.state.ui.config.active_popup {
                 state::ConfigPopup::Dashboard => 2,
-                state::ConfigPopup::ProviderList => 1,
+                state::ConfigPopup::ProviderList => 4,
                 state::ConfigPopup::ModelList => self
                     .state
                     .ui
@@ -1228,7 +1296,7 @@ impl App {
             }
         } else if self.state.ui.is_wizard_open {
             let max = match self.state.ui.wizard.step {
-                state::WizardStep::ProviderSelection => 1,
+                state::WizardStep::ProviderSelection => 4,
                 state::WizardStep::ModelSelection => self
                     .state
                     .ui
@@ -1290,6 +1358,8 @@ impl App {
             }
         } else if self.state.ui.is_wizard_open {
             if self.state.ui.wizard.step == state::WizardStep::ApiKeyInput {
+                // [v1.0.0] 에러 잔류 방지: 첫 백스페이스 시 에러 메시지 초기화
+                self.state.ui.wizard.err_msg = None;
                 self.state.ui.wizard.api_key_input.pop();
             }
         } else {

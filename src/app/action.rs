@@ -21,6 +21,12 @@ pub enum FetchSource {
 #[derive(Debug, Clone)]
 pub enum Action {
     // === 채팅 라이프사이클 ===
+    /// [v1.3.0] 파일 멘션 파싱이 완료된 텍스트를 LLM에 제출
+    SubmitChatRequest(String),
+
+    /// [v1.3.0] 타임라인에 공지(Notice) 블록 추가
+    AddTimelineNotice(String),
+
     /// [v0.1.0-beta.18] LLM 요청 발송 시점. thinking indicator 시작 트리거.
     ChatStarted,
 

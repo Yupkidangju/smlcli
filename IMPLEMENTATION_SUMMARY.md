@@ -678,7 +678,7 @@ cargo test  ✅ 46 passed (0 failed)
 - [x] **Task 5: Windows Exec Shell 강제화** - `ExecShell`의 Windows `cmd` 분기를 `pwsh` 탐색 로직으로 교체.
 - [x] **Task 6: REPL 및 상태바 연동** - `/workspace` 서브 명령어 라우팅 추가 및 `layout.rs` 상단 상태바에 셸/Trust 상태 노출.
 
-## Phase 18: Multi-Provider Expansion & Advanced Agentic Tools (계획)
+## Phase 18: Multi-Provider Expansion & Advanced Agentic Tools
 이 페이즈는 2026년 4월 기준 최신 모델(GPT-5.4, Claude 4.7, Grok 4.20)들을 네이티브로 지원하고, 에이전트의 상황 인지 능력을 대폭 끌어올릴 수 있는 구조화된 시스템 도구(ListDir, GrepSearch, FetchURL)를 도입한다.
 
 ### 18.1 시스템 분해표 및 파일 책임
@@ -705,7 +705,97 @@ cargo test  ✅ 46 passed (0 failed)
   - `FetchURL`: `{ "url": "string" }`
 
 ### 18.3 구현 순서 권장 (Execution Path)
-- [ ] **Task 1: Provider 모델 및 Dialect 확장** - `provider.rs` 및 `registry.rs`에 신규 Provider 열거형, 2026.04 최신 모델 리스트(`gpt-5.4` 등) 추가.
-- [ ] **Task 2: API Adapter 구현** - `openai.rs`, `anthropic.rs`, `xai.rs` 생성 및 `ProviderAdapter` 구현.
-- [ ] **Task 3: Advanced Tools 구현** - `list_dir.rs`, `grep_search.rs`, `fetch_url.rs` 3종 도구 구현 로직 작성.
-- [ ] **Task 4: Registry 및 Wizard 연동** - 도구들을 시스템에 등록하고 초기 마법사 화면에서 API 키 입력 UI 업데이트.
+- [x] **Task 1: Provider 모델 및 Dialect 확장** - `provider.rs` 및 `registry.rs`에 신규 Provider 열거형, 2026.04 최신 모델 리스트(`gpt-5.4` 등) 추가.
+- [x] **Task 2: API Adapter 구현** - `openai.rs`, `anthropic.rs`, `xai.rs` 생성 및 `ProviderAdapter` 구현.
+- [x] **Task 3: Advanced Tools 구현** - `list_dir.rs`, `grep_search.rs`, `fetch_url.rs` 3종 도구 구현 로직 작성.
+- [x] **Task 4: Registry 및 Wizard 연동** - 도구들을 시스템에 등록하고 초기 마법사 화면에서 API 키 입력 UI 업데이트.
+
+---
+
+## Phase 19: v1.0.0 Audit Remediation (진행 중)
+**목표(Scope):** v1.0.0 출시 전 식별된 9가지 시스템 결함(상태 의존성, 데드락 위험, 권한 우회 등)을 해결하여 완전한 무상태 도구 실행과 이벤트 루프의 동시성 안정성을 확보합니다.
+**비목표(Non-Scope):** 새로운 AI 모델 연동이나 TUI의 신규 레이아웃 추가 등은 이 단계에 포함되지 않습니다.
+
+### 19.1 해결 대상 및 결함 (Concrete Analysis)
+1. **[Logic] Wizard 설정 누락 및 상태 전이 결함**: 필수 필드 검증 누락으로 UI 마비.
+2. **[Architecture] 도구 실행 상태 의존성 (Stateless 위반)**: `ToolRuntime`이 전역 상태 직접 수정.
+3. **[Concurrency] 이벤트 루프 데드락 위험**: 취소 입력(`AppAction::Cancel`) 시 채널 블로킹.
+4. **[Error] 에러 타입 파편화**: `infra/` 계층의 `Box<dyn Error>` 남용으로 복구 불가.
+5. **[UX/UI] TUI 로그 렌더링 블로킹**: 로그 크기에 비례한 프레임 드랍.
+6. **[Interaction] 위저드 탭 포커스 순환 오류**: 탭 순서 꼬임.
+7. **[Sync] 상태바 갱신 지연**: 도구 종료 후 처리중 메시지 잔류.
+8. **[Resource] 로그 파일 핸들 누수**: 매번 Open/Close 하여 핸들 고갈 위험.
+9. **[Security] 권한 검증 와일드카드 우회 결함**: `rm -rf *` 등 위험 패턴 검열 누락.
+
+### 19.2 경계 계약 요약 (Typed Contracts & Concrete Numbers)
+- **TUI 렌더링 상한**: `MAX_LOG_LINES = 5000` (FIFO). Window size = `terminal_height - 4`.
+- **에러 규격 (`SmlError`)**:
+  ```rust
+  pub enum SmlError {
+      // ... 기존 에러 ...
+      InfraError(String),
+      IoError(std::io::Error),
+  }
+  impl From<std::io::Error> for SmlError { ... }
+  ```
+- **위저드 포커스 계약 (`WizardField`)**:
+  ```rust
+  pub enum WizardField { ApiKey, Provider, Model, SaveButton }
+  ```
+- **세션 로거 계약 (`SessionLogger`)**: `BufWriter<std::fs::File>` 필드를 소유하며 `Drop`에서 `flush()` 수행.
+- **상태바 갱신 주기**: 기존 대비 틱(tick) 레이트 `100ms`로 강제 동기화.
+
+### 19.3 구현 및 검증 경로 (Execution & Verification Path)
+- [ ] **Phase 1: Core Error & Config** (에러 통합 및 리소스 누수 방지)
+  - `src/domain/error.rs` 리팩토링 및 `infra` 반환형 강제 변환. `SessionLogger` `BufWriter` 적용.
+  - *검증*: 손상된 설정 파일 로드시 `SmlError::IoError`가 UI에 정상 전파되는지 확인. 도구 100회 실행 후 `lsof -p <PID>`로 파일 핸들 누수 확인.
+- [x] **Phase 2: Logic & Security** (보안 강화 및 위저드 무결성)
+  - `setting_wizard.rs` 필수값 검증 및 에러 시 현재 탭 유지. `glob` 기반 `is_dangerous()` 권한 검증 도입.
+  - *검증*: `smlcli exec "rm -rf .git/*"` 실행 시 권한 거부 출력 확인.
+- [x] **Phase 3: Runtime & Concurrency** (도구 무상태화 및 데드락 해소)
+  - `ToolRuntime::execute()` 반환형 변경 및 상태 직접 변경 제거. `tokio_util::sync::CancellationToken` 도입.
+  - `execute_tool` 시그니처에서 `App` 상태 참조를 제거하고 순수 비동기 이벤트 래핑 방식으로 분리하여 데드락 해소 완료.
+- [x] **Phase 4: TUI & UX** (로그 렌더링 최적화 및 상호작용 개선)
+  - `inspector_tabs.rs`에 윈도우 기반 렌더링 도입. 위저드 `[ApiKey, Provider, Model, SaveButton]` 포커스 강제.
+  - Inspector 탭(Logs 등) 렌더링 시 버퍼의 전체를 포매팅하지 않고 `inspector_scroll` 기반으로 `area.height`만큼 슬라이스하여 처리함. (20,000줄 출력 프레임 드랍 완벽 해결)
+  - Inspector의 다른 탭들에서 발생하던 스크롤 방향 역전 문제(Up 방향키 입력 시 스크롤이 내려가는 증상)를 `top_offset` 변환으로 수정.
+  - 위저드 탭(Tab) 키 및 Shift+Tab 키 이벤트를 통한 `Provider <-> ApiKey <-> Model <-> Saving` 간 포커스 순환을 구현하여 단축 이동 편의성 제공.
+  - *검증*: 20,000줄 출력 시 스크롤이 프레임 드랍 없이 부드럽게 동작하는지 확인. 위저드 내 탭 순환 확인.
+
+- [x] **Phase 5: 2차 정밀 감사 및 잔여 결함 수정** (안정성 총점검)
+  - **[Concurrency]**: `tokio::process::Command`에 `kill_on_drop(true)`를 설정하고, `execute_shell_streaming` 내 `select!` 블록에서 `cancel_token.cancelled()` 감지 시 `child.kill().await`를 명시적으로 호출하여 좀비 프로세스 발생 원천 차단.
+  - **[State]**: `WizardController` 내 인증/검증 실패 시 `err_msg` 갱신과 함께 `api_key_input.clear()`를 수행하여 입력 버퍼 잔류를 초기화. 첫 문자 입력 또는 백스페이스 입력 시 에러 메시지 자동 초기화 로직 보완.
+  - **[Performance]**: `InspectorTabs` 윈도우 기반 렌더링에서 `start_idx` 계산 시 `clamp(0, total_lines.saturating_sub(display_height))` 및 `total_lines == 0` 가드 조건을 도입하여 Out of Bounds Panic 방지. 수학적으로 정확한 bottom-up 스크롤 오프셋 변환 완수.
+  - **[Security]**: `PermissionEngine::is_dangerous`에서 `regex` 모듈을 통한 `[;&|>]` 쉘 인젝션 체이닝 탐지 기능 도입. `ExecShell` 도구에 명시적 바이너리 화이트리스트(`git`, `ls`, `grep` 등)를 적용하여 미인가 바이너리 실행 시 무조건 사용자 승인(Ask) 강제.
+  - **[Memory]**: `SessionLogger` 동기 `append_message` 및 비동기 `append_message_async` 내부에 `writer.flush()` 명시적 호출 추가. 비정상 패닉 종료 시점에도 파일 유실이 없도록 OS 수준의 Page Cache 저장 강제.
+  - *검증*: 전 단위 테스트(`cargo test`) 66개 통과 완료. Clippy 단일 경고 없는 완벽 준수 검증.
+
+---
+
+## Phase 20: v1.2.0-rc.1 Final Polish (심층 결함 수정)
+**목표(Scope):** 실제 운영 환경에서 발생할 수 있는 보안 취약점(고도화 인젝션), TUI UX 결함(스크롤 점핑), 로직 결함(동적 설정 갱신 누락) 및 성능 저하(파이프 블로킹) 이슈를 최종 해결합니다. (Completed)
+
+### 20.1 구현 및 검증 경로 (Execution Path)
+- [x] **Phase 1: Logic & Performance** (프로바이더 핫리로딩 및 로그 쓰로틀링)
+  - `src/providers/registry.rs` 및 `chat_runtime.rs`에 `OnceLock<RwLock>` 도입하여 `reload_providers` 구현.
+  - `src/tools/shell.rs`에 `yield_now().await` 및 1MB 라인 커팅 가드 적용.
+- [x] **Phase 2: Security** (명령어 치환 차단 및 파일 권한)
+  - `src/domain/permissions.rs`에 `$()`, `  `, `\n` 정규식 추가. `sudo`, `rm` 명령어 사용 시 `/etc`, `/var` 경로 접근 차단하는 PathGuard 추가.
+  - `src/infra/secret_store.rs` 및 `config_store.rs` 설정 저장 시 UNIX `chmod 600` (OpenOptionsExt) 원자적 적용.
+- [x] **Phase 3: UX** (스크롤 점핑 방지)
+  - `logs_buffer` 가지치기(pruning) 시, 삭제된 줄 수 N만큼 `state.ui.inspector_scroll` 값을 동기화하여 Sticky Scroll 방식을 구현.
+
+---
+
+## Phase 21: v1.3.0 Final Industrial Polish (완성도 향상 및 엣지 케이스 수정)
+**목표(Scope):** 도구 출력의 ANSI 이스케이프 코드 처리, 비정상 종료 시 터미널 복구 보장, 동기 I/O의 완벽한 비동기 전환, 채팅 컨텍스트의 메모리 상한 관리, 그리고 API Key 입력 마스킹 등 UX와 시스템 안정성을 상용(Industrial) 수준으로 끌어올립니다.
+
+### 21.1 구현 및 검증 경로 (Execution Path)
+- [x] **Phase 1: Stability** (터미널 복구 및 비동기 I/O 리팩토링)
+  - `src/main.rs` 및 `src/tui/terminal.rs`에 Panic Hook 및 RAII 기반의 터미널 상태 자동 복구(Raw 모드 해제) 로직 구현.
+  - `src/domain/repo_map.rs` 등의 모든 동기 파일 I/O를 `tokio::fs` 기반으로 전환하여 비동기 블로킹 최소화.
+- [x] **Phase 2: UX & Security** (API Key 마스킹 및 ANSI 코드 처리)
+  - `src/tui/widgets/setting_wizard.rs` 내 API Key 입력 시 화면에 `*`로 마스킹되어 표시되도록 컴포넌트 수정.
+  - `src/tui/widgets/inspector_tabs.rs`에 정규식 또는 ANSI 파싱 라이브러리를 도입하여, 도구 출력의 ANSI 코드를 렌더링 가능한 Span 구조로 치환하거나 필터링.
+- [x] **Phase 3: Optimization** (컨텍스트 윈도잉 및 메모리 관리)
+  - `src/domain/session.rs` 및 `src/app/state.rs`에 채팅 기록 무한 증식을 방지하기 위한 최대 컨텍스트 길이/메시지 수 기반의 Sliding Window 및 자동 요약(Summarize) 구조 도입.

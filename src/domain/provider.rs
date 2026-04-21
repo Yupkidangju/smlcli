@@ -2,6 +2,10 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum ProviderKind {
+    OpenAI,
+    Anthropic,
+    #[serde(rename = "xAI")]
+    Xai,
     OpenRouter,
     Google,
 }

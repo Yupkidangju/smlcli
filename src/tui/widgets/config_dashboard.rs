@@ -64,11 +64,18 @@ pub fn draw_config(f: &mut Frame, state: &AppState) {
                 .as_ref()
                 .map(|st| format!("{:?}", st.shell_policy))
                 .unwrap_or("None".to_string());
+            let network_policy = state
+                .domain
+                .settings
+                .as_ref()
+                .map(|st| format!("{:?}", st.network_policy))
+                .unwrap_or("None".to_string());
 
             let items = [
                 format!("Provider: {}", provider),
                 format!("Model: {}", model),
                 format!("Shell Policy: {}", shell_policy),
+                format!("Network Policy: {}", network_policy),
             ];
 
             for (i, item) in items.iter().enumerate() {
@@ -89,7 +96,7 @@ pub fn draw_config(f: &mut Frame, state: &AppState) {
         }
         ConfigPopup::ProviderList => {
             let mut s = "Select Provider\n\n".to_string();
-            let items = ["OpenRouter", "Google (Gemini)"];
+            let items = ["OpenAI", "Anthropic", "xAI", "OpenRouter", "Google (Gemini)"];
             for (i, item) in items.iter().enumerate() {
                 if i == state.ui.config.cursor_index {
                     s.push_str(&format!(" > {}\n", item));

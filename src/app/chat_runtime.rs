@@ -18,7 +18,8 @@ impl App {
     ) -> crate::providers::types::ChatRequest {
         let dialect = match provider_kind {
             crate::domain::provider::ProviderKind::Google => crate::domain::provider::ToolDialect::Gemini,
-            crate::domain::provider::ProviderKind::OpenRouter => crate::domain::provider::ToolDialect::OpenAICompat,
+            crate::domain::provider::ProviderKind::Anthropic => crate::domain::provider::ToolDialect::Anthropic,
+            _ => crate::domain::provider::ToolDialect::OpenAICompat,
         };
         let schemas = crate::tools::registry::GLOBAL_REGISTRY.all_schemas(&dialect);
         let messages = self.build_messages_with_repo_map(messages);
@@ -90,6 +91,9 @@ impl App {
         }
 
         let provider = match settings.default_provider.as_str() {
+            "OpenAI" => crate::domain::provider::ProviderKind::OpenAI,
+            "Anthropic" => crate::domain::provider::ProviderKind::Anthropic,
+            "xAI" => crate::domain::provider::ProviderKind::Xai,
             "Google" => crate::domain::provider::ProviderKind::Google,
             _ => crate::domain::provider::ProviderKind::OpenRouter,
         };
@@ -138,6 +142,9 @@ impl App {
         }
 
         let provider = match provider_str {
+            "OpenAI" => crate::domain::provider::ProviderKind::OpenAI,
+            "Anthropic" => crate::domain::provider::ProviderKind::Anthropic,
+            "xAI" => crate::domain::provider::ProviderKind::Xai,
             "Google" => crate::domain::provider::ProviderKind::Google,
             _ => crate::domain::provider::ProviderKind::OpenRouter,
         };
@@ -166,70 +173,78 @@ impl App {
         Ok((provider, api_key_str))
     }
 
-    /// 사용자 자연어 입력을 처리하여 LLM Provider에 채팅 요청을 전송.
+    /// 사용자 자연어 입력을 처리하여 비동기로 파일 멘션을 파싱한 뒤 LLM Provider에 전송.
     pub(crate) fn dispatch_chat_request(&mut self, text: String) {
-        // @ 파일 참조 및 특수 멘션 처리
-        let mut final_text = text.clone();
-        if text.contains('@') {
-            let parts: Vec<&str> = text.split_whitespace().collect();
-            for word in parts {
-                if word.starts_with('@') && word.len() > 1 {
-                    let path = &word[1..];
-                    if path == "workspace" {
-                        if let Ok(entries) = std::fs::read_dir(".") {
-                            let mut dirs = vec![];
-                            for e in entries.flatten() {
-                                dirs.push(e.file_name().to_string_lossy().into_owned());
-                            }
-                            let summary = dirs.join("\n");
-                            final_text = final_text.replace(
-                                word,
-                                &format!(
-                                    "\n--- Workspace Summary ---\n{}\n-------------------------\n",
-                                    summary
-                                ),
-                            );
-                        }
-                    } else if path == "terminal" {
-                        let logs = self
-                            .state
-                            .runtime
-                            .logs_buffer
-                            .iter()
-                            .rev()
-                            .take(20)
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .into_iter()
-                            .rev()
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        final_text = final_text.replace(word, &format!("\n--- Recent Terminal Logs ---\n{}\n----------------------------\n", logs));
-                    } else {
-                        match std::fs::read_to_string(path) {
-                            Ok(content) => {
+        let tx = self.action_tx.clone();
+        
+        let mut logs = String::new();
+        if text.contains("@terminal") {
+            logs = self
+                .state
+                .runtime
+                .logs_buffer
+                .iter()
+                .rev()
+                .take(20)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+
+        tokio::spawn(async move {
+            let mut final_text = text.clone();
+            if text.contains('@') {
+                let parts: Vec<&str> = text.split_whitespace().collect();
+                for word in parts {
+                    if word.starts_with('@') && word.len() > 1 {
+                        let path = &word[1..];
+                        if path == "workspace" {
+                            if let Ok(mut entries) = tokio::fs::read_dir(".").await {
+                                let mut dirs = vec![];
+                                while let Ok(Some(e)) = entries.next_entry().await {
+                                    dirs.push(e.file_name().to_string_lossy().into_owned());
+                                }
+                                let summary = dirs.join("\n");
                                 final_text = final_text.replace(
                                     word,
                                     &format!(
-                                        "\n--- {} ---\n{}\n--- End of {} ---\n",
-                                        path, content, path
+                                        "\n--- Workspace Summary ---\n{}\n-------------------------\n",
+                                        summary
                                     ),
                                 );
                             }
-                            Err(e) => {
-                                self.state
-                                    .ui
-                                    .timeline
-                                    .push(crate::app::state::TimelineBlock::new(
-                                        crate::app::state::TimelineBlockKind::Notice,
+                        } else if path == "terminal" {
+                            final_text = final_text.replace(word, &format!("\n--- Recent Terminal Logs ---\n{}\n----------------------------\n", logs));
+                        } else {
+                            match tokio::fs::read_to_string(path).await {
+                                Ok(content) => {
+                                    final_text = final_text.replace(
+                                        word,
+                                        &format!(
+                                            "\n--- {} ---\n{}\n--- End of {} ---\n",
+                                            path, content, path
+                                        ),
+                                    );
+                                }
+                                Err(e) => {
+                                    let _ = tx.send(crate::app::event_loop::Event::Action(crate::app::action::Action::AddTimelineNotice(
                                         format!("⚠ 파일 멘션 오류 ({}): {}", path, e),
-                                    ));
+                                    ))).await;
+                                }
                             }
                         }
                     }
                 }
             }
-        }
+            let _ = tx.send(crate::app::event_loop::Event::Action(crate::app::action::Action::SubmitChatRequest(final_text))).await;
+        });
+    }
+
+    /// 파싱이 완료된 최종 텍스트를 세션에 추가하고 LLM 요청을 전송.
+    pub(crate) fn submit_chat_request(&mut self, final_text: String) {
 
         // 사용자 메시지를 세션에 추가
         let msg = crate::providers::types::ChatMessage {

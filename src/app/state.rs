@@ -449,6 +449,7 @@ pub struct RuntimeState {
     pub auto_verify: AutoVerifyState,
     pub workspace: RuntimeWorkspaceState,
     pub active_chat_block_idx: Option<usize>,
+    pub active_tool_cancel_token: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl RuntimeState {
@@ -462,6 +463,7 @@ impl RuntimeState {
             auto_verify: AutoVerifyState::Idle,
             workspace: RuntimeWorkspaceState::new(),
             active_chat_block_idx: None,
+            active_tool_cancel_token: None,
         }
     }
 }

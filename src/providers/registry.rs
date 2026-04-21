@@ -34,27 +34,35 @@ pub trait ProviderAdapter: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, ProviderError>> + Send + 'a>>;
 }
 
-pub struct OpenRouterAdapter {
+pub struct OpenAICompatAdapter {
     client: Client,
+    base_url: String,
 }
 
-impl OpenRouterAdapter {
-    pub fn new() -> Self {
+impl OpenAICompatAdapter {
+    pub fn new(base_url: String) -> Self {
         Self {
             client: Client::new(),
+            base_url,
         }
     }
 }
 
-impl ProviderAdapter for OpenRouterAdapter {
+impl ProviderAdapter for OpenAICompatAdapter {
     fn validate_credentials<'a>(
         &'a self,
         api_key: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>> {
         Box::pin(async move {
+            let url = if self.base_url.contains("openrouter.ai") {
+                "https://openrouter.ai/api/v1/auth/key".to_string()
+            } else {
+                format!("{}/models", self.base_url)
+            };
+
             let response = self
                 .client
-                .get("https://openrouter.ai/api/v1/auth/key")
+                .get(&url)
                 .header("Authorization", format!("Bearer {}", api_key))
                 .send()
                 .await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
@@ -62,7 +70,7 @@ impl ProviderAdapter for OpenRouterAdapter {
             if response.status().is_success() {
                 Ok(())
             } else {
-                Err(ProviderError::AuthenticationFailed("Invalid OpenRouter API Key".into()))
+                Err(ProviderError::AuthenticationFailed("Invalid API Key".into()))
             }
         })
     }
@@ -92,7 +100,7 @@ impl ProviderAdapter for OpenRouterAdapter {
 
             let response = self
                 .client
-                .post("https://openrouter.ai/api/v1/chat/completions")
+                .post(format!("{}/chat/completions", self.base_url))
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
                 .send()
@@ -101,7 +109,7 @@ impl ProviderAdapter for OpenRouterAdapter {
             if !response.status().is_success() {
                 let code = response.status().as_u16();
                 let err_text = response.text().await.unwrap_or_default();
-                return Err(ProviderError::ApiResponse { code, message: format!("OpenRouter Error: {}", err_text) });
+                return Err(ProviderError::ApiResponse { code, message: format!("API Error: {}", err_text) });
             }
 
             #[derive(serde::Deserialize)]
@@ -170,7 +178,7 @@ impl ProviderAdapter for OpenRouterAdapter {
 
             let response = self
                 .client
-                .post("https://openrouter.ai/api/v1/chat/completions")
+                .post(format!("{}/chat/completions", self.base_url))
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
                 .send()
@@ -179,7 +187,7 @@ impl ProviderAdapter for OpenRouterAdapter {
             if !response.status().is_success() {
                 let code = response.status().as_u16();
                 let err_text = response.text().await.unwrap_or_default();
-                return Err(ProviderError::ApiResponse { code, message: format!("OpenRouter Stream Error: {}", err_text) });
+                return Err(ProviderError::ApiResponse { code, message: format!("Stream API Error: {}", err_text) });
             }
 
             // SSE 라인 단위 파싱
@@ -271,12 +279,12 @@ impl ProviderAdapter for OpenRouterAdapter {
         Box::pin(async move {
             let response = self
                 .client
-                .get("https://openrouter.ai/api/v1/models")
+                .get(format!("{}/models", self.base_url))
                 .header("Authorization", format!("Bearer {}", api_key))
                 .send()
                 .await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
             if !response.status().is_success() {
-                return Err(ProviderError::NetworkFailure("Failed to fetch OpenRouter models".into()));
+                return Err(ProviderError::NetworkFailure("Failed to fetch models".into()));
             }
             #[derive(serde::Deserialize)]
             struct ModelObj {
@@ -517,9 +525,50 @@ impl ProviderAdapter for GeminiAdapter {
     }
 }
 
-pub fn get_adapter(kind: &ProviderKind) -> Box<dyn ProviderAdapter> {
-    match kind {
-        ProviderKind::OpenRouter => Box::new(OpenRouterAdapter::new()),
-        ProviderKind::Google => Box::new(GeminiAdapter::new()),
+use std::sync::Arc;
+use std::sync::RwLock;
+use std::sync::OnceLock;
+
+pub struct ProviderRegistry {
+    openai: Arc<OpenAICompatAdapter>,
+    xai: Arc<OpenAICompatAdapter>,
+    openrouter: Arc<OpenAICompatAdapter>,
+    anthropic: Arc<crate::providers::anthropic::AnthropicAdapter>,
+    google: Arc<GeminiAdapter>,
+}
+
+impl ProviderRegistry {
+    pub fn new() -> Self {
+        Self {
+            openai: Arc::new(OpenAICompatAdapter::new("https://api.openai.com/v1".to_string())),
+            xai: Arc::new(OpenAICompatAdapter::new("https://api.x.ai/v1".to_string())),
+            openrouter: Arc::new(OpenAICompatAdapter::new("https://openrouter.ai/api/v1".to_string())),
+            anthropic: Arc::new(crate::providers::anthropic::AnthropicAdapter::new("https://api.anthropic.com/v1".to_string())),
+            google: Arc::new(GeminiAdapter::new()),
+        }
     }
+
+    pub fn get_adapter(&self, kind: &ProviderKind) -> Arc<dyn ProviderAdapter> {
+        match kind {
+            ProviderKind::OpenAI => self.openai.clone(),
+            ProviderKind::Xai => self.xai.clone(),
+            ProviderKind::OpenRouter => self.openrouter.clone(),
+            ProviderKind::Anthropic => self.anthropic.clone(),
+            ProviderKind::Google => self.google.clone(),
+        }
+    }
+}
+
+static GLOBAL_PROVIDER_REGISTRY: OnceLock<RwLock<ProviderRegistry>> = OnceLock::new();
+
+fn get_registry() -> &'static RwLock<ProviderRegistry> {
+    GLOBAL_PROVIDER_REGISTRY.get_or_init(|| RwLock::new(ProviderRegistry::new()))
+}
+
+pub fn get_adapter(kind: &ProviderKind) -> Arc<dyn ProviderAdapter> {
+    get_registry().read().unwrap().get_adapter(kind)
+}
+
+pub fn reload_providers() {
+    *get_registry().write().unwrap() = ProviderRegistry::new();
 }

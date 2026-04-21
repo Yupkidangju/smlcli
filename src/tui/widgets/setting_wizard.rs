@@ -18,7 +18,7 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
     let content = match state.ui.wizard.step {
         WizardStep::ProviderSelection => {
             let mut list = "[Step 1] Select Provider\n\n".to_string();
-            let providers = ["OpenRouter", "Google (Gemini)"];
+            let providers = ["OpenAI", "Anthropic", "xAI", "OpenRouter", "Google (Gemini)"];
             for (i, prov) in providers.iter().enumerate() {
                 if i == state.ui.wizard.cursor_index {
                     list.push_str(&format!(" > {}\n", prov));
@@ -35,7 +35,9 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
             list
         }
         WizardStep::ApiKeyInput => {
-            let masked = "*".repeat(state.ui.wizard.api_key_input.len());
+            let masked = crate::tui::widgets::input_field::InputField::new(&state.ui.wizard.api_key_input)
+                .with_password(true)
+                .render();
             if state.ui.wizard.is_loading_models {
                 format!(
                     "[Step 2] Validating API Key...\n\

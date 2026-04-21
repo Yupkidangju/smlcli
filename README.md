@@ -13,7 +13,7 @@
 
 ### 주요 기능
 - **터미널 중심 TUI**: 마우스 없이 모든 동작을 3단계 이내에 키보드로 처리.
-- **다중 공급자 지원**: OpenRouter, Google (Gemini) 지원 (추후 확장 가능).
+- **다중 공급자 지원**: OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini) 지원.
 - **강력한 보안 및 검증**: 파일 쓰기, 쉘 실행 검사, API 키의 로컬 파일 기반 암호화 보관 (`~/.smlcli/config.toml`, ChaCha20Poly1305). Linux에서는 `bwrap` 기반 실제 셸 샌드박스를 사용.
 - **Inspect 패널과 Diff 플로우**: 작업 승인 전에 변경될 항목 가시성 확보.
 - **지능형 컨텍스트 압축**: 장기 세션 보호를 위한 백그라운드 LLM 요약기 및 토큰 한도 제어(`/tokens`).
@@ -22,7 +22,7 @@
 - **Inspector Search 탭**: 타임라인 전체를 대소문자 무시로 실시간 검색 (최대 50건 표시).
 - **SSE 스트리밍**: AI 응답을 토큰 단위로 실시간 표시 (OpenRouter/Gemini 대응).
 - **JSONL 세션 로그**: 대화 내용을 `~/.smlcli/sessions/`에 자동 기록하여 세션 복원 지원.
-- **에이전트 자율성 (Agentic Autonomy)**: 파괴적인 동작 전후 Git 자동 체크포인트와 자가 복구 루프(Self-healing)를 통해 안전한 AI 코드 작성을 보장.
+- **에이전트 자율성 (Agentic Autonomy)**: 파괴적인 동작 전후 Git 자동 체크포인트와 자가 복구 루프(Self-healing)를 통해 안전한 AI 코드 작성을 보장. `ListDir`, `GrepSearch`, `FetchURL` 등 고급 탐색 도구를 기본 제공.
 - **Tree-sitter Repo Map**: AST 파싱 기반 저장소 요약 맵을 통해 AI가 전체 프로젝트 구조를 맥락으로 주입받아 정확한 코드를 수정.
 - **플랫폼 지원**: Linux (bash/zsh) 및 Windows (PowerShell/WSL) 동시 지원.
 
@@ -52,7 +52,7 @@
 
 ### Key Features
 - **Keyboard-first TUI**: Reach any primary action within 3 steps without a mouse.
-- **Multi-provider**: Supports OpenRouter and Google (Gemini) initially.
+- **Multi-provider**: Supports OpenAI, Anthropic, xAI, OpenRouter, and Google (Gemini).
 - **Security-focused**: Local file-based encrypted storage for API keys (~/.smlcli/config.toml), explicit approval flows for file writing and shell execution, and a real `bwrap`-backed shell sandbox on Linux.
 - **Inspector & Diff Previews**: High visibility of what is changing before you approve it.
 - **Intelligent Compaction**: LLM-based background summarization and `/tokens` budgeting to protect long sessions.
@@ -61,7 +61,7 @@
 - **Inspector Search Tab**: Real-time, case-insensitive full-text search across your entire timeline (up to 50 results).
 - **SSE Streaming**: Token-by-token real-time display of AI responses (OpenRouter/Gemini).
 - **JSONL Session Logs**: Automatic conversation recording in `~/.smlcli/sessions/` with session restore support.
-- **Agentic Autonomy**: Guarantees safe AI code generation via automated Git checkpoints and self-healing loops before/after destructive actions.
+- **Agentic Autonomy**: Guarantees safe AI code generation via automated Git checkpoints and self-healing loops before/after destructive actions. Includes advanced tools like `ListDir`, `GrepSearch`, and `FetchURL`.
 - **Tree-sitter Repo Map**: Injects AST-parsed repository summary maps into the AI context for accurate code modifications.
 - **Cross-platform**: Full support for Linux and Windows.
 
@@ -87,7 +87,7 @@
 
 ### 主な機能
 - **ターミナルファースト TUI**: 全ての操作をキーボードだけで迅速に行えます。
-- **マルチプロバイダー対応**: OpenRouter, Google (Gemini) 等をサポート。
+- **マルチプロバイダー対応**: OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini) をサポート。
 - **堅牢なセキュリティ**: APIキーのローカル暗号化ファイル保存 (~/.smlcli/config.toml)、安全なコマンド実行ポリシー設定、Linuxでの `bwrap` 実サンドボックス実行。
 - **インテリジェント コンテキスト圧縮**: 長期セッション保護のためのバックグラウンド LLM 要約と `/tokens` トークン監視。
 - **@ ローカルデータ参照**: `@` ファジー検索から該当ファイルのコンテンツをAIに自動挿入。
@@ -95,7 +95,7 @@
 - **Inspector 検索タブ**: タイムライン全体をリアルタイムで全文検索（最大50件表示）。
 - **SSE ストリーミング**: AIの回答をトークン単位でリアルタイム表示。
 - **JSONL セッションログ**: 会話を自動記録し、セッション復元をサポート。
-- **エージェント自律性 (Agentic Autonomy)**: 破壊的な操作の前後で自動化されたGitチェックポイントと自己修復ループにより、安全なAIコード生成を保証します。
+- **エージェント自律性 (Agentic Autonomy)**: 破壊的な操作の前後で自動化されたGitチェックポイントと自己修復ループにより、安全なAIコード生成を保証します。`ListDir`, `GrepSearch`, `FetchURL` などの高度なツールを内蔵。
 - **Tree-sitter Repo Map**: AST解析ベースのリポジトリ概要マップをAIコンテキストに注入し、正確なコード修正を実現します。
 
 ### クイックスタート
@@ -120,7 +120,7 @@
 
 ### 核心功能
 - **全鍵盤 TUI**: 告別滑鼠，快速進行所有主要指令操作。
-- **多平台模型**: 支援 OpenRouter, Google (Gemini) 等平台。
+- **多平台模型**: 支援 OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini) 等平台。
 - **高規格安全**: 使用本地檔案加密 (~/.smlcli/config.toml) 保護 API 密鑰。提供完整變更預覽與權限驗證流程，並在 Linux 使用 `bwrap` 實體 Shell 沙箱。
 - **智能上下文壓縮**: 透過後台 LLM 摘要保護長對話串並支持動態代幣(Token)管理。
 - **@ 檔案快速參照**: 輸入 `@` 即可使用 Fuzzy Finder 將本地檔案匯入 AI 記憶。
@@ -128,7 +128,7 @@
 - **Inspector 搜索分頁**: 即時全文搜索整個時間線（最多顯示50筆結果）。
 - **SSE 串流**: 逐字符即時顯示 AI 回應。
 - **JSONL 對話記錄**: 自動記錄對話內容並支援工作階段還原。
-- **代理自主性 (Agentic Autonomy)**: 透過破壞性操作前後的自動 Git 檢查點與自我修復循環，確保 AI 程式碼生成的安全性。
+- **代理自主性 (Agentic Autonomy)**: 透過破壞性操作前後的自動 Git 檢查點與自我修復循環，確保 AI 程式碼生成的安全性。內建 `ListDir`, `GrepSearch`, `FetchURL` 等進階工具。
 - **Tree-sitter Repo Map**: 將基於 AST 解析的儲存庫摘要地圖注入 AI 上下文中，實現精確的程式碼修改。
 
 ### 快速開始
@@ -153,7 +153,7 @@
 
 ### 核心功能
 - **纯键盘 TUI**: 所有核心操作可通过键盘在3步内完成。
-- **多供应商支持**: 兼容 OpenRouter, Google (Gemini)（后续可扩展）。
+- **多供应商支持**: 兼容 OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini)。
 - **安全性优先**: 在执行写入和 Shell 执行前自动生成 Diff，并要求显式权限授权；密钥存入本地加密文件 (~/.smlcli/config.toml)。Linux 下使用 `bwrap` 提供真实 Shell 沙箱。
 - **智能上下文压缩**: 通过后台 LLM 摘要引擎保护长期会话防止记忆丢失，包含动态 Token 管理。
 - **@ 文件快速查询**: 输入 `@` 自动使用 Fuzzy Finder 将本地文件数据嵌入 AI 记忆上下文。
@@ -161,7 +161,7 @@
 - **Inspector 搜索选项卡**: 实时全文搜索整个时间线（最多显示50条结果）。
 - **SSE 流式传输**: 逐令牌实时显示 AI 回复。
 - **JSONL 会话日志**: 自动记录对话内容并支持会话恢复。
-- **代理自主性 (Agentic Autonomy)**: 通过破坏性操作前后的自动 Git 检查点与自我修复循环，确保 AI 代码生成的安全性。
+- **代理自主性 (Agentic Autonomy)**: 通过破坏性操作前后的自动 Git 检查点与自我修复循环，确保 AI 代码生成的安全性。内置 `ListDir`, `GrepSearch`, `FetchURL` 等高级探索工具。
 - **Tree-sitter Repo Map**: 将基于 AST 解析的仓库摘要地图注入 AI 上下文中，实现精确的代码修改。
 
 ### 快速开始

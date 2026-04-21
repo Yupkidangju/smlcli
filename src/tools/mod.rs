@@ -1,4 +1,5 @@
 pub mod executor;
+pub mod fetch;
 pub mod file_ops;
 pub mod git_checkpoint;
 pub mod grep;

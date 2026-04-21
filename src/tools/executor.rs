@@ -1,8 +1,13 @@
 use crate::domain::permissions::PermissionToken;
 use crate::domain::tool_result::{ToolCall, ToolResult};
 use anyhow::Result;
+use tokio_util::sync::CancellationToken;
 
-pub async fn execute_tool(call: ToolCall, token: &PermissionToken) -> Result<ToolResult> {
+pub async fn execute_tool(
+    call: ToolCall,
+    token: &PermissionToken,
+    cancel_token: CancellationToken,
+) -> Result<ToolResult> {
     if let Some(tool) = crate::tools::registry::GLOBAL_REGISTRY.get_tool(&call.name) {
         let is_dest = tool.is_destructive(&call.args);
         let cwd = std::env::current_dir()
@@ -15,11 +20,19 @@ pub async fn execute_tool(call: ToolCall, token: &PermissionToken) -> Result<Too
                 crate::tools::git_checkpoint::create_checkpoint(&cwd, tool.name()).unwrap_or(false);
         }
 
-        let ctx = crate::tools::registry::ToolContext { token };
-        let mut result = tool
-            .execute(call.args, &ctx)
-            .await
-            .map_err(|e| anyhow::anyhow!("{:?}", e));
+        let ctx = crate::tools::registry::ToolContext { 
+            token,
+            cancel_token: cancel_token.clone()
+        };
+        
+        let exec_future = tool.execute(call.args, &ctx);
+        
+        let mut result = tokio::select! {
+            res = exec_future => res.map_err(|e| anyhow::anyhow!("{:?}", e)),
+            _ = cancel_token.cancelled() => {
+                Err(anyhow::anyhow!("Tool execution cancelled by user"))
+            }
+        };
 
         if is_dest {
             let should_rollback = match &result {

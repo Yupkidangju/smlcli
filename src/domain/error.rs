@@ -1,7 +1,7 @@
 use thiserror::Error;
 
-#[derive(Error, Debug, Clone)]
-pub enum AppError {
+#[derive(Error, Debug)]
+pub enum SmlError {
     #[error("설정 오류: {0}")]
     Config(#[from] ConfigError),
 
@@ -12,7 +12,10 @@ pub enum AppError {
     Provider(#[from] ProviderError),
 
     #[error("입출력 오류: {0}")]
-    Io(String),
+    IoError(#[from] std::io::Error),
+
+    #[error("인프라 오류: {0}")]
+    InfraError(String),
 
     #[error("알 수 없는 오류: {0}")]
     Unknown(String),

@@ -1436,7 +1436,7 @@ fn test_approval_timeout_expires_pending_request() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_execute_shell_sandbox_blocks_etc_writes() {
-    let res = crate::tools::shell::execute_shell("touch /etc/smlcli_should_fail", Some("."))
+    let res = crate::tools::shell::execute_shell("touch /etc/smlcli_should_fail", Some("."), tokio_util::sync::CancellationToken::new())
         .await
         .expect("샌드박스 실행 자체는 ToolResult를 반환해야 함");
     assert!(res.is_error, "샌드박스 밖 쓰기 시도는 실패해야 함");
@@ -1462,6 +1462,7 @@ async fn test_execute_shell_sandbox_allows_workspace_writes() {
     let res = crate::tools::shell::execute_shell(
         "touch sandbox_ok.txt && echo done",
         Some(dir.to_string_lossy().as_ref()),
+        tokio_util::sync::CancellationToken::new(),
     )
     .await
     .expect("워크스페이스 내부 쓰기는 실행 가능해야 함");
@@ -1787,4 +1788,77 @@ async fn test_block_lifecycle_roles_runtime() {
     let updated_ai_block = &app.state.ui.timeline[1];
     assert_eq!(updated_ai_block.status, BlockStatus::Error);
     assert!(!app.state.runtime.is_thinking);
+}
+
+// --- [v0.1.0-beta.18] Phase 18: Advanced Tools Tests ---
+
+#[tokio::test]
+async fn test_fetch_url_network_policy() {
+    use crate::tools::registry::{Tool, ToolContext};
+    use serde_json::json;
+
+    let tool = crate::tools::fetch::FetchUrlTool;
+    
+    // 1. AllowAll -> PermissionResult::Allow
+    let mut settings = crate::domain::settings::PersistedSettings {
+        network_policy: crate::domain::permissions::NetworkPolicy::AllowAll,
+        ..Default::default()
+    };
+    let res_allow = tool.check_permission(&json!({"url": "http://example.com"}), &settings);
+    assert!(matches!(res_allow, crate::domain::permissions::PermissionResult::Allow));
+
+    // 2. ProviderOnly -> PermissionResult::Ask
+    settings.network_policy = crate::domain::permissions::NetworkPolicy::ProviderOnly;
+    let res_ask = tool.check_permission(&json!({"url": "http://example.com"}), &settings);
+    assert!(matches!(res_ask, crate::domain::permissions::PermissionResult::Ask));
+
+    // 3. Deny -> PermissionResult::Deny
+    settings.network_policy = crate::domain::permissions::NetworkPolicy::Deny;
+    let res_deny = tool.check_permission(&json!({"url": "http://example.com"}), &settings);
+    assert!(matches!(res_deny, crate::domain::permissions::PermissionResult::Deny(_)));
+
+    // 4. Invalid Scheme execution error
+    let token = crate::domain::permissions::PermissionToken::grant();
+    let ctx = ToolContext {
+        token: &token,
+        cancel_token: tokio_util::sync::CancellationToken::new(),
+    };
+    let exec_err = tool.execute(json!({"url": "file:///etc/passwd"}), &ctx).await;
+    assert!(exec_err.is_err(), "Non-http/https URL should fail execution");
+}
+
+#[tokio::test]
+async fn test_grep_search_invalid_regex() {
+    use crate::tools::registry::{Tool, ToolContext};
+    use serde_json::json;
+
+    let tool = crate::tools::grep::GrepSearchTool;
+    let token = crate::domain::permissions::PermissionToken::grant();
+    let ctx = ToolContext {
+        token: &token,
+        cancel_token: tokio_util::sync::CancellationToken::new(),
+    };
+
+    let res = tool.execute(json!({"query": "[invalid regex", "path": ".", "is_regex": true}), &ctx).await;
+    assert!(res.is_err(), "Invalid regex should return a ToolError");
+    let err_str = res.unwrap_err().to_string();
+    assert!(err_str.contains("Invalid regex pattern"), "Error should mention regex pattern issue");
+}
+
+#[tokio::test]
+async fn test_list_dir_missing_path() {
+    use crate::tools::registry::{Tool, ToolContext};
+    use serde_json::json;
+
+    let tool = crate::tools::sys_ops::ListDirTool;
+    let token = crate::domain::permissions::PermissionToken::grant();
+    let ctx = ToolContext {
+        token: &token,
+        cancel_token: tokio_util::sync::CancellationToken::new(),
+    };
+
+    let res = tool.execute(json!({"path": "/this/path/absolutely/does/not/exist/1234"}), &ctx).await;
+    assert!(res.is_err(), "ListDir on a missing root path should return ToolError");
+    let err_str = res.unwrap_err().to_string();
+    assert!(err_str.contains("Cannot read directory or it does not exist"), "Error should clearly state it cannot read directory");
 }

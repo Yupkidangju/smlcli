@@ -10,6 +10,13 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use std::sync::OnceLock;
+use regex::Regex;
+
+fn ansi_regex() -> &'static Regex {
+    static ANSI_RE: OnceLock<Regex> = OnceLock::new();
+    ANSI_RE.get_or_init(|| Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]").unwrap())
+}
 
 pub fn render_preview(f: &mut Frame, state: &AppState, area: Rect) {
     let p = state.palette();
@@ -85,10 +92,16 @@ pub fn render_preview(f: &mut Frame, state: &AppState, area: Rect) {
         lines.push(Line::from(""));
     }
 
+    let top_scroll = if lines.len() > area.height as usize {
+        lines.len().saturating_sub(area.height as usize).saturating_sub(state.ui.inspector_scroll as usize) as u16
+    } else {
+        0
+    };
+
     let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::NONE))
         .wrap(Wrap { trim: false })
-        .scroll((state.ui.inspector_scroll, 0));
+        .scroll((top_scroll, 0));
 
     f.render_widget(para, area);
 }
@@ -112,10 +125,16 @@ pub fn render_diff(f: &mut Frame, state: &AppState, area: Rect) {
             })
             .collect();
 
+        let top_scroll = if lines.len() > area.height as usize {
+            lines.len().saturating_sub(area.height as usize).saturating_sub(state.ui.inspector_scroll as usize) as u16
+        } else {
+            0
+        };
+
         let para = Paragraph::new(lines)
             .block(Block::default().borders(Borders::NONE))
             .wrap(Wrap { trim: false })
-            .scroll((state.ui.inspector_scroll, 0));
+            .scroll((top_scroll, 0));
         f.render_widget(para, area);
     } else {
         let text = "No pending diffs.\n\nDiffs will appear here after file write proposals.";
@@ -133,32 +152,48 @@ pub fn render_logs(f: &mut Frame, state: &AppState, area: Rect) {
     // 모두 Event::Action -> handle_action 경유로 직렬화되어 반영된다.
     // 따라서 렌더링 시점에는 단일 이벤트 루프 소유권 아래 일관된 스냅샷을 읽는다.
 
-    if state.runtime.logs_buffer.is_empty() {
-        log_lines.push(Line::from(Span::styled(
+    let total_lines = state.runtime.logs_buffer.len();
+    if total_lines == 0 {
+        let para = Paragraph::new(vec![Line::from(Span::styled(
             " (No logs recorded in this session) ",
             Style::default().fg(p.muted).add_modifier(Modifier::ITALIC),
-        )));
-    } else {
-        // 성능을 위해 최근 100줄만 표시
-        let start = state.runtime.logs_buffer.len().saturating_sub(100);
-        for (i, log) in state.runtime.logs_buffer[start..].iter().enumerate() {
-            let color = if i % 2 == 0 {
-                p.text_secondary
-            } else {
-                p.text_primary
-            };
-            log_lines.push(Line::from(Span::styled(
-                log.as_str(),
-                Style::default().fg(color),
-            )));
-        }
+        ))])
+        .block(Block::default().borders(Borders::NONE))
+        .wrap(Wrap { trim: false });
+        f.render_widget(para, area);
+        return;
     }
 
-    // [v0.1.0-beta.24] Phase 14-B 감사 보정: inspector_scroll 사용으로 독립 스크롤
+    // [v1.0.0] 윈도우 기반 렌더링 인덱싱 오류 수정 (Panic 방지)
+    let display_height = area.height as usize;
+    let current_scroll = state.ui.inspector_scroll as usize;
+    
+    // 스크롤 상한선 설정
+    let clamped_scroll = current_scroll.clamp(0, total_lines.saturating_sub(display_height));
+    
+    // inspector_scroll은 bottom-up (최신부터) 기준이므로 변환
+    let start_idx = total_lines.saturating_sub(display_height).saturating_sub(clamped_scroll);
+    let end_idx = (start_idx + display_height).min(total_lines);
+
+    for (i, log) in state.runtime.logs_buffer[start_idx..end_idx].iter().enumerate() {
+        let color = if i % 2 == 0 {
+            p.text_secondary
+        } else {
+            p.text_primary
+        };
+        
+        // [v1.3.0] ANSI 코드 제거 (Strip)
+        let clean_log = ansi_regex().replace_all(log.as_str(), "");
+        
+        log_lines.push(Line::from(Span::styled(
+            clean_log.into_owned(),
+            Style::default().fg(color),
+        )));
+    }
+
     let para = Paragraph::new(log_lines)
         .block(Block::default().borders(Borders::NONE))
-        .wrap(Wrap { trim: false })
-        .scroll((state.ui.inspector_scroll, 0));
+        .wrap(Wrap { trim: false });
 
     f.render_widget(para, area);
 }
@@ -268,11 +303,16 @@ pub fn render_search(f: &mut Frame, state: &AppState, area: Rect) {
         Style::default().fg(p.muted).add_modifier(Modifier::ITALIC),
     )));
 
-    // [v0.1.0-beta.24] Phase 14-B 감사 보정: inspector_scroll 사용으로 독립 스크롤
+    let top_scroll = if lines.len() > area.height as usize {
+        lines.len().saturating_sub(area.height as usize).saturating_sub(state.ui.inspector_scroll as usize) as u16
+    } else {
+        0
+    };
+
     let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::NONE))
         .wrap(Wrap { trim: false })
-        .scroll((state.ui.inspector_scroll, 0));
+        .scroll((top_scroll, 0));
     f.render_widget(para, area);
 }
 
@@ -342,10 +382,15 @@ pub fn render_recent(f: &mut Frame, state: &AppState, area: Rect) {
         }
     }
 
-    // [v0.1.0-beta.24] Phase 14-B 감사 보정: inspector_scroll 사용으로 독립 스크롤
+    let top_scroll = if lines.len() > area.height as usize {
+        lines.len().saturating_sub(area.height as usize).saturating_sub(state.ui.inspector_scroll as usize) as u16
+    } else {
+        0
+    };
+
     let para = Paragraph::new(lines)
         .block(Block::default().borders(Borders::NONE))
         .wrap(Wrap { trim: false })
-        .scroll((state.ui.inspector_scroll, 0));
+        .scroll((top_scroll, 0));
     f.render_widget(para, area);
 }

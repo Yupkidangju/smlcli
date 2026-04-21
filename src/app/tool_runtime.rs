@@ -243,8 +243,12 @@ impl App {
         let tx = self.action_tx.clone();
         let token = crate::domain::permissions::PermissionToken::grant();
 
+        // [v1.0.0] Graceful Cancellation 지원을 위한 토큰 생성
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+        self.state.runtime.active_tool_cancel_token = Some(cancel_token.clone());
+
         tokio::spawn(async move {
-            match crate::tools::executor::execute_tool(tool_call, &token).await {
+            match crate::tools::executor::execute_tool(tool_call, &token, cancel_token).await {
                 Ok(mut res) => {
                     res.tool_call_id = tool_call_id;
                     let _ = tx

@@ -8,20 +8,22 @@ use sysinfo::System;
 /// 최대 항목 수 제한으로 대규모 디렉토리 과부하 방지.
 const MAX_ENTRIES: usize = 1000;
 
-pub(crate) fn list_dir(path: &str, depth: Option<usize>) -> Result<ToolResult> {
+pub(crate) fn list_dir(path: &str, depth: Option<usize>) -> anyhow::Result<crate::domain::tool_result::ToolResult> {
     let max_depth = depth.unwrap_or(2);
-    let mut out = String::new();
     let mut count = 0;
 
-    // 루트 경로 헤더
-    out.push_str(&format!("{}/\n", path));
-    list_dir_recursive(path, max_depth, 0, "", &mut out, &mut count);
-
-    if count >= MAX_ENTRIES {
-        out.push_str(&format!("\n... ({}개 항목 제한으로 생략됨)\n", MAX_ENTRIES));
+    if fs::read_dir(path).is_err() {
+        return Err(anyhow::anyhow!("Cannot read directory or it does not exist: {}", path));
     }
 
-    Ok(ToolResult {
+    let json_tree = list_dir_recursive_json(path, max_depth, 0, &mut count);
+
+    let mut out = serde_json::to_string_pretty(&json_tree).unwrap_or_default();
+    if count >= MAX_ENTRIES {
+        out.push_str(&format!("\n... ({}개 항목 제한으로 일부 생략됨)\n", MAX_ENTRIES));
+    }
+
+    Ok(crate::domain::tool_result::ToolResult {
         tool_name: "ListDir".to_string(),
         stdout: out,
         stderr: String::new(),
@@ -31,25 +33,20 @@ pub(crate) fn list_dir(path: &str, depth: Option<usize>) -> Result<ToolResult> {
     })
 }
 
-/// 재귀적으로 디렉토리를 탐색하여 트리 형태로 출력.
-/// prefix: 현재 깊이에 따른 들여쓰기 접두사 (│, ├──, └── 등).
-fn list_dir_recursive(
+fn list_dir_recursive_json(
     path: &str,
     max_depth: usize,
     current_depth: usize,
-    prefix: &str,
-    out: &mut String,
     count: &mut usize,
-) {
+) -> serde_json::Value {
     if current_depth >= max_depth || *count >= MAX_ENTRIES {
-        return;
+        return serde_json::json!({"_truncated": true});
     }
 
     let Ok(entries) = fs::read_dir(path) else {
-        return;
+        return serde_json::json!({"error": format!("Cannot read directory: {}", path)});
     };
 
-    // 정렬: 디렉토리 우선, 이름 순
     let mut items: Vec<_> = entries.flatten().collect();
     items.sort_by(|a, b| {
         let a_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
@@ -59,41 +56,43 @@ fn list_dir_recursive(
             .then_with(|| a.file_name().cmp(&b.file_name()))
     });
 
-    let total = items.len();
-    for (i, entry) in items.into_iter().enumerate() {
+    let mut children = Vec::new();
+
+    for entry in items {
         if *count >= MAX_ENTRIES {
-            return;
+            children.push(serde_json::json!({"_truncated": true}));
+            break;
         }
-        *count += 1;
 
         let name = entry.file_name().to_string_lossy().to_string();
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        let is_last = i == total - 1;
-
-        // 트리 connector: 마지막 항목은 └──, 그 외는 ├──
-        let connector = if is_last { "└── " } else { "├── " };
-        let suffix = if is_dir { "/" } else { "" };
-
-        out.push_str(&format!("{}{}{}{}\n", prefix, connector, name, suffix));
-
-        // 하위 디렉토리 재귀 탐색
-        if is_dir {
-            let child_prefix = if is_last {
-                format!("{}    ", prefix)
-            } else {
-                format!("{}│   ", prefix)
-            };
-            let child_path = format!("{}/{}", path, name);
-            list_dir_recursive(
-                &child_path,
-                max_depth,
-                current_depth + 1,
-                &child_prefix,
-                out,
-                count,
-            );
+        
+        // [v0.1.0-beta.18] Phase 18: 기본 무시 디렉터리 적용
+        if name == "node_modules" || name == "target" || name == ".git" {
+            continue;
         }
+
+        *count += 1;
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+
+        let mut node = serde_json::json!({
+            "name": name,
+            "type": if is_dir { "directory" } else { "file" },
+        });
+
+        if is_dir {
+            let child_path = format!("{}/{}", path, name);
+            let child_tree = list_dir_recursive_json(&child_path, max_depth, current_depth + 1, count);
+            node["children"] = child_tree;
+        } else {
+            if let Ok(meta) = entry.metadata() {
+                node["size"] = serde_json::json!(meta.len());
+            }
+        }
+
+        children.push(node);
     }
+
+    serde_json::Value::Array(children)
 }
 
 pub(crate) fn sys_info() -> Result<ToolResult> {

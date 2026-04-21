@@ -3,11 +3,36 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
-## [Unreleased]
+## [1.2.0-rc.1] - 2026-04-21
+
+### Fixed (Phase 19 & 20 Audit Remediation)
+- **고도화된 쉘 인젝션 차단 (Phase 20)**: `$()`, ``` ` ```, `\n`, `\r` 등 복잡한 쉘 인젝션 체이닝 문법 차단 정규식 보완 및 `sudo`/`rm` 명령 시 `/etc`, `/var` 등 민감 디렉토리 접근을 원천 차단하는 PathGuard 로직 구현.
+- **설정 파일 생성 원자성 보장 (Phase 20)**: API 마스터 키 및 `config.toml` 생성 시 OS 기본 umask가 적용되어 보안 노출되는 현상을 방지하기 위해 UNIX `OpenOptionsExt`를 통한 `chmod 600` 원자적(Atomic) 적용.
+- **프로바이더 동적 갱신 (Phase 20)**: `ProviderRegistry`에 `OnceLock<RwLock>`을 도입하여 설정 마법사나 팝업에서 모델 및 API 키 변경 시 시스템 재시작 없이 즉시 반영(Hot-reload)되도록 구현.
+- **스트리밍 파이프 블로킹 완화 (Phase 20)**: 쉘 대량 출력(수만 줄) 시 이벤트 루프가 멈추는 문제를 해결하기 위해 100줄 단위 `yield_now().await` 적용 및 OOM 방지를 위한 1MB 단위 라인 절단 로직 적용.
+- **로그 가지치기 스크롤 동기화 (Phase 20)**: Inspector Logs 탭에서 10,000줄 초과 로그 Pruning 시 현재 스크롤 위치가 튀는 현상을 막기 위해, 잘려나간 줄 수만큼 `inspector_scroll` 오프셋을 역연산하는 Sticky Scroll 도입.
+- **도구 실행 비동기 무상태화 (Phase 3)**: `ToolRuntime::execute_tool_async`에서 전역 상태를 직접 수정하던 안티패턴을 제거하고, 이벤트를 송신하여 이벤트 루프에서 상태를 갱신하도록 분리.
+- **도구 강제 취소 (Phase 3)**: `tokio_util::sync::CancellationToken`을 도입하여 도구 실행 중 `Ctrl+C` 또는 `ESC` 키 입력 시 즉시 실행을 중단(Graceful Cancellation)하도록 지원.
+- **TUI 로그 렌더링 최적화 (Phase 4)**: 20,000줄 이상의 방대한 로그 렌더링 시 발생하는 프레임 드랍(블로킹) 문제를 해결하기 위해, 전체 포매팅을 피하고 `inspector_scroll` 기반으로 화면에 보이는 높이만큼만 잘라서 렌더링하는 Window-based rendering 적용.
+- **인스펙터 탭 스크롤 역전 현상 수정 (Phase 4)**: 윈도우 기반 렌더링 구현 중 모든 인스펙터 탭의 스크롤 방향이 역전(Up 누르면 내려감)되어 있던 것을 발견하여, bottom-up 오프셋을 top-based 오프셋으로 정상 변환하도록 일괄 수정.
+- **설정 마법사 탭 포커스 순환 지원 (Phase 4)**: `is_wizard_open` 상태에서 `Tab` 및 `Shift+Tab` 입력 시, `Provider` ↔ `ApiKey` ↔ `Model` ↔ `Saving` 순서로 포커스가 순환되도록 구현.
+- **프로세스 좀비화 원천 차단 (Phase 5)**: 쉘 명령어 스트리밍 실행 중 중단 시 `CancellationToken`이 자식 프로세스를 정리하지 못하던 오류를 수정. `Command::kill_on_drop(true)` 옵션을 부여하고 `child.kill().await`를 명시적으로 호출.
+- **마법사 상태 동기화 누수 방지 (Phase 5)**: API Key 검증 실패 등 유효성 오류 발생 시, 입력 버퍼의 잔여 데이터(`api_key_input`)를 `clear()`하고 오류 발생 후 첫 키 입력 시 오류 메시지가 사라지도록 UI/UX 상태 동기화 개선.
+- **Inspector 인덱싱 패닉 방지 (Phase 5)**: 빈 로그(`total_lines == 0`) 렌더링 시의 조기 반환 가드 추가 및, 로그 범위를 넘어서는 스크롤 입력 시 패닉을 방지하기 위해 스크롤 오프셋을 `clamp`로 제한.
+- **쉘 인젝션 체이닝 차단 화이트리스트 도입 (Phase 5)**: `PermissionEngine::is_dangerous`에 정규식 `[;&|>]` 탐지를 추가하고, `ExecShell` 도구에서 `git`, `ls`, `grep` 등 안전한 명령어 외의 모든 실행은 `Ask`(승인 요청)로 강제하는 화이트리스트 병행 구조 도입.
+- **세션 로그 플러시 안전성 확보 (Phase 5)**: 비정상 패닉 시 파일 I/O 데이터가 버퍼에 남아 증발하는 현상을 막기 위해, `SessionLogger`의 `append_message` 및 `append_message_async` 내부에 명시적인 `writer.flush()` 구문 추가.
 
 ### Docs
 - **Phase 15: 2026 CLI UX 현대화 로드맵 문서화**: `spec.md`, `designs.md`, `IMPLEMENTATION_SUMMARY.md`, `DESIGN_DECISIONS.md`, `audit_roadmap.md`에 최신 CLI/TUI UX 패턴을 반영한 리팩토링 및 기능 강화 계획을 추가. 블록 기반 타임라인, 커맨드 팔레트, 입력 툴벨트, 반응형 상태바, 절제된 ASCII 애니메이션, 포커스/스크롤 상태 머신을 구현 전용 스펙으로 동결.
 - **Windows Host Shell / Workspace Trust Gate 구현 계획 문서화**: `spec.md`, `designs.md`, `IMPLEMENTATION_SUMMARY.md`, `DESIGN_DECISIONS.md`에 Host shell vs Exec shell 분리, Windows PowerShell fallback 규칙, Workspace Trust Gate 3상태 모델, 구현 태스크 및 검증 기준을 상세 계획으로 추가.
+
+### Added / Changed / Improved (Phase 18: Multi-Provider & Advanced Tools)
+- **신규 Provider 어댑터**: OpenAI, Anthropic, xAI 모델 지원 추가. 기존 OpenRouter, Gemini와 더불어 `claude-opus-4-6`, `gpt-5.4` 등 2026.04 최신 모델 API 네이티브 지원.
+- **Anthropic 네이티브 메시지 포맷**: `ToolDialect::AnthropicNative` 지원으로 Anthropic Messages API 스펙에 맞춘 Content Block 변환 및 SSE 파싱 구현.
+- **FetchURL 도구**: 임의의 웹 URL 본문을 읽어와 `html2md`로 마크다운 변환. 500KB 메모리 상한 스트리밍 다운로드 구현. `ProviderOnly` 네트워크 정책에서는 SSRF 차단을 위해 실행 거부.
+- **ListDir 도구 JSON 구조화**: 단순 텍스트 트리 대신 `{"name", "type", "size", "children"}`의 계층적 JSON 직렬화 구조 반환. `node_modules`, `target`, `.git` 자동 무시 적용.
+- **GrepSearch 도구 정규식 지원**: `regex` 크레이트를 활용하여 `is_regex` 파라미터가 켜져 있을 시 실제 정규표현식 매칭 수행.
+- **인증 보안 강화**: OpenRouter는 `/auth/key`를 통해, Anthropic 등은 `2xx` 응답을 통해 엄격한 API 인증 검증.
 
 ### Added / Changed / Improved (Phase 16)
 - **Collapsible Diff UI**: 타임라인 내 긴 Diff(추가+삭제 10줄 초과)를 접기/펼치기 할 수 있는 토글 UI 추가.

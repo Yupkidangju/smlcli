@@ -473,7 +473,7 @@ Composer 우측 끝에는 현재 실행 맥락이 보인다.
 - `Safe Starter`
   - shell: Ask
   - write: AlwaysAsk
-  - network: ProviderOnly
+  - network: AllowAll
 
 - `Balanced`
   - shell: SafeOnly

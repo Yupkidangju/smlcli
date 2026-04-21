@@ -4,7 +4,7 @@
 //   anyhow::Result 반환을 유지하되 내부에서 ConfigError를 사용하여
 //   에러 유형을 구조화. 향후 UI에서 에러 종류별 분기 처리 가능.
 
-use crate::domain::error::ConfigError;
+use crate::domain::error::{ConfigError, SmlError};
 use crate::domain::settings::PersistedSettings;
 use std::path::{Path, PathBuf};
 use tokio::fs;
@@ -21,46 +21,49 @@ pub(crate) fn config_path() -> PathBuf {
 }
 
 /// 설정을 TOML 형식으로 디스크에 비동기 저장.
-pub async fn save_config(settings: &PersistedSettings) -> Result<(), ConfigError> {
+pub async fn save_config(settings: &PersistedSettings) -> Result<(), SmlError> {
     // [v0.1.0-beta.26] 메모리 전용 레코드(remember == false) 필터링 후 저장
     let mut clean_settings = settings.clone();
     clean_settings.trusted_workspaces.retain(|r| r.remember);
 
     let toml_str = toml::to_string(&clean_settings)
-        .map_err(|e| ConfigError::ParseFailure(format!("설정 TOML 직렬화 실패: {}", e)))?;
+        .map_err(|e| SmlError::Config(ConfigError::ParseFailure(format!("설정 TOML 직렬화 실패: {}", e))))?;
 
     let config_dir = get_config_dir();
     fs::create_dir_all(&config_dir)
         .await
-        .map_err(|e| ConfigError::ParseFailure(format!("~/.smlcli 디렉토리 생성 실패: {}", e)))?;
+        .map_err(|e| SmlError::Config(ConfigError::ParseFailure(format!("~/.smlcli 디렉토리 생성 실패: {}", e))))?;
 
     let path = config_path();
-    fs::write(&path, toml_str)
-        .await
-        .map_err(|e| ConfigError::ParseFailure(format!("config.toml 저장 실패: {}", e)))?;
 
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&path).await.map_err(|e| ConfigError::ParseFailure(format!("metadata 읽기 실패: {}", e)))?.permissions();
-        perms.set_mode(0o600);
-        fs::set_permissions(&path, perms)
-            .await
-            .map_err(|e| ConfigError::ParseFailure(format!("config.toml 권한 설정 실패: {}", e)))?;
+        options.mode(0o600);
     }
+
+    let mut file = options.open(&path)
+        .await
+        .map_err(|e| SmlError::Config(ConfigError::ParseFailure(format!("config.toml 파일 생성 실패: {}", e))))?;
+
+    use tokio::io::AsyncWriteExt;
+    file.write_all(toml_str.as_bytes())
+        .await
+        .map_err(|e| SmlError::Config(ConfigError::ParseFailure(format!("config.toml 저장 실패: {}", e))))?;
 
     Ok(())
 }
 
 /// 디스크에서 TOML 설정 비동기 로드.
 /// [v0.1.0-beta.20] 내부에서 ConfigError를 사용하여 에러를 구조화.
-pub async fn load_config() -> Result<Option<PersistedSettings>, ConfigError> {
+pub async fn load_config() -> Result<Option<PersistedSettings>, SmlError> {
     load_config_from_path(&config_path()).await
 }
 
 /// [v0.1.0-beta.26] 경로 지정형 설정 로더.
 /// 실제 앱은 기본 config.toml 경로를 사용하고, 테스트는 임시 파일 경로를 직접 주입한다.
-pub(crate) async fn load_config_from_path(path: &Path) -> Result<Option<PersistedSettings>, ConfigError> {
+pub(crate) async fn load_config_from_path(path: &Path) -> Result<Option<PersistedSettings>, SmlError> {
     let path = path.to_path_buf();
 
     if !path.exists() {
@@ -73,15 +76,15 @@ pub(crate) async fn load_config_from_path(path: &Path) -> Result<Option<Persiste
     let content = fs::read_to_string(&path)
         .await
         .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => ConfigError::NotFound,
+            std::io::ErrorKind::NotFound => SmlError::Config(ConfigError::NotFound),
             std::io::ErrorKind::PermissionDenied => {
-                ConfigError::ParseFailure(format!("파일 접근 권한 없음: {}", path.display()))
+                SmlError::Config(ConfigError::ParseFailure(format!("파일 접근 권한 없음: {}", path.display())))
             }
-            _ => ConfigError::ParseFailure(format!("파일 읽기 실패: {}", e)),
+            _ => SmlError::IoError(e),
         })?;
 
     let settings: PersistedSettings = toml::from_str(&content)
-        .map_err(|e| ConfigError::ParseFailure(e.to_string()))?;
+        .map_err(|e| SmlError::Config(ConfigError::ParseFailure(e.to_string())))?;
 
     Ok(Some(settings))
 }

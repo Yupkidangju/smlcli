@@ -246,3 +246,45 @@
 | ListDirectory | `ListDirectory` ToolCall을 빈 디렉터리 및 다중 파일 디렉터리에 실행 | 파일 크기, 종류가 포함된 JSON 트리가 정상 반환되며 무한 루프나 권한 패닉이 발생하지 않음 |
 | GrepSearch | `GrepSearch` ToolCall로 정규표현식 매칭 실행 (`is_regex: true`) | 일치하는 파일 경로와 라인 넘버, 텍스트 일부분이 정확히 도출됨 |
 | FetchURL | `FetchURL` ToolCall로 외부 문서 URL 요청 시뮬레이션 | HTML/데이터가 Markdown 텍스트로 적절히 파싱되어 컨텍스트에 삽입됨 |
+
+---
+
+## Phase 19: v1.0.0 Audit Remediation 감사 기준 (진행 중)
+
+### 19-A Core Error & Resource 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| `SmlError` 통합 여부 | `infra/` 폴더 내 함수 반환형 검사 | `Box<dyn Error>`가 존재하지 않고 `SmlError`만 반환됨 |
+| `BufWriter` 핸들 누수 | 도구 100회 실행 후 파일 핸들 검사 | `lsof -p <PID>` 결과 열린 파일 디스크립터 수가 일정하게 유지됨 |
+
+### 19-B Logic & Security 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| Wizard 빈값 상태 전이 | Wizard에서 API Key 입력 없이 Next 이동 | 이동이 제한되고 에러 메시지(Missing Required Field)가 출력됨 |
+| `is_dangerous` 검열 | `rm -rf *` 도구 실행 시도 | 권한 검사 엔진에서 `PermissionResult::Deny`로 차단됨 |
+
+### 19-C Runtime Concurrency & TUI 성능 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| `ToolRuntime` 무상태화 | `execute()` 함수 서명 검사 | `Result<ToolResult, ToolError>`만 반환하며 `&mut state` 참조가 없음 |
+| 데드락 해소 (Select Race) | 무한 대기 도구 실행 중 `Ctrl+C` 입력 | 채널 블로킹 없이 즉시 이벤트 루프로 취소 신호가 전파됨 |
+| TUI Windowed Rendering | 20,000줄의 stdout 로그 생성 | `terminal_height` 기준 슬라이싱으로 프레임 드랍 없이 스크롤됨 |
+
+---
+
+## Phase 21: v1.3.0 Final Industrial Polish (완성도 향상 및 엣지 케이스 수정)
+
+### 21-A Stability & I/O 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| Panic 터미널 복구 | 코드 내 임의 패닉 발생 후 앱 강제 종료 | Raw Mode가 해제되고 커서와 입력 에코가 정상적으로 동작함 |
+| 비동기 I/O 블로킹 검증 | 방대한 크기의 프로젝트 폴더 탐색 (repo_map 생성) | TUI 이벤트 루프가 멈추지 않고 키보드/마우스 입력에 매끄럽게 반응함 |
+
+### 21-B UX & Memory 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| ANSI 제어 문자 렌더링 | `ls --color=always` 또는 오류 스택 트레이스 등 색상 코드가 포함된 도구 출력 | `[31m` 같은 코드 문자열이 평문 노출되지 않고, 텍스트가 깔끔하게 렌더링되거나 실제 색상으로 매핑됨 |
+| API Key 입력 마스킹 | 설정 마법사나 팝업에서 새로운 API 키 입력 | 평문이 뷰에 나타나지 않고 `*` 문자로 치환되어 렌더링됨 |
+| 채팅 컨텍스트 Sliding Window | 임계치 이상의 반복적인 도구/채팅 메시지 생성 | 전체 기록이 무한정 메모리에 쌓이지 않고, 자동으로 요약되거나 오래된 항목이 제거되어 RAM 점유율이 안정됨 |
+
+

@@ -315,7 +315,7 @@ smlcli export-log
 
 * Shell: `Ask` / `SafeOnly` / `Deny`
 * File Write: `AlwaysAsk` / `SessionAllow`
-* Network: `ProviderOnly` / `Deny`
+* Network: `AllowAll` / `ProviderOnly` / `Deny`
 * Grep/Diff: 항상 enabled
 
 **Step 5. 저장**
@@ -1851,3 +1851,55 @@ pub enum ToolDialect {
 2. `src/app/mod.rs`: `FocusedPane::Timeline`일 때 현재 선택된 블록에 대해 `Enter` 키 이벤트 처리 추가 (토글 호출).
 3. `src/tui/layout.rs`: `TimelineBlockKind::ToolRun(ReplaceFileContent)` 렌더러에서 `display_mode`에 따라 요약 라벨 또는 원본 Diff 노출 로직 추가.
 4. (Task 2 & 3 이관) `ProviderError` 마이그레이션.
+
+### Phase 19: v1.0.0 Audit Remediation (진행 중)
+
+#### 19.1 Scope Closure
+**목표(Scope)**: v1.0.0 출시 전 시스템 전반에서 식별된 9개의 핵심 결함을 해결하여 완전한 무상태(Stateless) 아키텍처와 데드락 없는 동시성 이벤트 루프를 보장합니다. 에러 캡슐화, TUI 렌더링 최적화, 리소스 누수 방지를 포함합니다.
+**비목표(Non-Scope)**: 신규 AI 모델 연동이나 새로운 TUI 위젯 뷰 추가 등은 이 단계에서 제외됩니다.
+
+#### 19.2 Typed Contracts (동결된 타입 계약)
+```rust
+// 1. 에러 통합 (src/domain/error.rs)
+pub enum SmlError {
+    // ... 기존 상태 ...
+    InfraError(String),
+    IoError(std::io::Error),
+}
+impl From<std::io::Error> for SmlError { ... }
+
+// 2. Wizard 탭 포커스 강제 (src/tui/widgets/setting_wizard.rs)
+pub enum WizardField {
+    ApiKey,
+    Provider,
+    Model,
+    SaveButton,
+}
+
+// 3. Wizard 검증 오류 (src/app/wizard_controller.rs)
+pub enum WizardError {
+    MissingRequiredField(String),
+}
+```
+
+#### 19.3 Concrete Numbers (구체적 수치)
+* `MAX_LOG_LINES = 5000`: TUI 로그 메모리 최대 한도 초과 시 FIFO 방식으로 제거.
+* `chunk_size = terminal_height - 4`: Windowed Rendering 시 한 프레임에 렌더링될 라인 수.
+* `StatusBar Tick = 100ms`: 반응성을 위해 상태바 업데이트 주기를 최소 100ms로 유지.
+
+#### 19.4 Execution & Verification Path
+**Phase 1: Core Error & Config**
+* 실행: `SmlError` 구현 및 `SessionLogger`에 `BufWriter<File>` 도입 후 Drop 구현.
+* 검증: `lsof -p <PID>`로 반복 도구 실행에도 파일 핸들이 누수되지 않음을 증명.
+
+**Phase 2: Logic & Security**
+* 실행: `glob` 크레이트로 `is_dangerous` 블랙리스트(`*`, `../`) 추가 및 Wizard 빈 필드 상태 전이 차단.
+* 검증: `smlcli exec "rm -rf .git/*"` 실행 시 권한 거부 출력 확인.
+
+**Phase 3: Runtime & Concurrency**
+* 실행: `ToolRuntime::execute()` 반환형 변경 및 `tokio_util::sync::CancellationToken` 도입으로 select race 구현.
+* 검증: 도구 실행 중 `Ctrl+C` 입력 시 데드락 없이 즉시 캔슬 로그 출력 증명.
+
+**Phase 4: TUI & UX**
+* 실행: `inspector_tabs.rs`에 윈도우 기반 렌더링 구현 및 상태바 즉각 갱신(`StatusBar::clear()`).
+* 검증: 20,000줄의 stdout 로그를 생성하는 스크립트 실행 시 UI 프레임 드랍이 발생하지 않음을 증명.

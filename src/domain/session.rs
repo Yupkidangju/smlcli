@@ -84,8 +84,26 @@ impl SessionState {
     pub fn add_message(&mut self, msg: ChatMessage) {
         self.messages.push(msg);
 
-        if self.get_context_load_percentage() > 75 && self.messages.len() > 50 {
+        // [v1.3.0] Sliding Window: 컨텍스트 토큰 부하 초과 시 자동 압축(요약) 요청
+        if self.get_context_load_percentage() > 75 && self.messages.len() > 20 {
             self.needs_auto_compaction = true;
+        }
+
+        // [v1.3.0] 강제 Sliding Window: 메시지 수가 극단적으로 많아지면 오래된 메시지를 즉시 드랍하여 RAM 점유율 폭주 방지
+        let max_messages = 200;
+        if self.messages.len() > max_messages {
+            let mut keep = Vec::new();
+            let drop_count = self.messages.len() - (max_messages - 50); // 여유분을 위해 50개 더 삭제
+            let mut dropped = 0;
+            
+            for msg in &self.messages {
+                if msg.pinned || dropped >= drop_count {
+                    keep.push(msg.clone());
+                } else {
+                    dropped += 1;
+                }
+            }
+            self.messages = keep;
         }
     }
 

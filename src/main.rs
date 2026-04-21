@@ -60,20 +60,15 @@ async fn run_interactive() -> Result<()> {
     // 1. 패닉 훅 등록
     tui::terminal::install_panic_hook();
 
-    // 2. 터미널 진입
-    let mut terminal = tui::terminal::init_terminal()?;
+    // 2. 터미널 진입 (RAII)
+    let mut terminal = tui::terminal::TerminalGuard::init()?;
 
     // 3. 앱 실행
     let (events, tx) = app::event_loop::EventLoop::new(std::time::Duration::from_millis(250));
 
     // [v0.1.0-beta.19] App::new 도 비동기 초기화 필요 (설정 로드)
     let mut app = App::new(tx).await;
-    let res = app.run(&mut terminal, events).await;
-
-    // 4. 앱 종료 후 터미널 정리 정돈
-    tui::terminal::restore_terminal()?;
-
-    res
+    app.run(&mut terminal, events).await
 }
 
 /// Doctor: 환경 진단

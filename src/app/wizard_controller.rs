@@ -3,9 +3,21 @@
 // ProviderSelection → ApiKeyInput → (validate) → ModelSelection → Saving 플로우를 관리.
 // Config 팝업의 Enter 키 처리 로직도 이 모듈에서 담당.
 
-use super::{App, action, event_loop, state};
+use super::{action, event_loop, state, App};
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum WizardError {
+    MissingRequiredField(String),
+}
 
 impl App {
+    /// 위자드 필수 필드 검증 (Phase 19 Audit Remediation)
+    fn validate_wizard_fields(&self) -> Result<(), WizardError> {
+        if self.state.ui.wizard.step == state::WizardStep::ApiKeyInput && self.state.ui.wizard.api_key_input.trim().is_empty() {
+            return Err(WizardError::MissingRequiredField("API Key is required.".to_string()));
+        }
+        Ok(())
+    }
     /// 위자드의 Enter 키 처리: 각 단계별 상태 전이 및 비동기 작업 트리거.
     ///
     /// 위자드 플로우:
@@ -16,15 +28,24 @@ impl App {
     pub(crate) fn handle_wizard_enter(&mut self) {
         match self.state.ui.wizard.step {
             state::WizardStep::ProviderSelection => {
-                self.state.ui.wizard.selected_provider = if self.state.ui.wizard.cursor_index == 0 {
-                    Some(crate::domain::provider::ProviderKind::OpenRouter)
-                } else {
-                    Some(crate::domain::provider::ProviderKind::Google)
+                self.state.ui.wizard.selected_provider = match self.state.ui.wizard.cursor_index {
+                    0 => Some(crate::domain::provider::ProviderKind::OpenAI),
+                    1 => Some(crate::domain::provider::ProviderKind::Anthropic),
+                    2 => Some(crate::domain::provider::ProviderKind::Xai),
+                    3 => Some(crate::domain::provider::ProviderKind::OpenRouter),
+                    _ => Some(crate::domain::provider::ProviderKind::Google),
                 };
                 self.state.ui.wizard.step = state::WizardStep::ApiKeyInput;
                 self.state.ui.wizard.cursor_index = 0;
             }
             state::WizardStep::ApiKeyInput => {
+                // [v1.0.0] 필수 필드 검증 누락 시 상태 유지 및 에러 표출, 버퍼 초기화 (ClearBuffer)
+                if let Err(WizardError::MissingRequiredField(msg)) = self.validate_wizard_fields() {
+                    self.state.ui.wizard.err_msg = Some(msg);
+                    self.state.ui.wizard.api_key_input.clear();
+                    return;
+                }
+
                 // [v0.1.0-beta.7] C-1: fetch_models 전에 반드시 validate_credentials 호출
                 // OpenRouter /api/v1/models는 공개 엔드포인트라 인증 없이도 응답하므로,
                 // 잘못된 키도 설정이 "성공"하던 버그를 수정.
@@ -89,6 +110,9 @@ impl App {
             self.state.ui.wizard.selected_model.clone()
         };
         let provider_str = match &self.state.ui.wizard.selected_provider {
+            Some(crate::domain::provider::ProviderKind::OpenAI) => "OpenAI".to_string(),
+            Some(crate::domain::provider::ProviderKind::Anthropic) => "Anthropic".to_string(),
+            Some(crate::domain::provider::ProviderKind::Xai) => "xAI".to_string(),
             Some(crate::domain::provider::ProviderKind::Google) => "Google".to_string(),
             _ => "OpenRouter".to_string(),
         };
@@ -129,6 +153,7 @@ impl App {
         });
 
         self.state.domain.settings = Some(settings); // 메모리에 반영하여 앱의 구동 상태 보장
+        crate::providers::registry::reload_providers(); // [v1.2.0] 동적 갱신
         self.state.ui.is_wizard_open = false;
     }
 
@@ -206,7 +231,6 @@ impl App {
                     2 => {
                         // ShellPolicy 토글: Ask → SafeOnly → Deny → Ask
                         if let Some(s) = &mut self.state.domain.settings {
-                            // [v0.1.0-beta.12] 8차 감사 M-1: 실패 시 복구를 위해 이전 값 보존
                             let _old_policy = s.shell_policy.clone();
                             s.shell_policy = match s.shell_policy {
                                 crate::domain::permissions::ShellPolicy::Ask => {
@@ -219,7 +243,28 @@ impl App {
                                     crate::domain::permissions::ShellPolicy::Ask
                                 }
                             };
-                            // [v0.1.0-beta.14] save_config에서 master_key 불필요
+                            let settings_clone = s.clone();
+                            tokio::spawn(async move {
+                                let _ =
+                                    crate::infra::config_store::save_config(&settings_clone).await;
+                            });
+                        }
+                    }
+                    3 => {
+                        // NetworkPolicy 토글: ProviderOnly -> AllowAll -> Deny -> ProviderOnly
+                        if let Some(s) = &mut self.state.domain.settings {
+                            let _old_policy = s.network_policy.clone();
+                            s.network_policy = match s.network_policy {
+                                crate::domain::permissions::NetworkPolicy::ProviderOnly => {
+                                    crate::domain::permissions::NetworkPolicy::AllowAll
+                                }
+                                crate::domain::permissions::NetworkPolicy::AllowAll => {
+                                    crate::domain::permissions::NetworkPolicy::Deny
+                                }
+                                crate::domain::permissions::NetworkPolicy::Deny => {
+                                    crate::domain::permissions::NetworkPolicy::ProviderOnly
+                                }
+                            };
                             let settings_clone = s.clone();
                             tokio::spawn(async move {
                                 let _ =
@@ -231,10 +276,12 @@ impl App {
                 }
             }
             state::ConfigPopup::ProviderList => {
-                let new_provider_str = if self.state.ui.config.cursor_index == 0 {
-                    "OpenRouter"
-                } else {
-                    "Google"
+                let new_provider_str = match self.state.ui.config.cursor_index {
+                    0 => "OpenAI",
+                    1 => "Anthropic",
+                    2 => "xAI",
+                    3 => "OpenRouter",
+                    _ => "Google",
                 };
 
                 // [v0.1.0-beta.9] 중앙 보안 가드: NetworkPolicy + 암호화 저장소 사전 검증
@@ -326,6 +373,7 @@ impl App {
                         tokio::spawn(async move {
                             let _ = crate::infra::config_store::save_config(&settings_clone).await;
                         });
+                        crate::providers::registry::reload_providers(); // [v1.2.0] 동적 갱신
 
                         // 저장 성공 가정 (비동기라 에러 피드백은 향후 개선 필요)
                         self.state.ui.config.rollback_provider = None;

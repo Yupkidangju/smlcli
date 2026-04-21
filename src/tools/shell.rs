@@ -15,8 +15,8 @@ const SHELL_TIMEOUT_SECS: u64 = 30;
 
 /// 셸 명령어를 실행하고 stdout/stderr를 수집하여 ToolResult로 반환.
 /// action_tx가 Some이면 각 라인을 ToolOutputChunk 이벤트로 실시간 전송.
-pub(crate) async fn execute_shell(cmd: &str, cwd: Option<&str>) -> Result<ToolResult> {
-    execute_shell_streaming(cmd, cwd, None).await
+pub(crate) async fn execute_shell(cmd: &str, cwd: Option<&str>, cancel_token: tokio_util::sync::CancellationToken) -> Result<ToolResult> {
+    execute_shell_streaming(cmd, cwd, None, cancel_token).await
 }
 
 fn resolve_shell_cwd(cwd: Option<&str>) -> Result<PathBuf> {
@@ -148,6 +148,7 @@ pub(crate) async fn execute_shell_streaming(
     cmd: &str,
     cwd: Option<&str>,
     tx: Option<tokio::sync::mpsc::Sender<crate::app::event_loop::Event>>,
+    cancel_token: tokio_util::sync::CancellationToken,
 ) -> Result<ToolResult> {
     let host_cwd = resolve_shell_cwd(cwd)?;
     let mut command = build_shell_command(cmd, &host_cwd)?;
@@ -155,6 +156,8 @@ pub(crate) async fn execute_shell_streaming(
     // [v0.1.0-beta.18] 스트리밍을 위해 stdout/stderr를 파이프로 연결
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
+    // [v1.0.0] 프로세스 좀비화 방지: kill_on_drop 설정 추가
+    command.kill_on_drop(true);
 
     let timeout_result =
         tokio::time::timeout(std::time::Duration::from_secs(SHELL_TIMEOUT_SECS), async {
@@ -169,7 +172,12 @@ pub(crate) async fn execute_shell_streaming(
                 let mut lines = String::new();
                 if let Some(stdout) = stdout_handle {
                     let mut reader = BufReader::new(stdout).lines();
-                    while let Ok(Some(line)) = reader.next_line().await {
+                    let mut line_count = 0;
+                    while let Ok(Some(mut line)) = reader.next_line().await {
+                        if line.len() > 1024 * 1024 {
+                            line.truncate(1024 * 1024);
+                            line.push_str("... [TRUNCATED 1MB LIMIT]");
+                        }
                         // ToolOutputChunk 이벤트 전송 (tx가 있는 경우)
                         if let Some(ref tx) = tx_clone {
                             let _ = tx
@@ -183,6 +191,11 @@ pub(crate) async fn execute_shell_streaming(
                         }
                         lines.push_str(&line);
                         lines.push('\n');
+
+                        line_count += 1;
+                        if line_count % 100 == 0 {
+                            tokio::task::yield_now().await;
+                        }
                     }
                 }
                 lines
@@ -194,7 +207,12 @@ pub(crate) async fn execute_shell_streaming(
                 let mut lines = String::new();
                 if let Some(stderr) = stderr_handle {
                     let mut reader = BufReader::new(stderr).lines();
-                    while let Ok(Some(line)) = reader.next_line().await {
+                    let mut line_count = 0;
+                    while let Ok(Some(mut line)) = reader.next_line().await {
+                        if line.len() > 1024 * 1024 {
+                            line.truncate(1024 * 1024);
+                            line.push_str("... [TRUNCATED 1MB LIMIT]");
+                        }
                         if let Some(ref tx) = tx_clone2 {
                             let _ = tx
                                 .send(crate::app::event_loop::Event::Action(
@@ -207,13 +225,24 @@ pub(crate) async fn execute_shell_streaming(
                         }
                         lines.push_str(&line);
                         lines.push('\n');
+
+                        line_count += 1;
+                        if line_count % 100 == 0 {
+                            tokio::task::yield_now().await;
+                        }
                     }
                 }
                 lines
             });
 
-            // 프로세스 완료 대기 + 출력 수집
-            let status = child.wait().await?;
+            // 프로세스 완료 대기 + 출력 수집 (취소 토큰 명시적 감지 및 kill)
+            let status = tokio::select! {
+                res = child.wait() => res?,
+                _ = cancel_token.cancelled() => {
+                    let _ = child.kill().await;
+                    return Err(anyhow::anyhow!("Process cancelled by CancellationToken"));
+                }
+            };
             let stdout_buf = stdout_task.await.unwrap_or_default();
             let stderr_buf = stderr_task.await.unwrap_or_default();
 
@@ -375,7 +404,7 @@ impl Tool for ExecShellTool {
         format!("승인 대기 (y/n) — 명령: '{}' (cwd: {})", command, cwd_str)
     }
 
-    async fn execute(&self, args: Value, _ctx: &ToolContext<'_>) -> Result<ToolResult, ToolError> {
+    async fn execute(&self, args: Value, ctx: &ToolContext<'_>) -> Result<ToolResult, ToolError> {
         let command = args
             .get("command")
             .and_then(|v| v.as_str())
@@ -387,7 +416,7 @@ impl Tool for ExecShellTool {
             .map(|s| s.to_string());
 
         // TODO: action_tx가 필요한 streaming은 execute 인자로 어떻게 넘길지 나중에 개선
-        execute_shell(&command, cwd.as_deref())
+        execute_shell(&command, cwd.as_deref(), ctx.cancel_token.clone())
             .await
             .map_err(|e| ToolError::ExecutionFailure(e.to_string()))
     }
