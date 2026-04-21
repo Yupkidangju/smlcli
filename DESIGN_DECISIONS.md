@@ -755,3 +755,32 @@ Implemented
 - 동시 요청으로 인한 블록 텍스트 섞임 현상이 원천 차단되었다.
 - LLM과 통신 중 사용자의 예기치 못한 단축키/명령어 난입으로 인한 런타임 Crash 및 예외 상황 방어력이 대폭 상승했다.
 - 네트워크 비동기 렌더링의 타겟이 확정적이므로 안정성이 극대화되었다.
+
+---
+
+## ADR-023: Phase 18 Multi-Provider Architecture & 2026.04 Grounding
+
+### Status
+Accepted (구현 예정)
+
+### Date
+2026-04-21
+
+### Context
+SMLCLI는 초기 개발 시 OpenAI와 Gemini만을 타겟으로 구성되었으나, 2026년 4월 기준 AI 생태계는 Anthropic의 `claude-4.7` 및 xAI의 `grok-4.3-beta` 등 강력한 멀티모달/추론 모델들이 약진하고 있다. 이에 따라 다양한 Provider의 API 구조를 추상화할 수 있는 Registry/Adapter 패턴의 도입이 필수적이며, 동시에 파일 탐색과 외부 정보 수집을 돕는 `ListDir`, `GrepSearch`, `FetchURL` 도구를 추가하여 에이전트 성능을 고도화해야 한다.
+
+### Decision
+1. **Provider Registry Pattern**: 기존의 모놀리식 API 호출 로직을 분리하여 `ProviderAdapter` 트레이트를 구현한 각 Provider별 구조체(`OpenAIAdapter`, `AnthropicAdapter`, `xAIAdapter`)로 라우팅한다.
+2. **Anthropic Messages API 지원**: OpenAI 호환 포맷이 아닌 Anthropic 전용의 Messages API 및 고유의 SSE 스트리밍 청크 구조를 파싱하는 어댑터를 독립 구현한다.
+3. **2026.04 최신 라인업 그라운딩**: `gpt-5.4-pro`, `claude-4.7`, `grok-4.3-beta` 등 2026년 4월 현재 기준의 최신 모델을 설정의 기본 선택지로 업데이트한다.
+4. **Advanced Tools**: 디렉터리 브라우징을 위한 `ListDir`, 정규표현식 지원 검색 `GrepSearch`, 외부 문서를 Markdown으로 요약하는 `FetchURL` 도구를 추가한다.
+
+### Alternatives Considered
+- **서드파티 LLM 라우팅 라이브러리 사용**
+  - 의존성을 줄이고 SSE 스트리밍의 세밀한 UI 제어를 위해 자체 어댑터 패턴을 구축하기로 함.
+- **모든 Provider를 OpenAI 호환으로 강제**
+  - Anthropic 등 일부 Provider는 독자적인 기능(예: 캐싱, 특수 도구 호출 방식)을 지원하므로 Native API를 존중하는 것이 장기적으로 유리함.
+
+### Consequences
+- 사용자는 `config.toml`이나 `/setting`에서 자유롭게 OpenAI, Anthropic, xAI 등을 넘나들며 최신 모델을 사용할 수 있다.
+- 에이전트는 파일의 상세 검색 및 웹 정보 검색 능력을 갖춰 로컬 코드베이스 외의 영역까지 작업을 확장할 수 있다.

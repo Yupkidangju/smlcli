@@ -656,6 +656,97 @@ pub struct RuntimeWorkspaceState {
   - denied root permission deny 테스트
   - exec shell fallback 테스트 (`pwsh` 없음 → `powershell.exe`)
 
+---
+
+### 3.8 Phase 18: Multi-Provider Expansion & Advanced Agentic Tools (2026.04)
+
+Phase 18은 LLM 어댑터 지원의 확장(OpenAI, Anthropic, xAI)과 2026년 4월 기준 최신 모델 그라운딩, 그리고 에이전트 성능을 극대화할 수 있는 추가 시스템 도구(ListDir, GrepSearch, FetchURL)를 구현하는 것을 목표로 한다.
+
+#### A. Scope Closure
+
+**In-Scope:**
+- `ProviderAdapter` 트레이트 기반의 xAI 및 Anthropic 어댑터 구현 (OpenAI 호환 API 사용 또는 Anthropic Messages API 사용).
+- `config.toml` 내 제공자 선택 및 Base URL 지원.
+- 2026년 4월 기준 최신 모델 식별자 갱신 (`gpt-5.4`, `claude-4.7`, `grok-4.3-beta` 등).
+- 파일 탐색 보조 도구: `ListDir` (디렉터리 브라우징), `GrepSearch` (정규표현식 파일 검색).
+- 외부 데이터 수집 보조 도구: `FetchURL` (HTML to Markdown).
+
+**Out-of-Scope:**
+- 이미지 입력이나 실시간 음성/오디오(Real-time Audio) 지원 기능은 이번 페이즈에서 제외한다.
+- 웹 브라우저 전체 제어(Playwright/Puppeteer) 도구는 포함하지 않고 단순 HTTP Fetch만 다룬다.
+
+#### B. Architectural Decisions
+
+1. **Provider Registry & Adapter Pattern**
+   - 기존의 단일화된 Provider 호출 로직을 `crate::providers::registry` 패턴으로 완전히 분리한다.
+   - `AnthropicAdapter`는 `api.anthropic.com/v1/messages`를 바라보고, `xAIAdapter`는 `api.x.ai/v1/chat/completions` 등 OpenAI 호환 형식을 바라본다.
+   
+2. **Model Grounding (2026.04 Baseline)**
+   - OpenAI: `gpt-5.4-pro`, `gpt-5.4-thinking`, `gpt-5.4-instant`, `gpt-5.3-codex`.
+   - Anthropic: `claude-4.7` (Opus), `claude-4.6` (Sonnet).
+   - xAI: `grok-4.3-beta`, `grok-4.1-fast`.
+   - 설정 화면에서 사용자가 선택할 수 있는 Default Model 리스트를 이 기준으로 업데이트한다.
+
+3. **Advanced Tool Definition**
+   - **ListDir**: 특정 경로의 디렉터리 구조를 JSON/텍스트로 반환. (Context 예산 절약을 위해 max_depth 및 ignore 패턴 적용).
+   - **GrepSearch**: `ripgrep`이나 Rust 내장 `regex`를 사용하여 코드베이스의 특정 패턴을 빠르게 검색. (디렉터리 전체 탐색 시 필수).
+   - **FetchURL**: `reqwest` 등으로 URL을 가져오고 HTML 태그를 제거해 Markdown으로 변환. (API 문서 참조 등).
+
+#### C. Typed Contracts
+
+```rust
+pub enum ProviderKind {
+    OpenRouter,
+    OpenAI,
+    Anthropic,
+    xAI,
+    Google,
+}
+
+pub struct ProviderConfig {
+    pub provider: ProviderKind,
+    pub base_url: Option<String>,
+    pub api_key_alias: String,
+}
+
+pub trait ProviderAdapter {
+    fn chat_stream<'a>(
+        &'a self,
+        api_key: &'a str,
+        request: ChatRequest,
+        delta_tx: tokio::sync::mpsc::Sender<String>,
+    ) -> Pin<Box<dyn Future<Output = Result<ChatResponse, ProviderError>> + Send + 'a>>;
+}
+```
+
+#### D. Concrete Rules
+
+- Anthropic 어댑터는 OpenAI의 `ChatCompletion` 형식과 다른 `Messages API` 구조와 SSE 스트리밍 청크 구조를 사용하므로, 역/정직렬화 어댑터를 철저하게 구현한다.
+- `ListDir` 실행 시 `node_modules`, `target`, `.git` 폴더는 기본으로 무시(ignore)하여 토큰 낭비를 막는다.
+- `FetchURL`은 텍스트 파싱 후 결과가 10,000자를 넘어가면 앞뒤 일부만 남기고 `[...truncated]` 처리한다.
+
+#### E. Execution Path
+
+1. **Task 1: Provider Registry 확장**
+   - `ProviderKind` enum 갱신 및 `ProviderAdapter` 트레이트 정립.
+   - `AnthropicAdapter`, `OpenAIAdapter`, `xAIAdapter` 구현.
+2. **Task 2: 2026.04 모델 명세 업데이트**
+   - `domain/provider.rs` 또는 `config.toml` 기본값 라인업에 최신 모델 이름 반영.
+   - `smlcli config` 및 `/setting` UI에 신규 Provider와 Model 드롭다운 추가.
+3. **Task 3: 신규 도구 3종 구현**
+   - `ListDir` 구조체 및 Execute 로직 작성.
+   - `GrepSearch` 구조체 작성 (`regex` 또는 `ignore` 크레이트 연동).
+   - `FetchURL` 구현 (Reqwest + 기본 HTML 파서/마크다운 변환기).
+4. **Task 4: 통합 테스트 및 에러 처리**
+   - Provider별 API Key 오류 메시지 등 에러 노출 무결성 점검.
+   - 각 도구가 샌드박스 정책(Workspace Trust Gate)을 올바르게 존중하는지 테스트.
+
+#### F. Verification Path
+
+- xAI 및 Anthropic 모델을 설정에서 선택하고 "안녕"이라고 테스트 메시지를 보낼 때 정상적으로 SSE 스트리밍이 렌더링되는지 확인한다.
+- `FetchURL`을 통해 웹페이지 내용이 Markdown으로 응답에 잘 요약되는지 확인한다.
+- `GrepSearch`로 특정 함수명 검색 시 파일 경로와 매치되는 라인이 올바른 포맷으로 리턴되는지 확인한다.
+
 **IP Isolation**
 
 ```rust
