@@ -8,6 +8,66 @@
 use super::{App, action, event_loop};
 
 impl App {
+    /// [v0.1.0-beta.25] 도구 스키마를 포함한 표준 스트리밍 요청 생성기.
+    /// 초기 요청과 Auto-Verify 재전송이 동일한 도구 능력을 갖도록 공통화한다.
+    pub(crate) fn build_streaming_chat_request(
+        &self,
+        provider_kind: &crate::domain::provider::ProviderKind,
+        model_name: String,
+        messages: Vec<crate::providers::types::ChatMessage>,
+    ) -> crate::providers::types::ChatRequest {
+        let dialect = match provider_kind {
+            crate::domain::provider::ProviderKind::Google => crate::domain::provider::ToolDialect::Gemini,
+            crate::domain::provider::ProviderKind::OpenRouter => crate::domain::provider::ToolDialect::OpenAICompat,
+        };
+        let schemas = crate::tools::registry::GLOBAL_REGISTRY.all_schemas(&dialect);
+        let messages = self.build_messages_with_repo_map(messages);
+        crate::providers::types::ChatRequest {
+            model: model_name,
+            messages,
+            stream: true,
+            tools: (!schemas.is_empty()).then_some(schemas),
+            tool_choice: None,
+        }
+    }
+
+    fn build_messages_with_repo_map(
+        &self,
+        mut messages: Vec<crate::providers::types::ChatMessage>,
+    ) -> Vec<crate::providers::types::ChatMessage> {
+        let Some(repo_map) = self.state.runtime.repo_map.cached.clone() else {
+            return messages;
+        };
+
+        messages.retain(|msg| {
+            !(msg.role == crate::providers::types::Role::System
+                && msg
+                    .content
+                    .as_deref()
+                    .unwrap_or_default()
+                    .starts_with("[Repo Map]"))
+        });
+
+        let repo_map_msg = crate::providers::types::ChatMessage {
+            role: crate::providers::types::Role::System,
+            content: Some(repo_map),
+            tool_calls: None,
+            tool_call_id: None,
+            pinned: true,
+        };
+
+        let insert_at = if messages
+            .first()
+            .is_some_and(|msg| msg.role == crate::providers::types::Role::System)
+        {
+            1
+        } else {
+            0
+        };
+        messages.insert(insert_at, repo_map_msg);
+        messages
+    }
+
     /// [v0.1.0-beta.9] 중앙 보안 가드: 외부 네트워크 호출 전 공통 사전 검증.
     pub(crate) fn resolve_credentials(
         &self,
@@ -181,9 +241,13 @@ impl App {
         };
         self.state.domain.session.add_message(msg.clone());
 
-        // [v0.1.0-beta.22] 사용자 입력 의도 분류 (런타임 도구 억제용).
-        // 프롬프트에만 의존하지 않고, 비작업성 입력 시 도구 디스패치를 코드로 차단.
+        // [v0.1.0-beta.25] 사용자 입력 의도 분류.
+        // 이제 모델의 구조화된 도구 판단을 런타임에서 차단하지 않고,
+        // 설명/로깅 보조 신호로만 유지한다.
         self.state.runtime.user_intent_actionable = is_actionable_input(&final_text);
+        self.refresh_repo_map_if_needed(false);
+        // [v0.1.0-beta.25] 새 사용자 턴은 이전 자가 복구 세션을 종료한다.
+        self.state.runtime.auto_verify = crate::app::state::AutoVerifyState::Idle;
 
         // [v0.1.0-beta.20] 사용자 메시지를 JSONL 세션 로그에 동기 기록
         // [v0.1.0-beta.18→20 수정] 비동기 append_message를 동기 API로 교체.
@@ -198,12 +262,18 @@ impl App {
         }
 
         // [v0.1.0-beta.24] Phase 15: 사용자 메시지를 블록으로 생성
-        let title = final_text.lines().next().unwrap_or("User Input").to_string();
+        let title = final_text
+            .lines()
+            .next()
+            .unwrap_or("User Input")
+            .to_string();
         let mut block = crate::app::state::TimelineBlock::new(
             crate::app::state::TimelineBlockKind::Conversation,
             title,
-        );
-        block.body.push(crate::app::state::BlockSection::Markdown(final_text.clone()));
+        ).with_role(crate::providers::types::Role::User);
+        block.body.push(crate::app::state::BlockSection::Markdown(
+            final_text.clone(),
+        ));
         self.state.ui.timeline.push(block);
 
         // [v0.1.0-beta.22] PLAN/RUN 모드별 시스템 프롬프트 주입 — dedupe 방식.
@@ -286,62 +356,7 @@ impl App {
             }
         };
 
-        // [v0.1.0-beta.18] ChatStarted 이벤트 발송 (블록에 Markdown body 추가)
-        self.state.runtime.is_thinking = true;
-        if let Some(block) = self.state.ui.timeline.last_mut() {
-            block.status = crate::app::state::BlockStatus::Running;
-            block.body.push(crate::app::state::BlockSection::Markdown(String::new()));
-        }
-
-        let tx = self.action_tx.clone();
-        let messages = self.state.domain.session.messages.clone();
-
-        tokio::spawn(async move {
-            let adapter = crate::providers::registry::get_adapter(&provider_kind);
-            let mut req = crate::providers::types::ChatRequest {
-                model: model_name,
-                messages,
-                stream: true,
-                tools: None,
-                tool_choice: None,
-            };
-
-            // [v0.1.0-beta.23] Phase 13: Tool Registry 스키마 주입
-            let schemas = crate::tools::registry::GLOBAL_REGISTRY.all_schemas();
-            if !schemas.is_empty() {
-                req.tools = Some(schemas);
-            }
-
-            let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(64);
-            let tx_delta = tx.clone();
-            let delta_forwarder = tokio::spawn(async move {
-                while let Some(delta) = delta_rx.recv().await {
-                    let _ = tx_delta
-                        .send(event_loop::Event::Action(action::Action::ChatDelta(delta)))
-                        .await;
-                }
-            });
-
-            match adapter.chat_stream(&api_key, req, delta_tx).await {
-                Ok(res) => {
-                    let _ = delta_forwarder.await;
-                    let _ = tx
-                        .send(event_loop::Event::Action(action::Action::ChatResponseOk(
-                            Box::new(res),
-                        )))
-                        .await;
-                }
-                Err(e) => {
-                    let _ = delta_forwarder.await;
-                    // [v0.1.0-beta.21] Provider 에러 구조화
-                    let _ = tx
-                        .send(event_loop::Event::Action(action::Action::ChatResponseErr(
-                            crate::domain::error::ProviderError::NetworkFailure(e.to_string()),
-                        )))
-                        .await;
-                }
-            }
-        });
+        self.spawn_chat_request(provider_kind, model_name, api_key);
     }
 
     /// [v0.1.0-beta.18] Phase 10: 도구 결과 후 LLM 자동 재전송 (Structured Tool Loop).
@@ -357,24 +372,42 @@ impl App {
             }
         };
 
+        self.refresh_repo_map_if_needed(false);
+        self.spawn_chat_request(provider_kind, model_name, api_key);
+    }
+
+    fn spawn_chat_request(&mut self, provider_kind: crate::domain::provider::ProviderKind, model_name: String, api_key: String) {
+        // [v0.1.0-beta.26] ChatStarted 시 새 AI 블록 생성 (마지막 블록이 Assistant가 아니면)
         self.state.runtime.is_thinking = true;
-        if let Some(block) = self.state.ui.timeline.last_mut() {
+        let need_new_block = match self.state.ui.timeline.last() {
+            Some(block) => block.role != Some(crate::providers::types::Role::Assistant),
+            None => true,
+        };
+
+        if need_new_block {
+            let mut ai_block = crate::app::state::TimelineBlock::new(
+                crate::app::state::TimelineBlockKind::Conversation,
+                "AI",
+            ).with_role(crate::providers::types::Role::Assistant);
+            ai_block.status = crate::app::state::BlockStatus::Running;
+            ai_block.body.push(crate::app::state::BlockSection::Markdown(String::new()));
+            self.state.ui.timeline.push(ai_block);
+        } else if let Some(block) = self.state.ui.timeline.last_mut() {
             block.status = crate::app::state::BlockStatus::Running;
-            block.body.push(crate::app::state::BlockSection::Markdown(String::new()));
+            block
+                .body
+                .push(crate::app::state::BlockSection::Markdown(String::new()));
         }
+        
+        let idx = self.state.ui.timeline.len().saturating_sub(1);
+        self.state.runtime.active_chat_block_idx = Some(idx);
 
         let tx = self.action_tx.clone();
-        let messages = self.state.domain.session.messages.clone();
+        let req = self
+            .build_streaming_chat_request(&provider_kind, model_name, self.state.domain.session.messages.clone());
 
         tokio::spawn(async move {
             let adapter = crate::providers::registry::get_adapter(&provider_kind);
-            let req = crate::providers::types::ChatRequest {
-                model: model_name,
-                messages,
-                stream: true,
-                tools: None,
-                tool_choice: None,
-            };
 
             let (delta_tx, mut delta_rx) = tokio::sync::mpsc::channel::<String>(64);
             let tx_delta = tx.clone();

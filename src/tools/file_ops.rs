@@ -267,7 +267,16 @@ impl Tool for WriteFileTool {
             .unwrap_or("")
             .to_string();
 
-        write_file_commit(&path, &content).map_err(|e| ToolError::ExecutionFailure(e.to_string()))
+        let old_content = std::fs::read_to_string(&path).unwrap_or_default();
+        let diff = generate_diff(&old_content, &content);
+
+        match write_file_commit(&path, &content) {
+            Ok(mut res) => {
+                res.stdout = format!("{}\n{}", diff, res.stdout);
+                Ok(res)
+            }
+            Err(e) => Err(ToolError::ExecutionFailure(e.to_string())),
+        }
     }
 }
 
@@ -366,8 +375,15 @@ impl Tool for ReplaceFileContentTool {
                     });
                 }
                 let new_content = old_content.replace(&target, &replacement);
-                write_file_commit(&path, &new_content)
-                    .map_err(|e| ToolError::ExecutionFailure(e.to_string()))
+                let diff = generate_diff(&old_content, &new_content);
+                match write_file_commit(&path, &new_content) {
+                    Ok(mut res) => {
+                        res.tool_name = "ReplaceFileContent".to_string();
+                        res.stdout = format!("{}\n{}", diff, res.stdout);
+                        Ok(res)
+                    }
+                    Err(e) => Err(ToolError::ExecutionFailure(e.to_string())),
+                }
             }
             Err(e) => Ok(ToolResult {
                 tool_name: "ReplaceFileContent".to_string(),

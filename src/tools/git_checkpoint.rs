@@ -14,7 +14,7 @@ pub fn is_git_repo(cwd: &str) -> bool {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
-    
+
     match status {
         Ok(s) => s.success(),
         Err(_) => false,
@@ -28,7 +28,7 @@ pub fn has_uncommitted_changes(cwd: &str) -> bool {
         .arg("--porcelain")
         .current_dir(cwd)
         .output();
-    
+
     match status {
         Ok(out) => !out.stdout.is_empty(),
         Err(_) => false,
@@ -41,7 +41,7 @@ pub fn create_checkpoint(cwd: &str, _tool_name: &str) -> Result<bool> {
     if !is_git_repo(cwd) {
         return Ok(false); // Git 저장소가 아니면 스킵
     }
-    
+
     if has_uncommitted_changes(cwd) {
         // WIP가 있으면 롤백 시 날아갈 위험이 있으므로 체크포인트 생성 생략
         return Ok(false);

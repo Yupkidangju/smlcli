@@ -61,23 +61,37 @@ pub fn draw(f: &mut Frame, state: &AppState) {
     // 인스펙터: 32~48칼럼 범위 클램프. 타임라인 최소 72칼럼 보장.
     if state.ui.show_inspector || state.runtime.approval.pending_tool.is_some() {
         let total_width = chunks[1].width;
-        let inspector_width = (total_width as f32 * 0.30).clamp(32.0, 48.0) as u16;
-        let timeline_width = total_width.saturating_sub(inspector_width).max(72);
-        let actual_inspector = total_width.saturating_sub(timeline_width);
+        if total_width < 100 {
+            // [v0.1.0-beta.26] 100칼럼 미만일 경우 오버레이/드로어(Drawer) 모드 적용
+            draw_timeline(f, state, chunks[1]);
+            let drawer_width = 32;
+            let drawer_area = Rect {
+                x: chunks[1].x.saturating_add(total_width.saturating_sub(drawer_width)),
+                y: chunks[1].y,
+                width: drawer_width.min(total_width),
+                height: chunks[1].height,
+            };
+            f.render_widget(ratatui::widgets::Clear, drawer_area);
+            draw_inspector(f, state, drawer_area);
+        } else {
+            let inspector_width = (total_width as f32 * 0.30).clamp(32.0, 48.0) as u16;
+            let timeline_width = total_width.saturating_sub(inspector_width).max(72);
+            let actual_inspector = total_width.saturating_sub(timeline_width);
 
-        let main_chunks = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints(
-                [
-                    Constraint::Length(timeline_width),
-                    Constraint::Length(actual_inspector),
-                ]
-                .as_ref(),
-            )
-            .split(chunks[1]);
+            let main_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(
+                    [
+                        Constraint::Length(timeline_width),
+                        Constraint::Length(actual_inspector),
+                    ]
+                    .as_ref(),
+                )
+                .split(chunks[1]);
 
-        draw_timeline(f, state, main_chunks[0]);
-        draw_inspector(f, state, main_chunks[1]);
+            draw_timeline(f, state, main_chunks[0]);
+            draw_inspector(f, state, main_chunks[1]);
+        }
     } else {
         draw_timeline(f, state, chunks[1]);
     }
@@ -87,6 +101,9 @@ pub fn draw(f: &mut Frame, state: &AppState) {
 
     if state.ui.config.is_open {
         crate::tui::widgets::config_dashboard::draw_config(f, state);
+    }
+    if let crate::app::state::TrustGatePopup::Open { .. } = state.ui.trust_gate.popup {
+        draw_trust_gate(f, state);
     }
     if state.ui.palette.is_open {
         draw_command_palette(f, state);
@@ -127,6 +144,16 @@ fn draw_top_bar(f: &mut Frame, state: &AppState, area: Rect) {
         .as_ref()
         .map(|s| format!("{:?}", s.shell_policy))
         .unwrap_or_else(|| "None".to_string());
+    let trust_str = state
+        .domain
+        .settings
+        .as_ref()
+        .map(|s| match s.get_workspace_trust(&cwd_raw) {
+            crate::domain::settings::WorkspaceTrustState::Trusted => "Trust: ✓",
+            crate::domain::settings::WorkspaceTrustState::Restricted => "Trust: ✕",
+            crate::domain::settings::WorkspaceTrustState::Unknown => "Trust: ?",
+        })
+        .unwrap_or("Trust: ?");
 
     // [v0.1.0-beta.18] context budget 색상을 사용량에 따라 변경
     let ctx_color = if budget >= 85 {
@@ -152,22 +179,28 @@ fn draw_top_bar(f: &mut Frame, state: &AppState, area: Rect) {
         Span::styled(ctx_span_text, Style::default().fg(ctx_color)),
     ];
     if bar_width > 90 {
+        let host_shell = &state.runtime.workspace.host_shell;
+        let exec_shell = &state.runtime.workspace.exec_shell;
         right_spans.push(Span::styled(
-            format!(" · Shell {}", shell_policy_str),
+            format!(" · Host: {} | Exec: {} | {} · {}", host_shell, exec_shell, shell_policy_str, trust_str),
             Style::default().fg(p.text_secondary),
         ));
     }
-    right_spans.push(Span::styled(" · ✓ ".to_string(), Style::default().fg(p.text_primary)));
-    let right_width: u16 = right_spans.iter().map(|s| s.content.chars().count() as u16).sum();
+    right_spans.push(Span::styled(
+        " · ✓ ".to_string(),
+        Style::default().fg(p.text_primary),
+    ));
+    let right_width: u16 = right_spans
+        .iter()
+        .map(|s| s.content.chars().count() as u16)
+        .sum();
     let right_line = Line::from(right_spans).alignment(ratatui::layout::Alignment::Right);
 
     // 좌측 영역 (상대적 여유 시 cwd 추가)
-    let mut left_spans = vec![
-        Span::styled(
-            format!(" smlcli · {}/{}", provider_display, model_display),
-            Style::default().fg(p.text_primary),
-        ),
-    ];
+    let mut left_spans = vec![Span::styled(
+        format!(" smlcli · {}/{}", provider_display, model_display),
+        Style::default().fg(p.text_primary),
+    )];
     if bar_width > right_width + 45 {
         left_spans.push(Span::styled(
             format!(" · {}", cwd),
@@ -177,7 +210,10 @@ fn draw_top_bar(f: &mut Frame, state: &AppState, area: Rect) {
     let left_line = Line::from(left_spans);
 
     // 배경색을 채우기 위해 전체 영역에 Block 렌더링
-    f.render_widget(Block::default().style(Style::default().bg(p.bg_panel)), area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(p.bg_panel)),
+        area,
+    );
 
     // 좌/우 분할
     let chunks = ratatui::layout::Layout::horizontal([
@@ -186,8 +222,29 @@ fn draw_top_bar(f: &mut Frame, state: &AppState, area: Rect) {
     ])
     .split(area);
 
-    f.render_widget(Paragraph::new(left_line).style(Style::default().bg(p.bg_panel)), chunks[0]);
-    f.render_widget(Paragraph::new(right_line).style(Style::default().bg(p.bg_panel)), chunks[1]);
+    f.render_widget(
+        Paragraph::new(left_line).style(Style::default().bg(p.bg_panel)),
+        chunks[0],
+    );
+    f.render_widget(
+        Paragraph::new(right_line).style(Style::default().bg(p.bg_panel)),
+        chunks[1],
+    );
+}
+
+/// [v0.1.0-beta.25] 타임라인 블록의 깊이에 맞는 들여쓰기 접두사.
+/// depth=0이면 평면, depth>=1이면 첫 줄에 `└─`, 후속 줄에 공백 인덴트를 준다.
+fn timeline_prefix(depth: u8, first_line: bool) -> String {
+    if depth == 0 {
+        return String::new();
+    }
+
+    let base_indent = "  ".repeat(depth.saturating_sub(1) as usize);
+    if first_line {
+        format!("{}└─ ", base_indent)
+    } else {
+        format!("{}   ", base_indent)
+    }
 }
 
 fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
@@ -206,22 +263,39 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
     if !state.ui.timeline.is_empty() {
         // === 타임라인 블록 기반 렌더링 ===
         for (idx, block) in state.ui.timeline.iter().enumerate() {
+            let is_selected = matches!(state.ui.focused_pane, crate::app::state::FocusedPane::Timeline)
+                && state.ui.timeline_cursor == idx;
             let start_len = lines.len();
             match block.kind {
                 crate::app::state::TimelineBlockKind::Conversation => {
-                    let label = if block.title == "User" { "User:" } else { "AI:" };
-                    let label_color = if block.title == "User" { p.accent } else { p.success };
+                    let is_user = block.role == Some(crate::providers::types::Role::User);
+                    let label = if is_user {
+                        "User:"
+                    } else {
+                        "AI:"
+                    };
+                    let label_color = if is_user {
+                        p.accent
+                    } else {
+                        p.success
+                    };
                     lines.push(Line::from(vec![Span::styled(
                         label,
                         Style::default().fg(label_color),
                     )]));
                     for section in &block.body {
                         if let crate::app::state::BlockSection::Markdown(msg) = section {
-                            if block.title == "AI" {
+                            if !is_user {
                                 let display = filter_tool_json(msg);
-                                lines.extend(render_multiline_text(&display, Style::default().fg(p.text_primary)));
+                                lines.extend(render_multiline_text(
+                                    &display,
+                                    Style::default().fg(p.text_primary),
+                                ));
                             } else {
-                                lines.extend(render_multiline_text(msg, Style::default().fg(p.text_primary)));
+                                lines.extend(render_multiline_text(
+                                    msg,
+                                    Style::default().fg(p.text_primary),
+                                ));
                             }
                         }
                     }
@@ -231,10 +305,20 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
                     for section in &block.body {
                         if let crate::app::state::BlockSection::Markdown(msg) = section {
                             for (i, line) in msg.lines().enumerate() {
-                                let prefix = if i == 0 { "ℹ  " } else { "   " };
+                                let prefix = if i == 0 {
+                                    format!("{}ℹ  ", timeline_prefix(block.depth, true))
+                                } else {
+                                    format!("{}   ", timeline_prefix(block.depth, false))
+                                };
                                 lines.push(Line::from(vec![Span::styled(
                                     format!("{}{}", prefix, line),
-                                    Style::default().fg(if block.status == crate::app::state::BlockStatus::Error { p.danger } else { p.info }),
+                                    Style::default().fg(
+                                        if block.status == crate::app::state::BlockStatus::Error {
+                                            p.danger
+                                        } else {
+                                            p.info
+                                        },
+                                    ),
                                 )]));
                             }
                         }
@@ -261,19 +345,52 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
                         _ => ("◻", p.muted),
                     };
                     lines.push(Line::from(vec![Span::styled(
-                        format!("{} {} ", badge, block.title),
+                        format!(
+                            "{}{} {} ",
+                            timeline_prefix(block.depth, true),
+                            badge,
+                            block.title
+                        ),
                         Style::default().fg(badge_color),
                     )]));
                     for section in &block.body {
                         match section {
                             crate::app::state::BlockSection::ToolSummary { summary, .. } => {
-                                for sl in summary.lines() {
-                                    lines.push(Line::from(vec![Span::styled(format!("   {}", sl), Style::default().fg(p.text_secondary))]));
+                                if block.display_mode == crate::app::state::BlockDisplayMode::Collapsed {
+                                    if let Some((add, del)) = block.diff_summary {
+                                        let text = format!("[ +{} lines / -{} lines ] (Enter 키로 펼치기)", add, del);
+                                        let style = if is_selected {
+                                            Style::default().fg(p.bg_base).bg(p.accent)
+                                        } else {
+                                            Style::default().fg(p.muted)
+                                        };
+                                        lines.push(Line::from(vec![Span::styled(
+                                            format!("{}{}", timeline_prefix(block.depth, false), text),
+                                            style,
+                                        )]));
+                                    }
+                                } else {
+                                    for sl in summary.lines() {
+                                        let style = if sl.starts_with('+') && !sl.starts_with("+++") {
+                                            Style::default().fg(ratatui::style::Color::Green)
+                                        } else if sl.starts_with('-') && !sl.starts_with("---") {
+                                            Style::default().fg(ratatui::style::Color::Red)
+                                        } else {
+                                            Style::default().fg(p.text_secondary)
+                                        };
+                                        lines.push(Line::from(vec![Span::styled(
+                                            format!("{}{}", timeline_prefix(block.depth, false), sl),
+                                            style,
+                                        )]));
+                                    }
                                 }
                             }
                             crate::app::state::BlockSection::Markdown(msg) => {
                                 for sl in msg.lines() {
-                                    lines.push(Line::from(vec![Span::styled(format!("   {}", sl), Style::default().fg(p.text_secondary))]));
+                                    lines.push(Line::from(vec![Span::styled(
+                                        format!("{}{}", timeline_prefix(block.depth, false), sl),
+                                        Style::default().fg(p.text_secondary),
+                                    )]));
                                 }
                             }
                             _ => {}
@@ -282,23 +399,38 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
                     lines.push(Line::from(""));
                 }
                 crate::app::state::TimelineBlockKind::Approval => {
-                    let pulse_color = if (state.ui.tick_count % 6) < 3 { p.warning } else { p.text_primary };
+                    let pulse_color = if (state.ui.tick_count % 6) < 3 {
+                        p.warning
+                    } else {
+                        p.text_primary
+                    };
                     lines.push(Line::from(vec![Span::styled(
-                        format!("⚠  승인 대기: {} ", block.title),
+                        format!(
+                            "{}⚠  승인 대기: {} ",
+                            timeline_prefix(block.depth, true),
+                            block.title
+                        ),
                         Style::default().fg(pulse_color),
                     )]));
                     for section in &block.body {
                         if let crate::app::state::BlockSection::Markdown(msg) = section {
-                            lines.push(Line::from(vec![Span::styled(format!("   {}", msg), Style::default().fg(p.text_secondary))]));
+                            lines.push(Line::from(vec![Span::styled(
+                                format!("{}{}", timeline_prefix(block.depth, false), msg),
+                                Style::default().fg(p.text_secondary),
+                            )]));
                         }
                     }
                     lines.push(Line::from(""));
                 }
                 crate::app::state::TimelineBlockKind::Help => {
-                    lines.push(Line::from(vec![Span::styled("ℹ  Available Commands:", Style::default().fg(p.info))]));
+                    lines.push(Line::from(vec![Span::styled(
+                        "ℹ  Available Commands:",
+                        Style::default().fg(p.info),
+                    )]));
                     let inner_width = area.width.saturating_sub(1);
                     let cmd_col_width = 14;
-                    let max_desc_width = (inner_width as usize).saturating_sub(cmd_col_width).max(10);
+                    let max_desc_width =
+                        (inner_width as usize).saturating_sub(cmd_col_width).max(10);
                     for section in &block.body {
                         if let crate::app::state::BlockSection::KeyValueTable(entries) = section {
                             for (cmd, desc) in entries {
@@ -307,20 +439,35 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
                                 for word in desc.split_whitespace() {
                                     let word_width = word.chars().count();
                                     let current_width = current_line.chars().count();
-                                    if current_width > 0 && current_width + 1 + word_width > max_desc_width {
+                                    if current_width > 0
+                                        && current_width + 1 + word_width > max_desc_width
+                                    {
                                         desc_lines.push(current_line.clone());
                                         current_line.clear();
                                     }
-                                    if !current_line.is_empty() { current_line.push(' '); }
+                                    if !current_line.is_empty() {
+                                        current_line.push(' ');
+                                    }
                                     current_line.push_str(word);
                                 }
-                                if !current_line.is_empty() { desc_lines.push(current_line); }
-                                if desc_lines.is_empty() { desc_lines.push(String::new()); }
+                                if !current_line.is_empty() {
+                                    desc_lines.push(current_line);
+                                }
+                                if desc_lines.is_empty() {
+                                    desc_lines.push(String::new());
+                                }
                                 for (i, dline) in desc_lines.iter().enumerate() {
-                                    let cmd_str = if i == 0 { format!("   {:<11}", cmd) } else { " ".repeat(cmd_col_width) };
+                                    let cmd_str = if i == 0 {
+                                        format!("   {:<11}", cmd)
+                                    } else {
+                                        " ".repeat(cmd_col_width)
+                                    };
                                     lines.push(Line::from(vec![
                                         Span::styled(cmd_str, Style::default().fg(p.accent)),
-                                        Span::styled(dline.to_string(), Style::default().fg(p.text_secondary)),
+                                        Span::styled(
+                                            dline.to_string(),
+                                            Style::default().fg(p.text_secondary),
+                                        ),
                                     ]));
                                 }
                             }
@@ -329,10 +476,12 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
                     lines.push(Line::from(""));
                 }
             }
-            let is_selected = state.ui.focused_pane == crate::app::state::FocusedPane::Timeline && state.ui.timeline_cursor == idx;
-            let bg_style = if is_selected { Style::default().bg(p.bg_elevated) } else { Style::default() };
-            for line in lines.iter_mut().skip(start_len) {
-                *line = line.clone().patch_style(bg_style);
+            let is_selected = state.ui.focused_pane == crate::app::state::FocusedPane::Timeline
+                && state.ui.timeline_cursor == idx;
+            if is_selected && let Some(first_line) = lines.get_mut(start_len) {
+                *first_line = first_line
+                    .clone()
+                    .patch_style(Style::default().bg(p.bg_elevated));
             }
         }
     } else {
@@ -354,7 +503,10 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
             let content_str = msg.content.as_deref().unwrap_or_default();
             let display_content = filter_tool_json(content_str);
             // [v0.1.0-beta.24] Phase 14-A: 폴백 경로에도 멀티라인 렌더링 적용
-            lines.extend(render_multiline_text(&display_content, Style::default().fg(p.text_primary)));
+            lines.extend(render_multiline_text(
+                &display_content,
+                Style::default().fg(p.text_primary),
+            ));
             lines.push(Line::from(""));
         }
     }
@@ -534,7 +686,11 @@ fn draw_inspector(f: &mut Frame, state: &AppState, area: Rect) {
     let use_short = area.width < 40;
     let tab_names_full = ["Preview", "Diff", "Search", "Logs", "Recent"];
     let tab_names_short = ["Prev", "Diff", "Srch", "Logs", "Rcnt"];
-    let tab_names = if use_short { &tab_names_short } else { &tab_names_full };
+    let tab_names = if use_short {
+        &tab_names_short
+    } else {
+        &tab_names_full
+    };
     let active_idx = match state.ui.active_inspector_tab {
         InspectorTab::Preview => 0,
         InspectorTab::Diff => 1,
@@ -554,18 +710,68 @@ fn draw_inspector(f: &mut Frame, state: &AppState, area: Rect) {
         })
         .collect::<Vec<_>>()
         .join(if use_short { "·" } else { " · " });
-    let title = if use_short {
-        tabs_title.clone()
-    } else {
-        format!("Inspector | {}", tabs_title)
-    };
-
-    let mut block = Block::default().title(title).borders(Borders::LEFT);
+    let mut block = Block::default().title("Inspector").borders(Borders::LEFT);
     if state.ui.focused_pane == crate::app::state::FocusedPane::Inspector {
         block = block.border_style(Style::default().fg(p.accent));
     }
     let inner_area = block.inner(area);
     f.render_widget(block, area);
+    let header_two_rows = inner_area.width < 28;
+    let header_height = if header_two_rows { 2 } else { 1 };
+    let inspector_chunks =
+        ratatui::layout::Layout::vertical([Constraint::Length(header_height), Constraint::Min(0)])
+            .split(inner_area);
+
+    let header_lines = if header_two_rows {
+        let header_tabs = if use_short {
+            ["Prev", "Diff", "Srch", "Logs", "Rcnt"]
+        } else {
+            ["Preview", "Diff", "Search", "Logs", "Recent"]
+        };
+        vec![
+            Line::from(
+                header_tabs[..3]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| {
+                        let idx = i;
+                        if idx == active_idx {
+                            Span::styled(format!("[*{}*] ", name), Style::default().fg(p.accent))
+                        } else {
+                            Span::styled(
+                                format!("[{}] ", name),
+                                Style::default().fg(p.text_secondary),
+                            )
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            Line::from(
+                header_tabs[3..]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, name)| {
+                        let idx = i + 3;
+                        if idx == active_idx {
+                            Span::styled(format!("[*{}*] ", name), Style::default().fg(p.accent))
+                        } else {
+                            Span::styled(
+                                format!("[{}] ", name),
+                                Style::default().fg(p.text_secondary),
+                            )
+                        }
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+        ]
+    } else {
+        vec![Line::from(vec![
+            Span::styled("Tabs ", Style::default().fg(p.muted)),
+            Span::styled(tabs_title, Style::default().fg(p.text_secondary)),
+        ])]
+    };
+    let header = Paragraph::new(header_lines).wrap(Wrap { trim: false });
+    f.render_widget(header, inspector_chunks[0]);
 
     // 승인 대기 중이면 Diff 탭 강제 표시
     if let Some(tool) = &state.runtime.approval.pending_tool {
@@ -631,7 +837,7 @@ fn draw_inspector(f: &mut Frame, state: &AppState, area: Rect) {
         let paragraph = Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .scroll((state.ui.inspector_scroll, 0));
-        f.render_widget(paragraph, inner_area);
+        f.render_widget(paragraph, inspector_chunks[1]);
         return;
     }
 
@@ -640,20 +846,20 @@ fn draw_inspector(f: &mut Frame, state: &AppState, area: Rect) {
     use crate::tui::widgets::inspector_tabs;
     match state.ui.active_inspector_tab {
         InspectorTab::Logs => {
-            inspector_tabs::render_logs(f, state, inner_area);
+            inspector_tabs::render_logs(f, state, inspector_chunks[1]);
         }
         InspectorTab::Search => {
-            inspector_tabs::render_search(f, state, inner_area);
+            inspector_tabs::render_search(f, state, inspector_chunks[1]);
         }
         InspectorTab::Recent => {
-            inspector_tabs::render_recent(f, state, inner_area);
+            inspector_tabs::render_recent(f, state, inspector_chunks[1]);
         }
         InspectorTab::Diff => {
-            inspector_tabs::render_diff(f, state, inner_area);
+            inspector_tabs::render_diff(f, state, inspector_chunks[1]);
         }
         _ => {
             // Preview (기본)
-            inspector_tabs::render_preview(f, state, inner_area);
+            inspector_tabs::render_preview(f, state, inspector_chunks[1]);
         }
     }
 }
@@ -687,7 +893,9 @@ fn draw_composer_toolbar(f: &mut Frame, state: &AppState, area: Rect) {
 
         let display_text = match chip.kind {
             crate::app::state::InputChipKind::Mode => format!(" [{}] ", chip.label),
-            crate::app::state::InputChipKind::Path => format!("[{}]", truncate_middle(&chip.label, 20)),
+            crate::app::state::InputChipKind::Path | crate::app::state::InputChipKind::Context => {
+                format!("[{}]", truncate_middle(&chip.label, 24))
+            }
             crate::app::state::InputChipKind::Hint => format!("[{}]", chip.label),
             _ => format!(" [{}] ", chip.label),
         };
@@ -808,30 +1016,47 @@ fn draw_command_palette(f: &mut Frame, state: &AppState) {
         width,
         height,
     };
-    
+
     let block = Block::default()
         .title(" Command Palette (Ctrl+K) ")
         .borders(Borders::ALL)
         .style(Style::default().bg(p.bg_elevated).fg(p.text_primary))
         .border_style(Style::default().fg(p.accent));
-    
+
     let mut lines = vec![
         Line::from(vec![Span::raw(format!("> {}_", state.ui.palette.query))]),
         Line::from(""),
     ];
 
     if state.ui.palette.results.is_empty() {
-        lines.push(Line::from(vec![Span::styled("No commands found", Style::default().fg(p.danger))]));
+        lines.push(Line::from(vec![Span::styled(
+            "No commands found",
+            Style::default().fg(p.danger),
+        )]));
     } else {
-        for (idx, cmd) in state.ui.palette.results.iter().enumerate().take(10) {
-            let prefix = if idx == state.ui.palette.cursor { "▶ " } else { "  " };
-            let style = if idx == state.ui.palette.cursor { Style::default().fg(p.accent) } else { Style::default().fg(p.text_primary) };
-            
+        for (idx, cmd) in state.ui.palette.results.iter().enumerate().take(8) {
+            let prefix = if idx == state.ui.palette.cursor {
+                "▶ "
+            } else {
+                "  "
+            };
+            let style = if idx == state.ui.palette.cursor {
+                Style::default().fg(p.accent)
+            } else {
+                Style::default().fg(p.text_primary)
+            };
+
             let shortcut_str = cmd.shortcut_hint.unwrap_or("");
             lines.push(Line::from(vec![
                 Span::styled(format!("{}{:<18} ", prefix, cmd.title), style),
-                Span::styled(format!("{:<10} ", cmd.category), Style::default().fg(p.muted)),
-                Span::styled(shortcut_str.to_string(), Style::default().fg(p.text_secondary)),
+                Span::styled(
+                    format!("{:<10} ", cmd.category),
+                    Style::default().fg(p.muted),
+                ),
+                Span::styled(
+                    shortcut_str.to_string(),
+                    Style::default().fg(p.text_secondary),
+                ),
             ]));
         }
     }
@@ -839,4 +1064,93 @@ fn draw_command_palette(f: &mut Frame, state: &AppState) {
     let pgh = Paragraph::new(lines).block(block);
     f.render_widget(ratatui::widgets::Clear, area);
     f.render_widget(pgh, area);
+}
+
+fn draw_trust_gate(f: &mut Frame, state: &AppState) {
+    use ratatui::widgets::Clear;
+
+    let p = state.palette();
+    let root = match &state.ui.trust_gate.popup {
+        crate::app::state::TrustGatePopup::Open { root } => root,
+        _ => return,
+    };
+
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(
+            [
+                Constraint::Percentage(30),
+                Constraint::Length(12),
+                Constraint::Percentage(30),
+            ]
+            .as_ref(),
+        )
+        .split(f.area());
+
+    let popup_area = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            [
+                Constraint::Percentage(20),
+                Constraint::Percentage(60),
+                Constraint::Percentage(20),
+            ]
+            .as_ref(),
+        )
+        .split(popup_layout[1])[1];
+
+    f.render_widget(Clear, popup_area);
+
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            "Workspace Trust Gate",
+            Style::default().fg(p.warning).add_modifier(ratatui::style::Modifier::BOLD),
+        )]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "[!] Do you trust the authors of the files in this folder?",
+            Style::default().fg(p.text_primary),
+        )]),
+        Line::from(vec![Span::styled(
+            "This provides AI agent access to your files and execute commands.",
+            Style::default().fg(p.text_secondary),
+        )]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Path: ", Style::default().fg(p.text_primary)),
+            Span::styled(root.clone(), Style::default().fg(p.accent)),
+        ]),
+        Line::from(""),
+    ];
+    
+    let options = [
+        "Trust Workspace & Remember",
+        "Trust this time only",
+        "No, I don't trust it (Restricted Mode)"
+    ];
+    
+    for (i, opt) in options.iter().enumerate() {
+        if i == state.ui.trust_gate.cursor_index {
+            lines.push(Line::from(vec![Span::styled(
+                format!(" > {}", opt),
+                Style::default().fg(p.bg_elevated).bg(p.accent).add_modifier(ratatui::style::Modifier::BOLD),
+            )]));
+        } else {
+            lines.push(Line::from(vec![Span::styled(
+                format!("   {}", opt),
+                Style::default().fg(p.text_secondary),
+            )]));
+        }
+    }
+    
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(p.warning))
+        .title(" Security Verification ");
+        
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .alignment(ratatui::layout::Alignment::Left);
+        
+    f.render_widget(paragraph, popup_area);
 }

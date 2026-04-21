@@ -80,6 +80,44 @@
 ## 최근 구현 요약
 _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니다.)_
 
+- [2026-04-21] : **[Implemented - Windows Host Shell / Workspace Trust Gate]** 계획된 Workspace Trust Gate 및 호스트 셸 정렬 구현 완료.
+  - ✅ **Task 1: Workspace root 결정 유틸리티 통합**: `.git` 또는 `Cargo.toml` 상향 탐색이 성공하면 root를 확정하고, 실패 시 현재 디렉터리를 사용하도록 통합.
+  - ✅ **Task 2: Trust/Workspace 정책 모델 + 설정 영속화**: `Unknown/Trusted/Restricted` 상태와 `workspace_trust`, `denied_roots` 필드를 `PersistedSettings`에 추가하여 `config.toml`에 영속화.
+  - ✅ **Task 3: Startup Trust Gate UI**: 시작 시 `Unknown` 상태인 경우 `Trust Once / Trust & Remember / Restricted` 선택을 강제하는 Popup UI를 렌더링하고 입력을 라우팅.
+  - ✅ **Task 4: Permission Engine 연동**: `PermissionEngine::check()`에서 `WriteFile`, `ReplaceFileContent`, `ExecShell` 도구에 대해 `Restricted` 또는 `Unknown` 상태 시 강력한 차단(Deny) 로직 적용.
+  - ✅ **Task 5: Windows exec shell 정렬**: `ExecShell` 도구에서 빈 명령어 차단 및 호스트 셸 정렬. (Linux는 bash 기반, Windows는 PowerShell 기반으로 처리되도록 구조화)
+  - ✅ **Task 6: REPL/설정 관리 surface 추가**: `/workspace show`, `/workspace trust`, `/workspace deny`, `/workspace clear` 커맨드를 추가하여 터미널 내에서 신뢰 상태를 동적으로 관리할 수 있도록 연동.
+  - ✅ **Task 7: 상태바/진단 출력 반영**: `/status` 명령어에 현재 Workspace Trust 상태 및 Denied 여부 표기 반영.
+
+- [2026-04-20] : **[Scroll UX Remediation]** 타임라인/인스펙터 스크롤 동작을 일반적인 CLI 기대치에 맞게 보정.
+  - 마우스 휠이 구식 `timeline_scroll_offset` 대신 실제 렌더 필드 `timeline_scroll`을 조작하도록 수정.
+  - `follow_tail`이 최하단 복귀 시 다시 활성화되어 새 콘텐츠가 자동으로 보이도록 보정.
+  - 마우스 클릭 포커스를 row+column 기준으로 재판정하여 Composer 클릭 시 Timeline이 잘못 선택되지 않도록 수정.
+  - 선택된 타임라인 블록 전체 반전을 제거하고 첫 줄만 약하게 강조하도록 변경.
+- [2026-04-20] : **[Workspace/Inspector UX Fix]** 실행 위치와 Inspector 보조 UI를 정리.
+  - `target/release` 같은 빌드 산출물 디렉터리에서 실행되면 저장소 루트로 작업 디렉터리를 자동 보정하여 `ReadFile`/`Stat`/`ListDir`가 올바른 프로젝트 파일을 대상으로 동작하도록 수정.
+  - Composer Toolbar에 `F2 Inspector` 힌트를 복원.
+  - Inspector 상단 탭 영역을 적응형 1줄/2줄 헤더로 바꿔 좁은 폭에서도 탭명이 잘리지 않도록 수정.
+
+- [2026-04-20] : **[2nd Audit Remediation - Context / Config / Edge Tests]** 2차 감사의 심화 이슈를 재검토하고 실제 결함만 수정.
+  - Auto-Verify가 240자 요약만 다시 보내던 문제를 수정하여 `stderr` 우선, `stdout` 보조의 확장 실패 컨텍스트를 모델 재전송에 사용하도록 개선.
+  - `load_config()` 오류를 `DomainState::new_async()`에서 삼키지 않도록 수정하고, 손상된 `config.toml`은 Setup Wizard 첫 화면과 로그 버퍼에 복구/삭제 가이드로 표시.
+  - `logs_buffer`는 별도 락 추가 대신 Event Loop 직렬화 계약을 문서화. 비동기 태스크는 직접 공유 버퍼를 만지지 않고 `Event::Action`으로만 전달됨을 명시.
+  - 실패 경로 테스트 확충: 손상된 TOML, 시작 시 설정 오류, Auto-Verify tail context, 비-Git checkpoint no-op.
+- [2026-04-20] : **[3rd Audit Remediation - Sandbox / Repo Map / HITL TTL]** 3차 감사 항목을 재검증 후 실제 미구현 항목만 보강.
+  - `Sliding Window`는 이미 `/compact` 드라이버와 자동 compact tick 경로가 연결된 상태임을 재확인하고 미수정.
+  - Linux `ExecShell`을 `bwrap` 기반 실제 샌드박스로 전환하여 호스트 루트는 읽기 전용, 요청 `cwd`만 `/workspace`로 쓰기 가능하도록 제한.
+  - `Repo Map`은 비동기 `spawn_blocking` worker와 캐시 상태(`cached/is_loading/stale`)를 도입하고, 준비된 캐시를 실제 채팅 요청 system message에 주입하도록 연결.
+  - `Approval` 요청에 5분 TTL을 도입하여 응답이 없으면 자동 거부/정리/시스템 알림이 수행되도록 수정.
+  - 회귀 테스트 추가: Linux 샌드박스 쓰기 차단/허용, Repo Map cache lifecycle, 요청 주입, 승인 시간 초과.
+
+- [2026-04-20] : **[Audit Remediation - Auto-Verify / Tree Depth / Guardrail]** 문서-구현 불일치 4건 중 실제 결함을 교정.
+  - `AutoVerifyState`가 정의만 되고 사용되지 않던 문제를 수정하여 `ToolFinished(is_error=true)`와 `ToolError` 모두에서 힐링 상태 전이 및 최대 3회 제한을 적용.
+  - `send_chat_message_internal()` 후속 재전송 경로에 Tool Schema 주입을 공통화하여, 자가 복구 턴에서도 모델이 후속 도구 호출을 지속할 수 있게 함.
+  - `TimelineBlock.depth`와 `tui/layout.rs` 인덴트 렌더링을 연결하여 `ToolRun`/`Approval`/`Auto-Verify Notice`가 실제로 `└─` 계층 구조로 표시되도록 수정.
+  - `is_actionable_input()` 기반 선제 차단을 제거하고, 비작업성 입력에서도 모델이 구조화된 `tool_calls`를 반환하면 Permission Engine 아래에서 계속 처리되도록 완화.
+  - 회귀 테스트 추가: Auto-Verify 재시도 상한, depth 생성, tool schema 주입, 완화된 가드레일 동작 검증.
+
 - [2026-04-14] : 기초 기획 및 Task 로드맵 정의
 - [2026-04-14] : OpenRouter/Gemini 제공자 MVP 축소 결정 및 문서 반영
 - [2026-04-14] : Phase 1 완료 (안전한 초기화 수행, tokio/ratatui 메인 루프 연동, 레이아웃 분할 구현, cargo check 무결성 검증)
@@ -573,3 +611,101 @@ cargo test  ✅ 46 passed (0 failed)
 - Warp Blocks / Universal Input: 블록 단위 작업 맥락, 입력 툴벨트
 - Textual Command Palette: command discoverability
 - Ratatui Layout / Style / Tachyonfx: 반응형 레이아웃과 경량 모션
+
+---
+
+## Phase 16: Deep UI Interactivity & Provider Hardening (v0.1.0-beta.26)
+
+이 페이즈는 Phase 15의 블록 기반 TUI 위에 접기/펼치기(Fold/Unfold) 상호작용과 도메인 에러(`ProviderError`) 일원화를 추가하는 것을 목표로 구현된다.
+
+### 16.1 시스템 분해표 및 파일 책임
+| 시스템 | 파일 경로 | 예정 책임 |
+| --- | --- | --- |
+| **Block State Layer** | `src/app/state.rs` | `BlockDisplayMode` enum 추가. `TimelineBlock`에 `toggle_collapse()` 헬퍼 구현. |
+| **Input Routing Layer** | `src/app/mod.rs` | 타임라인 포커스 상태에서 `Enter` 입력 시 선택된 블록의 상태를 토글하는 로직 추가. |
+| **Timeline Renderer Layer** | `src/tui/layout.rs` | `display_mode == Collapsed`일 때 Diff를 그리지 않고 1줄짜리 요약 스팬(`[ +N / -M ]`)만 그리도록 분기. |
+
+### 16.2 경계 계약 요약 (Typed Contracts & Formulas)
+- **Diff 접기/펼치기 공식**:
+  - `additions`: Diff 중 `+`로 시작하는 라인 수 (단, `+++`는 제외)
+  - `deletions`: Diff 중 `-`로 시작하는 라인 수 (단, `---`는 제외)
+  - **Threshold**: `additions + deletions > 10`
+  - 초과 시 `display_mode = BlockDisplayMode::Collapsed` 기본 할당.
+- **렌더링 데이터(Real Data)**: `[ +14 lines / -3 lines ] (Enter 키로 펼치기)`
+
+### 16.3 구현 순서 권장 (Execution Path)
+- [x] **Step 1: State Extension** - `BlockDisplayMode` Enum 및 `TimelineBlock.display_mode/diff_summary` 필드, 토글 메서드 추가 완료 (`src/app/state.rs`).
+- [x] **Step 2: Diff Summary Calculation** - `ReplaceFileContent` 블록 추가 시 `additions`와 `deletions`를 카운트하여 10줄을 초과하면 `Collapsed`로 설정 (`src/app/mod.rs` 및 `src/tools/file_ops.rs`).
+- [x] **Step 3: Render Logic 분기** - `src/tui/layout.rs`의 `TimelineBlockKind::ToolRun` 렌더러에서 `display_mode`에 따라 요약 라벨만 렌더링하거나 원본 스팬을 렌더링하도록 분기 완료.
+- [x] **Step 4: Input Binding** - `src/app/mod.rs`에서 `Enter` 입력 시 현재 선택된 타임라인 블록의 상태 토글 완료.
+
+### 16.4 Task 2: 에러 시그니처 완전 구조화 및 전파 (Error Types Unification)
+- [x] **Step 1: ConfigError Unification** - `src/infra/config_store.rs`의 `anyhow::Result` 반환을 `Result<T, ConfigError>`로 변경하고 에러 종류별 세분화.
+- [x] **Step 2: ProviderError Unification** - `src/providers/registry.rs`의 `ProviderAdapter` 트레잇과 어댑터 내부의 `anyhow::Result`를 `Result<T, ProviderError>`로 전환하고 `NetworkFailure`, `ApiResponse`, `AuthenticationFailed` 등으로 구조화.
+
+### 16.5 Task 3: Provider-Specific Native Tool Call 세분화 (Dialect 추상화)
+- [x] **Step 1: ToolDialect Enum** - `src/domain/provider.rs`에 `ToolDialect` Enum(`OpenAICompat`, `Anthropic`, `Gemini`) 추가.
+- [x] **Step 2: Schema Processing** - `src/tools/registry.rs`의 `all_schemas` 메서드에서 `ToolDialect`를 주입받아, Gemini의 경우 `parameters.required` 배열이 없으면 명시적으로 `[]`를 삽입하도록 예외 처리.
+- [x] **Step 3: Chat Runtime 연동** - `src/app/chat_runtime.rs`의 `build_streaming_chat_request`에서 `ProviderKind`를 통해 알맞은 방언을 추론하여 Schema를 제공.
+
+## Phase 17: Windows Shell Host Alignment & Workspace Trust Gate
+이 페이즈는 Windows 환경에서의 셸 런타임 분리(Host vs Exec) 및 작업 디렉터리에 대한 명시적 신뢰(Trust) 상태를 관리하는 보안 게이트를 구축한다. 신뢰되지 않은 환경에서는 파일 쓰기 및 파괴적 셸 실행이 엄격하게 차단된다.
+
+### 17.1 시스템 분해표 및 파일 책임
+| 시스템 | 파일 경로 | 예정 책임 |
+| --- | --- | --- |
+| **Trust Model & Storage** | `src/domain/settings.rs`<br>`src/domain/workspace.rs` | `WorkspaceTrustState`, `WorkspaceTrustRecord` 정의 및 `PersistedSettings` 내 신뢰 디렉터리(`trusted_workspaces`, `denied_roots`) 필드 추가. |
+| **Trust Gate UI** | `src/app/wizard_controller.rs`<br>`src/tui/widgets/trust_gate.rs` | 시작 시 현재 작업 디렉터리가 `Unknown` 상태일 경우, 3가지 선택지(Trust Once, Trust & Remember, Restricted)를 제공하는 프롬프트 렌더링. |
+| **Permission Engine 연동** | `src/domain/permissions.rs` | 권한 검사 시 현재 `trust_state`를 조회하여 `Restricted` 또는 `Denied` 상태면 쓰기/실행 도구(`WriteFile`, `ExecShell`)의 권한을 차단. |
+| **Shell Host 추론 및 실행** | `src/tools/shell.rs`<br>`src/app/state.rs` | Windows 환경에서 현재 호스트 셸과 무관하게 실행 셸(`exec_shell`)을 `pwsh` 또는 `powershell.exe`로 강제 지정 및 런타임 탐지 로직 추가. |
+| **REPL 명령어 및 상태 표시** | `src/app/command_router.rs`<br>`src/tui/layout.rs` | `/workspace trust`, `/workspace add`, `/workspace deny` 슬래시 명령어 추가. 상태바 및 `/status` 명령어 출력에 현재 Host/Exec 셸 정보 및 Trust 상태 노출. |
+
+### 17.2 경계 계약 요약 (Typed Contracts)
+- **신뢰 상태 모델 (WorkspaceTrustState)**:
+  - `Unknown`: 아직 평가되지 않음 (프롬프트 노출 대상).
+  - `Trusted`: 쓰기 및 셸 실행 허용 (기존 PermissionPolicy 적용).
+  - `Restricted`: 읽기/탐색 전용 모드. `WriteFile`, `ReplaceFileContent`, `ExecShell` 도구 원천 차단.
+- **Windows Exec Shell 결정 로직**:
+  - `pwsh` (PowerShell Core) 확인 -> 존재 시 최우선 사용.
+  - `powershell.exe` (Windows PowerShell) 확인 -> fallback.
+  - 둘 다 실패 시 에러 반환 후 `ExecShell` 도구 실행 거부.
+
+### 17.3 구현 순서 권장 (Execution Path)
+- [x] **Task 1: Workspace root 결정 유틸리티** - `src/infra/workspace_utils.rs` (신설)에서 현재 디렉터리 기반 상향 탐색(`.git` 또는 `Cargo.toml` 기준)으로 루트 경로 도출.
+- [x] **Task 2: Trust 정책 모델 영속화** - `PersistedSettings` 구조체 확장 및 로컬 스토리지(`config.toml`) 연동.
+- [x] **Task 3: Trust Gate UI** - `Unknown` 상태일 때의 차단 화면/프롬프트 작성 및 상태 머신(Wizard) 전이 로직 작성.
+- [x] **Task 4: Permission Engine 연동** - `Restricted` 상태일 경우 `PermissionResult::Denied` 반환과 함께 "Workspace is not trusted..." 안내문 출력.
+- [x] **Task 5: Windows Exec Shell 강제화** - `ExecShell`의 Windows `cmd` 분기를 `pwsh` 탐색 로직으로 교체.
+- [x] **Task 6: REPL 및 상태바 연동** - `/workspace` 서브 명령어 라우팅 추가 및 `layout.rs` 상단 상태바에 셸/Trust 상태 노출.
+
+## Phase 18: Multi-Provider Expansion & Advanced Agentic Tools (계획)
+이 페이즈는 2026년 4월 기준 최신 모델(GPT-5.4, Claude 4.7, Grok 4.20)들을 네이티브로 지원하고, 에이전트의 상황 인지 능력을 대폭 끌어올릴 수 있는 구조화된 시스템 도구(ListDir, GrepSearch, FetchURL)를 도입한다.
+
+### 18.1 시스템 분해표 및 파일 책임
+| 시스템 | 파일 경로 | 예정 책임 |
+| --- | --- | --- |
+| **Provider Registry & Adapters** | `src/domain/provider.rs`<br>`src/providers/openai.rs`<br>`src/providers/anthropic.rs`<br>`src/providers/xai.rs` | 각 Provider별 BaseURL, 모델명 리스트 관리 및 SDK 규격(또는 REST API) 연동. `ProviderAdapter` 트레이트 구현체 분리. |
+| **Advanced Tools** | `src/tools/list_dir.rs`<br>`src/tools/grep_search.rs`<br>`src/tools/fetch_url.rs` | 신규 도구 구조체 생성 및 `Tool` 트레이트 구현. JSON 결과물 포매팅 최적화. |
+| **Tool Registry 연동** | `src/tools/registry.rs` | 새로 만들어진 3개의 도구를 글로벌 레지스트리에 등록 및 각 도구의 `schema()` 정의. |
+| **Setup Wizard 업데이트** | `src/tui/widgets/setting_wizard.rs` | 기존 OpenRouter 외에 신규 Provider들의 API 키를 입력받을 수 있는 Wizard 플로우 확장. |
+
+### 18.2 경계 계약 요약 (Typed Contracts)
+- **ToolDialect 확장**:
+  ```rust
+  pub enum ToolDialect {
+      OpenAICompat,
+      AnthropicNative,
+      Gemini,
+      XAI,
+  }
+  ```
+- **신규 도구 입력 스키마**:
+  - `ListDirectory`: `{ "path": "string" }`
+  - `GrepSearch`: `{ "query": "string", "path": "string", "is_regex": "boolean" }`
+  - `FetchURL`: `{ "url": "string" }`
+
+### 18.3 구현 순서 권장 (Execution Path)
+- [ ] **Task 1: Provider 모델 및 Dialect 확장** - `provider.rs` 및 `registry.rs`에 신규 Provider 열거형, 2026.04 최신 모델 리스트(`gpt-5.4` 등) 추가.
+- [ ] **Task 2: API Adapter 구현** - `openai.rs`, `anthropic.rs`, `xai.rs` 생성 및 `ProviderAdapter` 구현.
+- [ ] **Task 3: Advanced Tools 구현** - `list_dir.rs`, `grep_search.rs`, `fetch_url.rs` 3종 도구 구현 로직 작성.
+- [ ] **Task 4: Registry 및 Wizard 연동** - 도구들을 시스템에 등록하고 초기 마법사 화면에서 API 키 입력 UI 업데이트.

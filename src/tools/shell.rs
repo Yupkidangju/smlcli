@@ -6,6 +6,7 @@
 
 use crate::domain::tool_result::ToolResult;
 use anyhow::Result;
+use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
@@ -18,6 +19,128 @@ pub(crate) async fn execute_shell(cmd: &str, cwd: Option<&str>) -> Result<ToolRe
     execute_shell_streaming(cmd, cwd, None).await
 }
 
+fn resolve_shell_cwd(cwd: Option<&str>) -> Result<PathBuf> {
+    let cwd_path = cwd.unwrap_or(".");
+    let host_cwd = Path::new(cwd_path);
+    let resolved = if host_cwd.is_absolute() {
+        host_cwd.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(host_cwd)
+    };
+    resolved
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("작업 디렉터리 확인 실패 ({}): {}", resolved.display(), e))
+}
+
+pub fn command_in_path(binary: &str) -> Option<PathBuf> {
+    let paths = std::env::var_os("PATH")?;
+    std::env::split_paths(&paths)
+        .map(|dir| dir.join(binary))
+        .find(|candidate| candidate.exists())
+}
+
+#[cfg(target_os = "linux")]
+fn build_linux_sandbox_command(cmd: &str, host_cwd: &Path) -> Result<Command> {
+    let Some(bwrap) = command_in_path("bwrap") else {
+        return Err(anyhow::anyhow!(
+            "Linux 샌드박스 백엔드 'bwrap'을 찾을 수 없습니다. bubblewrap 설치가 필요합니다."
+        ));
+    };
+
+    let workspace_mount = "/workspace";
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let cargo_home = format!("{}/.cargo", home);
+    let rustup_home = format!("{}/.rustup", home);
+
+    let mut command = Command::new(bwrap);
+    command
+        .arg("--unshare-all")
+        .arg("--share-net")
+        .arg("--die-with-parent")
+        .arg("--new-session")
+        .arg("--proc")
+        .arg("/proc")
+        .arg("--dev")
+        .arg("/dev")
+        .arg("--ro-bind")
+        .arg("/usr")
+        .arg("/usr")
+        .arg("--ro-bind")
+        .arg("/bin")
+        .arg("/bin")
+        .arg("--ro-bind-try")
+        .arg("/lib")
+        .arg("/lib")
+        .arg("--ro-bind-try")
+        .arg("/lib64")
+        .arg("/lib64")
+        .arg("--ro-bind-try")
+        .arg("/sbin")
+        .arg("/sbin")
+        .arg("--ro-bind")
+        .arg("/etc")
+        .arg("/etc")
+        .arg("--ro-bind-try")
+        .arg(&cargo_home)
+        .arg(&cargo_home)
+        .arg("--ro-bind-try")
+        .arg(&rustup_home)
+        .arg(&rustup_home)
+        .arg("--tmpfs")
+        .arg("/tmp")
+        .arg("--bind")
+        .arg(host_cwd)
+        .arg(workspace_mount)
+        .arg("--chdir")
+        .arg(workspace_mount)
+        .arg("--clearenv")
+        .arg("--setenv")
+        .arg("PATH")
+        .arg(format!("{}/bin:/usr/bin:/bin", cargo_home))
+        .arg("--setenv")
+        .arg("HOME")
+        .arg("/tmp")
+        .arg("--setenv")
+        .arg("CARGO_HOME")
+        .arg(&cargo_home)
+        .arg("--setenv")
+        .arg("RUSTUP_HOME")
+        .arg(&rustup_home)
+        .arg("sh")
+        .arg("-lc")
+        .arg(cmd);
+
+    Ok(command)
+}
+
+fn build_shell_command(cmd: &str, host_cwd: &Path) -> Result<Command> {
+    #[cfg(target_os = "linux")]
+    {
+        build_linux_sandbox_command(cmd, host_cwd)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut command = if cfg!(target_os = "windows") {
+            let shell_bin = if command_in_path("pwsh.exe").is_some() || command_in_path("pwsh").is_some() {
+                "pwsh"
+            } else if command_in_path("powershell.exe").is_some() {
+                "powershell.exe"
+            } else {
+                return Err(anyhow::anyhow!("PowerShell(pwsh 또는 powershell.exe)을 찾을 수 없습니다. Windows 환경에서 ExecShell을 실행할 수 없습니다."));
+            };
+            let mut c = Command::new(shell_bin);
+            c.arg("-Command").arg(cmd);
+            c
+        } else {
+            let mut c = Command::new("sh");
+            c.arg("-c").arg(cmd);
+            c
+        };
+        command.current_dir(host_cwd);
+        Ok(command)
+    }
+}
+
 /// [v0.1.0-beta.18] Phase 9-C: 스트리밍 모드 셸 실행.
 /// tx가 Some일 경우 각 출력 라인을 ToolOutputChunk로 비동기 전송.
 /// tx가 None이면 버퍼 모드(기존 동작)와 동일.
@@ -26,19 +149,8 @@ pub(crate) async fn execute_shell_streaming(
     cwd: Option<&str>,
     tx: Option<tokio::sync::mpsc::Sender<crate::app::event_loop::Event>>,
 ) -> Result<ToolResult> {
-    let cwd_path = cwd.unwrap_or(".");
-
-    let mut command = if cfg!(target_os = "windows") {
-        let mut c = Command::new("powershell");
-        c.arg("-Command").arg(cmd);
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.arg("-c").arg(cmd);
-        c
-    };
-
-    command.current_dir(cwd_path);
+    let host_cwd = resolve_shell_cwd(cwd)?;
+    let mut command = build_shell_command(cmd, &host_cwd)?;
 
     // [v0.1.0-beta.18] 스트리밍을 위해 stdout/stderr를 파이프로 연결
     command.stdout(std::process::Stdio::piped());
@@ -239,8 +351,10 @@ impl Tool for ExecShellTool {
                 let is_builtin_safe = if os == "windows" {
                     ["dir", "echo", "date", "cd", "type", "find"].contains(&parts[0])
                 } else {
-                    ["ls", "pwd", "date", "echo", "cat", "grep", "df", "free", "uname"]
-                        .contains(&parts[0])
+                    [
+                        "ls", "pwd", "date", "echo", "cat", "grep", "df", "free", "uname",
+                    ]
+                    .contains(&parts[0])
                 };
 
                 if safe_to_auto_run || is_custom_safe || is_builtin_safe {

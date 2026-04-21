@@ -16,14 +16,11 @@ impl App {
         msg: &crate::providers::types::ChatMessage,
     ) {
         if !self.state.runtime.user_intent_actionable {
-            if msg.tool_calls.is_some() {
-                self.state.runtime.logs_buffer.push(
-                    "[Harness] 비작업성 입력에 대한 도구 호출 감지 → 런타임에서 차단됨. \
-                     인삿말/잡담 입력에서는 도구를 사용하지 않음."
-                        .to_string(),
-                );
-            }
-            return;
+            self.state.runtime.logs_buffer.push(
+                "[Harness] 비작업성 입력으로 분류되었지만, 모델이 구조화된 도구 호출을 반환하면 \
+                 모델 판단을 우선한다."
+                    .to_string(),
+            );
         }
 
         if let Some(tool_calls) = &msg.tool_calls {
@@ -39,16 +36,17 @@ impl App {
                     && let Some(cmd) = tool_call.args.get("command").and_then(|v| v.as_str())
                     && cmd.trim().is_empty()
                 {
-                    self.state.runtime.logs_buffer.push(
-                        "[Harness] ExecShell 빈 명령 감지 → 실행 차단됨.".to_string(),
-                    );
                     self.state
-                        .ui
-                        .timeline
-                        .push(crate::app::state::TimelineBlock::new(
+                        .runtime
+                        .logs_buffer
+                        .push("[Harness] ExecShell 빈 명령 감지 → 실행 차단됨.".to_string());
+                    self.state.ui.timeline.push(
+                        crate::app::state::TimelineBlock::new(
                             crate::app::state::TimelineBlockKind::Notice,
-                            "⚠ 빈 명령은 실행할 수 없습니다."
-                        ));
+                            "⚠ 빈 명령은 실행할 수 없습니다.",
+                        )
+                        .with_depth(1),
+                    );
                     continue;
                 }
 
@@ -76,8 +74,9 @@ impl App {
         let tool_name = Self::format_tool_name(&tool_call);
         let mut block = crate::app::state::TimelineBlock::new(
             crate::app::state::TimelineBlockKind::ToolRun,
-            tool_name.clone()
-        );
+            tool_name.clone(),
+        )
+        .with_depth(1);
         block.status = crate::app::state::BlockStatus::Running;
         self.state.ui.timeline.push(block);
 
@@ -94,11 +93,12 @@ impl App {
                     last.kind = crate::app::state::TimelineBlockKind::Approval;
                     last.status = crate::app::state::BlockStatus::NeedsApproval;
                     last.body.push(crate::app::state::BlockSection::Markdown(
-                        Self::format_tool_detail(&tool_call)
+                        Self::format_tool_detail(&tool_call),
                     ));
                 }
                 self.state.runtime.approval.pending_tool = Some(tool_call.clone());
                 self.state.runtime.approval.pending_tool_call_id = tool_call_id;
+                self.state.runtime.approval.pending_since_ms = Some(super::App::unix_time_ms());
                 self.state.ui.show_inspector = true;
 
                 // Diff Preview 자동 매핑
@@ -116,7 +116,12 @@ impl App {
                         && block.status == crate::app::state::BlockStatus::Running
                     {
                         block.status = crate::app::state::BlockStatus::Error;
-                        block.body.push(crate::app::state::BlockSection::Markdown(format!("🛡 {}", reason)));
+                        block
+                            .body
+                            .push(crate::app::state::BlockSection::Markdown(format!(
+                                "🛡 {}",
+                                reason
+                            )));
                         break;
                     }
                 }
@@ -266,12 +271,14 @@ impl App {
             let tool = self.state.runtime.approval.pending_tool.take().unwrap();
             let tool_call_id = self.state.runtime.approval.pending_tool_call_id.take();
             self.state.runtime.approval.diff_preview = None;
+            self.state.runtime.approval.pending_since_ms = None;
 
             let tool_name = Self::format_tool_name(&tool);
             let mut block = crate::app::state::TimelineBlock::new(
                 crate::app::state::TimelineBlockKind::ToolRun,
                 tool_name,
-            );
+            )
+            .with_depth(1);
             block.status = crate::app::state::BlockStatus::Running;
             self.state.ui.timeline.push(block);
 
@@ -291,15 +298,16 @@ impl App {
             let tool_call_id = self.state.runtime.approval.pending_tool_call_id.take();
             self.state.runtime.approval.pending_tool = None;
             self.state.runtime.approval.diff_preview = None;
+            self.state.runtime.approval.pending_since_ms = None;
 
             // [v0.1.0-beta.18] 거부: 타임라인에 SystemNotice 추가
-            self.state
-                .ui
-                .timeline
-                .push(crate::app::state::TimelineBlock::new(
+            self.state.ui.timeline.push(
+                crate::app::state::TimelineBlock::new(
                     crate::app::state::TimelineBlockKind::Notice,
-                    "사용자가 도구 실행을 거부했습니다."
-                ));
+                    "사용자가 도구 실행을 거부했습니다.",
+                )
+                .with_depth(1),
+            );
 
             self.state
                 .domain
@@ -338,6 +346,7 @@ impl App {
                     self.execute_tool_async(tool_call, None);
                 } else {
                     self.state.runtime.approval.pending_tool = Some(tool_call);
+                    self.state.runtime.approval.pending_since_ms = Some(super::App::unix_time_ms());
                     self.state.ui.show_inspector = true;
                 }
             }

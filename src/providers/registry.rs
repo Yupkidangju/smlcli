@@ -1,5 +1,5 @@
 use crate::domain::provider::ProviderKind;
-use anyhow::Result;
+use crate::domain::error::ProviderError;
 use reqwest::Client;
 use std::future::Future;
 use std::pin::Pin;
@@ -9,14 +9,14 @@ pub trait ProviderAdapter: Send + Sync {
     fn validate_credentials<'a>(
         &'a self,
         api_key: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>>;
 
     /// Provider에 맞추어 채팅 요청을 전송하고 응답을 반환
     fn chat<'a>(
         &'a self,
         api_key: &'a str,
         req: crate::providers::types::ChatRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse, ProviderError>> + Send + 'a>>;
 
     /// [v0.1.0-beta.18] Phase 10: SSE 스트리밍 채팅.
     /// 델타 토큰을 tx로 실시간 전송하고, 완료 시 전체 응답을 반환.
@@ -25,13 +25,13 @@ pub trait ProviderAdapter: Send + Sync {
         api_key: &'a str,
         req: crate::providers::types::ChatRequest,
         delta_tx: tokio::sync::mpsc::Sender<String>,
-    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse, ProviderError>> + Send + 'a>>;
 
     /// 지원하는 모델 목록을 동적으로 가져옴
     fn fetch_models<'a>(
         &'a self,
         api_key: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, ProviderError>> + Send + 'a>>;
 }
 
 pub struct OpenRouterAdapter {
@@ -50,19 +50,19 @@ impl ProviderAdapter for OpenRouterAdapter {
     fn validate_credentials<'a>(
         &'a self,
         api_key: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>> {
         Box::pin(async move {
             let response = self
                 .client
                 .get("https://openrouter.ai/api/v1/auth/key")
                 .header("Authorization", format!("Bearer {}", api_key))
                 .send()
-                .await?;
+                .await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
 
             if response.status().is_success() {
                 Ok(())
             } else {
-                Err(anyhow::anyhow!("Invalid OpenRouter API Key"))
+                Err(ProviderError::AuthenticationFailed("Invalid OpenRouter API Key".into()))
             }
         })
     }
@@ -71,7 +71,7 @@ impl ProviderAdapter for OpenRouterAdapter {
         &'a self,
         api_key: &'a str,
         req: crate::providers::types::ChatRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse>> + Send + 'a>>
+    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse, ProviderError>> + Send + 'a>>
     {
         Box::pin(async move {
             #[derive(serde::Serialize)]
@@ -96,11 +96,12 @@ impl ProviderAdapter for OpenRouterAdapter {
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
                 .send()
-                .await?;
+                .await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
 
             if !response.status().is_success() {
+                let code = response.status().as_u16();
                 let err_text = response.text().await.unwrap_or_default();
-                return Err(anyhow::anyhow!("OpenRouter Error: {}", err_text));
+                return Err(ProviderError::ApiResponse { code, message: format!("OpenRouter Error: {}", err_text) });
             }
 
             #[derive(serde::Deserialize)]
@@ -116,7 +117,7 @@ impl ProviderAdapter for OpenRouterAdapter {
                 content: String,
             }
 
-            let mut parsed: OpenRouterRes = response.json().await?;
+            let mut parsed: OpenRouterRes = response.json().await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
             let reply_content = if !parsed.choices.is_empty() {
                 parsed.choices.remove(0).message.content
             } else {
@@ -146,7 +147,7 @@ impl ProviderAdapter for OpenRouterAdapter {
         api_key: &'a str,
         req: crate::providers::types::ChatRequest,
         delta_tx: tokio::sync::mpsc::Sender<String>,
-    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse>> + Send + 'a>>
+    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse, ProviderError>> + Send + 'a>>
     {
         Box::pin(async move {
             #[derive(serde::Serialize)]
@@ -173,11 +174,12 @@ impl ProviderAdapter for OpenRouterAdapter {
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
                 .send()
-                .await?;
+                .await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
 
             if !response.status().is_success() {
+                let code = response.status().as_u16();
                 let err_text = response.text().await.unwrap_or_default();
-                return Err(anyhow::anyhow!("OpenRouter Stream Error: {}", err_text));
+                return Err(ProviderError::ApiResponse { code, message: format!("OpenRouter Stream Error: {}", err_text) });
             }
 
             // SSE 라인 단위 파싱
@@ -186,7 +188,7 @@ impl ProviderAdapter for OpenRouterAdapter {
                 usize,
                 crate::providers::types::ToolCallRequest,
             > = std::collections::HashMap::new();
-            let body = response.text().await?;
+            let body = response.text().await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
             for line in body.lines() {
                 let line = line.trim();
                 if line.is_empty() || line.starts_with(':') {
@@ -265,16 +267,16 @@ impl ProviderAdapter for OpenRouterAdapter {
     fn fetch_models<'a>(
         &'a self,
         api_key: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, ProviderError>> + Send + 'a>> {
         Box::pin(async move {
             let response = self
                 .client
                 .get("https://openrouter.ai/api/v1/models")
                 .header("Authorization", format!("Bearer {}", api_key))
                 .send()
-                .await?;
+                .await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
             if !response.status().is_success() {
-                return Err(anyhow::anyhow!("Failed to fetch OpenRouter models"));
+                return Err(ProviderError::NetworkFailure("Failed to fetch OpenRouter models".into()));
             }
             #[derive(serde::Deserialize)]
             struct ModelObj {
@@ -285,7 +287,7 @@ impl ProviderAdapter for OpenRouterAdapter {
                 data: Vec<ModelObj>,
             }
 
-            let parsed: ModelRes = response.json().await?;
+            let parsed: ModelRes = response.json().await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
             Ok(parsed.data.into_iter().map(|m| m.id).collect())
         })
     }
@@ -307,18 +309,18 @@ impl ProviderAdapter for GeminiAdapter {
     fn validate_credentials<'a>(
         &'a self,
         api_key: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>> {
         Box::pin(async move {
             let url = format!(
                 "https://generativelanguage.googleapis.com/v1beta/models?key={}",
                 api_key
             );
-            let response = self.client.get(&url).send().await?;
+            let response = self.client.get(&url).send().await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
 
             if response.status().is_success() {
                 Ok(())
             } else {
-                Err(anyhow::anyhow!("Invalid Gemini API Key"))
+                Err(ProviderError::AuthenticationFailed("Invalid Gemini API Key".into()))
             }
         })
     }
@@ -327,7 +329,7 @@ impl ProviderAdapter for GeminiAdapter {
         &'a self,
         api_key: &'a str,
         req: crate::providers::types::ChatRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse>> + Send + 'a>>
+    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse, ProviderError>> + Send + 'a>>
     {
         Box::pin(async move {
             // Gemini의 OpenAI 호환 엔드포인트를 사용하여 완벽한 구조체 호환 통신 수행
@@ -353,11 +355,12 @@ impl ProviderAdapter for GeminiAdapter {
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
                 .send()
-                .await?;
+                .await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
 
             if !response.status().is_success() {
+                let code = response.status().as_u16();
                 let err_text = response.text().await.unwrap_or_default();
-                return Err(anyhow::anyhow!("Gemini Error: {}", err_text));
+                return Err(ProviderError::ApiResponse { code, message: format!("Gemini Error: {}", err_text) });
             }
 
             #[derive(serde::Deserialize)]
@@ -373,7 +376,7 @@ impl ProviderAdapter for GeminiAdapter {
                 content: String,
             }
 
-            let mut parsed: GeminiRes = response.json().await?;
+            let mut parsed: GeminiRes = response.json().await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
             let reply_content = if !parsed.choices.is_empty() {
                 parsed.choices.remove(0).message.content
             } else {
@@ -402,7 +405,7 @@ impl ProviderAdapter for GeminiAdapter {
         api_key: &'a str,
         req: crate::providers::types::ChatRequest,
         delta_tx: tokio::sync::mpsc::Sender<String>,
-    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse>> + Send + 'a>>
+    ) -> Pin<Box<dyn Future<Output = Result<crate::providers::types::ChatResponse, ProviderError>> + Send + 'a>>
     {
         Box::pin(async move {
             #[derive(serde::Serialize)]
@@ -429,15 +432,16 @@ impl ProviderAdapter for GeminiAdapter {
                 .header("Authorization", format!("Bearer {}", api_key))
                 .json(&payload)
                 .send()
-                .await?;
+                .await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
 
             if !response.status().is_success() {
+                let code = response.status().as_u16();
                 let err_text = response.text().await.unwrap_or_default();
-                return Err(anyhow::anyhow!("Gemini Stream Error: {}", err_text));
+                return Err(ProviderError::ApiResponse { code, message: format!("Gemini Stream Error: {}", err_text) });
             }
 
             let mut full_content = String::new();
-            let body = response.text().await?;
+            let body = response.text().await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
             for line in body.lines() {
                 let line = line.trim();
                 if line.is_empty() || line.starts_with(':') {
@@ -475,15 +479,15 @@ impl ProviderAdapter for GeminiAdapter {
     fn fetch_models<'a>(
         &'a self,
         api_key: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, ProviderError>> + Send + 'a>> {
         Box::pin(async move {
             let url = format!(
                 "https://generativelanguage.googleapis.com/v1beta/models?key={}",
                 api_key
             );
-            let response = self.client.get(&url).send().await?;
+            let response = self.client.get(&url).send().await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
             if !response.status().is_success() {
-                return Err(anyhow::anyhow!("Failed to fetch Gemini models"));
+                return Err(ProviderError::NetworkFailure("Failed to fetch Gemini models".into()));
             }
             #[derive(serde::Deserialize)]
             struct ModelObj {
@@ -494,7 +498,7 @@ impl ProviderAdapter for GeminiAdapter {
                 models: Vec<ModelObj>,
             }
 
-            let parsed: ModelRes = response.json().await?;
+            let parsed: ModelRes = response.json().await.map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
             // [v0.1.0-beta.7] Gemini API는 name을 "models/gemini-..." 형태로 반환하지만,
             // OpenAI 호환 엔드포인트의 chat/completions는 bare model id (예: "gemini-2.0-flash")를 요구함.
             // 공식 문서(https://ai.google.dev/gemini-api/docs/openai)의 예시: model="gemini-3-flash-preview"

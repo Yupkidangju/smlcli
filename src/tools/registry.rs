@@ -67,8 +67,27 @@ impl ToolRegistry {
         self.tools.get(name).map(|t| t.as_ref())
     }
 
-    pub fn all_schemas(&self) -> Vec<Value> {
-        self.tools.values().map(|t| t.schema()).collect()
+    pub fn all_schemas(&self, dialect: &crate::domain::provider::ToolDialect) -> Vec<Value> {
+        self.tools
+            .values()
+            .map(|t| {
+                let mut schema = t.schema();
+                apply_dialect(&mut schema, dialect);
+                schema
+            })
+            .collect()
+    }
+}
+
+/// Provider 방언(Dialect)에 맞게 JSON 스키마를 가공한다.
+fn apply_dialect(schema: &mut Value, dialect: &crate::domain::provider::ToolDialect) {
+    if dialect == &crate::domain::provider::ToolDialect::Gemini {
+        // Gemini: parameters 객체가 있을 경우, required 배열이 없으면 명시적으로 빈 배열이라도 넣어주는 것이 안전함
+        if let Some(func) = schema.get_mut("function")
+            && let Some(params) = func.get_mut("parameters")
+                && params.get("required").is_none() {
+                    params["required"] = serde_json::json!([]);
+                }
     }
 }
 

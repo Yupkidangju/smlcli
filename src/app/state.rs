@@ -10,8 +10,6 @@ pub enum InspectorTab {
     Recent,
 }
 
-
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum TimelineBlockKind {
     Conversation,
@@ -24,9 +22,15 @@ pub enum TimelineBlockKind {
 #[derive(Debug, Clone, PartialEq)]
 pub enum BlockSection {
     Markdown(String),
-    CodeFence { language: Option<String>, content: String },
+    CodeFence {
+        language: Option<String>,
+        content: String,
+    },
     KeyValueTable(Vec<(String, String)>),
-    ToolSummary { tool_name: String, summary: String },
+    ToolSummary {
+        tool_name: String,
+        summary: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,15 +42,26 @@ pub enum BlockStatus {
     NeedsApproval,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockDisplayMode {
+    Collapsed,
+    Expanded,
+}
+
 #[derive(Debug, Clone)]
 pub struct TimelineBlock {
     pub id: String,
     pub kind: TimelineBlockKind,
+    /// [v0.1.0-beta.25] Tree of Thoughts 렌더링용 계층 깊이.
+    /// 0은 루트 타임라인, 1 이상은 부모 응답에 종속된 도구/복구 카드다.
+    pub depth: u8,
     pub title: String,
     pub subtitle: Option<String>,
     pub body: Vec<BlockSection>,
     pub status: BlockStatus,
-    pub collapsed: bool,
+    pub display_mode: BlockDisplayMode,
+    pub role: Option<crate::providers::types::Role>,
+    pub diff_summary: Option<(usize, usize)>,
     pub pinned: bool,
     pub created_at_ms: u64,
 }
@@ -56,38 +71,72 @@ impl TimelineBlock {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             kind,
+            depth: 0,
             title: title.into(),
             subtitle: None,
             body: Vec::new(),
             status: BlockStatus::Idle,
-            collapsed: false,
+            display_mode: BlockDisplayMode::Expanded,
+            role: None,
+            diff_summary: None,
             pinned: false,
             created_at_ms: std::time::UNIX_EPOCH.elapsed().unwrap().as_millis() as u64,
         }
     }
+
+    /// [v0.1.0-beta.25] 문서 스펙의 트리형 타임라인을 맞추기 위한 깊이 지정 헬퍼.
+    pub fn with_depth(mut self, depth: u8) -> Self {
+        self.depth = depth;
+        self
+    }
+
+    pub fn with_role(mut self, role: crate::providers::types::Role) -> Self {
+        self.role = Some(role);
+        self
+    }
+
+    /// [v0.1.0-beta.26] 접기/펼치기 토글 헬퍼.
+    pub fn toggle_collapse(&mut self) {
+        self.display_mode = match self.display_mode {
+            BlockDisplayMode::Collapsed => BlockDisplayMode::Expanded,
+            BlockDisplayMode::Expanded => BlockDisplayMode::Collapsed,
+        };
+    }
 }
-
-
 
 pub struct DomainState {
     pub session: crate::domain::session::SessionState,
     pub settings: Option<crate::domain::settings::PersistedSettings>,
     pub session_logger: Option<crate::infra::session_log::SessionLogger>,
+    pub config_load_error: Option<String>,
 }
 
 impl DomainState {
     /// 비동기 초기화: config.toml 로드 및 세션 로거 생성
     pub async fn new_async() -> Self {
-        let loaded_settings = crate::infra::config_store::load_config()
+        let (loaded_settings, config_load_error) = match crate::infra::config_store::load_config()
             .await
-            .ok()
-            .flatten();
+        {
+            Ok(settings) => (settings, None),
+            Err(err) => {
+                let path = crate::infra::config_store::config_path();
+                (
+                    None,
+                    Some(format!(
+                        "설정 파일을 읽지 못했습니다: {}.\n문제가 지속되면 {} 파일을 복구하거나 삭제한 뒤 설정 마법사를 다시 진행하세요.",
+                        err,
+                        path.display()
+                    )),
+                )
+            }
+        };
         let session_logger = crate::infra::session_log::SessionLogger::new_session().ok();
 
         Self {
             session: crate::domain::session::SessionState::new(),
             settings: loaded_settings,
             session_logger,
+            config_load_error,
         }
     }
 }
@@ -141,6 +190,7 @@ impl Default for MotionProfile {
 
 pub struct UiState {
     pub is_wizard_open: bool,
+    pub trust_gate: TrustGateState,
     pub show_inspector: bool,
     pub active_inspector_tab: InspectorTab,
     pub fuzzy: FuzzyFinderState,
@@ -172,6 +222,7 @@ impl UiState {
     pub fn new(is_wizard_open: bool) -> Self {
         Self {
             is_wizard_open,
+            trust_gate: TrustGateState::new(),
             show_inspector: false,
             active_inspector_tab: InspectorTab::Preview,
             fuzzy: FuzzyFinderState::new(),
@@ -243,15 +294,81 @@ impl CommandPaletteState {
                 shortcut_hint: None,
             },
             PaletteCommand {
+                id: "/config",
+                title: "Settings Dashboard",
+                category: PaletteCategory::Navigation,
+                shortcut_hint: None,
+            },
+            PaletteCommand {
+                id: "/setting",
+                title: "Setup Wizard",
+                category: PaletteCategory::Navigation,
+                shortcut_hint: None,
+            },
+            PaletteCommand {
+                id: "/provider",
+                title: "Switch Provider",
+                category: PaletteCategory::Navigation,
+                shortcut_hint: None,
+            },
+            PaletteCommand {
+                id: "/model",
+                title: "Switch Model",
+                category: PaletteCategory::Navigation,
+                shortcut_hint: None,
+            },
+            PaletteCommand {
+                id: "/status",
+                title: "Session Info",
+                category: PaletteCategory::Session,
+                shortcut_hint: None,
+            },
+            PaletteCommand {
+                id: "/mode",
+                title: "PLAN ↔ RUN Toggle",
+                category: PaletteCategory::Session,
+                shortcut_hint: None,
+            },
+            PaletteCommand {
+                id: "/tokens",
+                title: "Token Usage",
+                category: PaletteCategory::Session,
+                shortcut_hint: None,
+            },
+            PaletteCommand {
                 id: "/compact",
                 title: "Compact Context",
                 category: PaletteCategory::Session,
                 shortcut_hint: None,
             },
             PaletteCommand {
+                id: "/theme",
+                title: "Toggle Theme",
+                category: PaletteCategory::Navigation,
+                shortcut_hint: None,
+            },
+            PaletteCommand {
                 id: "/clear",
                 title: "Clear Session",
                 category: PaletteCategory::Session,
+                shortcut_hint: None,
+            },
+            PaletteCommand {
+                id: "/workspace trust",
+                title: "Workspace: Trust & Remember",
+                category: PaletteCategory::Navigation,
+                shortcut_hint: None,
+            },
+            PaletteCommand {
+                id: "/workspace deny",
+                title: "Workspace: Restrict (Read-only)",
+                category: PaletteCategory::Navigation,
+                shortcut_hint: None,
+            },
+            PaletteCommand {
+                id: "/workspace clear",
+                title: "Workspace: Clear Trust State",
+                category: PaletteCategory::Navigation,
                 shortcut_hint: None,
             },
             PaletteCommand {
@@ -278,17 +395,60 @@ pub enum AutoVerifyState {
     Healing { retries: usize },
 }
 
+pub struct RuntimeWorkspaceState {
+    pub root_path: String,
+    pub host_shell: String,
+    pub exec_shell: String,
+    pub trust_state: crate::domain::settings::WorkspaceTrustState,
+    pub trust_prompt_visible: bool,
+    pub extra_workspace_dirs: Vec<String>,
+}
+
+impl RuntimeWorkspaceState {
+    pub fn new() -> Self {
+        let host_shell = if cfg!(target_os = "windows") {
+            std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string())
+        } else {
+            std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string())
+        };
+
+        let exec_shell = if cfg!(target_os = "windows") {
+            if crate::tools::shell::command_in_path("pwsh.exe").is_some() || crate::tools::shell::command_in_path("pwsh").is_some() {
+                "pwsh".to_string()
+            } else if crate::tools::shell::command_in_path("powershell.exe").is_some() {
+                "powershell.exe".to_string()
+            } else {
+                "Not Found".to_string()
+            }
+        } else {
+            "sh (bwrap)".to_string()
+        };
+
+        Self {
+            root_path: String::new(),
+            host_shell,
+            exec_shell,
+            trust_state: crate::domain::settings::WorkspaceTrustState::Unknown,
+            trust_prompt_visible: false,
+            extra_workspace_dirs: Vec::new(),
+        }
+    }
+}
+
 pub struct RuntimeState {
     pub is_thinking: bool,
     pub approval: ApprovalState,
     pub logs_buffer: Vec<String>,
+    pub repo_map: crate::domain::repo_map::RepoMapState,
     // [v0.1.0-beta.22] assistant_turn_count 삭제됨.
     // 사유: 첫 턴 차단 로직이 제거되어 카운터만 증가하는 데드 코드였음.
     // 삭제 버전: v0.1.0-beta.22 (재감사 6차)
-    /// [v0.1.0-beta.22] 사용자의 마지막 입력이 작업 요청인지 여부.
-    /// false이면 인삿말/잡담으로 판단하여 도구 디스패치를 런타임에서 억제한다.
+    /// [v0.1.0-beta.25] 사용자의 마지막 입력을 작업성 힌트로 분류한 값.
+    /// LLM의 구조화된 도구 판단을 강제 차단하지 않고, 로깅/설명 보조용으로만 사용한다.
     pub user_intent_actionable: bool,
     pub auto_verify: AutoVerifyState,
+    pub workspace: RuntimeWorkspaceState,
+    pub active_chat_block_idx: Option<usize>,
 }
 
 impl RuntimeState {
@@ -297,8 +457,11 @@ impl RuntimeState {
             is_thinking: false,
             approval: ApprovalState::new(),
             logs_buffer: Vec::new(),
+            repo_map: crate::domain::repo_map::RepoMapState::new(),
             user_intent_actionable: true,
             auto_verify: AutoVerifyState::Idle,
+            workspace: RuntimeWorkspaceState::new(),
+            active_chat_block_idx: None,
         }
     }
 }
@@ -317,12 +480,17 @@ impl AppState {
         let ui = UiState::new(is_wizard_open);
         let runtime = RuntimeState::new();
 
-        Self {
+        let mut state = Self {
             should_quit: false,
             domain,
             ui,
             runtime,
+        };
+        if let Some(err) = state.domain.config_load_error.clone() {
+            state.apply_startup_config_error(err);
         }
+
+        state
     }
 
     /// [v0.1.0-beta.22] 테스트 전용 동기 생성자.
@@ -334,6 +502,7 @@ impl AppState {
             session: crate::domain::session::SessionState::new(),
             settings: None,
             session_logger: None,
+            config_load_error: None,
         };
         let ui = UiState::new(false);
         let runtime = RuntimeState::new();
@@ -343,6 +512,16 @@ impl AppState {
             ui,
             runtime,
         }
+    }
+
+    /// [v0.1.0-beta.26] 시작 시점 설정 로드 오류를 사용자에게 명시적으로 노출한다.
+    /// 기존에는 파싱 실패가 "설정 없음"처럼 보였기 때문에 복구 가이드를 위자드와 로그에 함께 남긴다.
+    pub(crate) fn apply_startup_config_error(&mut self, message: String) {
+        self.ui.is_wizard_open = true;
+        self.ui.wizard.err_msg = Some(message.clone());
+        self.runtime
+            .logs_buffer
+            .push(format!("[Startup Config Error] {}", message));
     }
 
     /// [v0.1.0-beta.21] 현재 설정된 테마에 따른 Palette 참조를 반환.
@@ -454,6 +633,26 @@ impl ConfigState {
     }
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub enum TrustGatePopup {
+    Closed,
+    Open { root: String },
+}
+
+pub struct TrustGateState {
+    pub popup: TrustGatePopup,
+    pub cursor_index: usize, // 0: Trust Once, 1: Trust & Remember, 2: Restricted
+}
+
+impl TrustGateState {
+    pub fn new() -> Self {
+        Self {
+            popup: TrustGatePopup::Closed,
+            cursor_index: 0,
+        }
+    }
+}
+
 pub struct ComposerState {
     pub input_buffer: String,
     pub history: Vec<String>,
@@ -474,6 +673,7 @@ pub struct ApprovalState {
     pub pending_tool: Option<crate::domain::tool_result::ToolCall>,
     pub pending_tool_call_id: Option<String>,
     pub diff_preview: Option<String>,
+    pub pending_since_ms: Option<u64>,
 }
 
 impl ApprovalState {
@@ -482,6 +682,7 @@ impl ApprovalState {
             pending_tool: None,
             pending_tool_call_id: None,
             diff_preview: None,
+            pending_since_ms: None,
         }
     }
 }
@@ -494,7 +695,7 @@ pub struct SlashMenuState {
 }
 
 impl SlashMenuState {
-    const ALL_COMMANDS: [(&'static str, &'static str); 12] = [
+    const ALL_COMMANDS: [(&'static str, &'static str); 13] = [
         ("/config", "Settings Dashboard"),
         ("/setting", "Setup Wizard"),
         ("/provider", "Switch Provider"),
@@ -504,6 +705,7 @@ impl SlashMenuState {
         ("/tokens", "Token Usage"),
         ("/compact", "Compress Context"),
         ("/theme", "Toggle Theme"),
+        ("/workspace", "Manage Workspace Trust"),
         ("/clear", "Clear Chat"),
         ("/help", "Show Help"),
         ("/quit", "Exit"),

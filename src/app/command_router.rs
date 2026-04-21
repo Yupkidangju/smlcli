@@ -95,12 +95,22 @@ impl App {
                 });
             }
             "/status" => {
+                let root = std::env::current_dir()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 let info = if let Some(s) = &self.state.domain.settings {
+                    let trust = s
+                        .get_workspace_trust(&root);
                     format!(
-                        "Provider: {}\nModel: {}\nBudget Used: {} tokens",
+                        "Provider: {}\nModel: {}\nBudget Used: {} tokens\nHost Shell: {}\nExec Shell: {}\nWorkspace Trust: {:?}\nDenied: {}",
                         s.default_provider,
                         s.default_model,
-                        self.state.domain.session.token_budget_used
+                        self.state.domain.session.token_budget_used,
+                        self.state.runtime.workspace.host_shell,
+                        self.state.runtime.workspace.exec_shell,
+                        trust,
+                        s.denied_roots.contains(&root)
                     )
                 } else {
                     "Not configured.".to_string()
@@ -150,15 +160,37 @@ impl App {
             }
             "/help" => {
                 let help_entries = vec![
-                    ("/config".to_string(), "설정 대시보드 (Settings Dashboard)".to_string()),
-                    ("/setting".to_string(), "셋업 위자드 (Setup Wizard)".to_string()),
-                    ("/provider".to_string(), "공급자 전환 (Switch Provider)".to_string()),
+                    (
+                        "/config".to_string(),
+                        "설정 대시보드 (Settings Dashboard)".to_string(),
+                    ),
+                    (
+                        "/setting".to_string(),
+                        "셋업 위자드 (Setup Wizard)".to_string(),
+                    ),
+                    (
+                        "/provider".to_string(),
+                        "공급자 전환 (Switch Provider)".to_string(),
+                    ),
                     ("/model".to_string(), "모델 전환 (Switch Model)".to_string()),
-                    ("/status".to_string(), "세션 상태 (Session Info)".to_string()),
-                    ("/mode".to_string(), "PLAN ↔ RUN 전환 (Toggle Mode)".to_string()),
-                    ("/tokens".to_string(), "토큰 사용량 (Token Usage)".to_string()),
-                    ("/compact".to_string(), "컨텍스트 압축 (Compress Context)".to_string()),
+                    (
+                        "/status".to_string(),
+                        "세션 상태 (Session Info)".to_string(),
+                    ),
+                    (
+                        "/mode".to_string(),
+                        "PLAN ↔ RUN 전환 (Toggle Mode)".to_string(),
+                    ),
+                    (
+                        "/tokens".to_string(),
+                        "토큰 사용량 (Token Usage)".to_string(),
+                    ),
+                    (
+                        "/compact".to_string(),
+                        "컨텍스트 압축 (Compress Context)".to_string(),
+                    ),
                     ("/theme".to_string(), "테마 전환 (Toggle Theme)".to_string()),
+                    ("/workspace".to_string(), "워크스페이스 신뢰 관리 (Manage Workspace Trust)".to_string()),
                     ("/clear".to_string(), "대화 초기화 (Clear Chat)".to_string()),
                     ("/help".to_string(), "도움말 (Help)".to_string()),
                     ("/quit".to_string(), "종료 (Exit)".to_string()),
@@ -167,14 +199,14 @@ impl App {
                     crate::app::state::TimelineBlockKind::Help,
                     "도움말",
                 );
-                block.body.push(crate::app::state::BlockSection::KeyValueTable(help_entries));
+                block
+                    .body
+                    .push(crate::app::state::BlockSection::KeyValueTable(help_entries));
                 self.state.ui.timeline.push(block);
             }
             "/quit" => {
                 self.state.should_quit = true;
             }
-            // [v0.1.0-beta.20] /theme 명령어: Default ↔ HighContrast 실시간 전환.
-            // designs.md §21.4 요구사항 반영.
             "/theme" => {
                 if let Some(settings) = &mut self.state.domain.settings {
                     let new_theme = if settings.theme == "high_contrast" {
@@ -217,6 +249,80 @@ impl App {
                             pinned: false,
                         });
                 }
+            }
+            "/workspace" => {
+                if parts.len() < 2 {
+                    self.state.domain.session.add_message(crate::providers::types::ChatMessage {
+                        role: crate::providers::types::Role::System,
+                        content: Some("Usage: /workspace <show|trust|deny|clear>".to_string()),
+                        tool_calls: None,
+                        tool_call_id: None,
+                        pinned: false,
+                    });
+                    return;
+                }
+                
+                let root = std::env::current_dir()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                let subcmd = parts[1];
+                let message;
+                
+                if let Some(settings) = &mut self.state.domain.settings {
+                    match subcmd {
+                        "show" => {
+                            let trust = settings.get_workspace_trust(&root);
+                            let is_denied = settings.denied_roots.contains(&root);
+                            message = format!("Workspace: {}\nTrust Level: {:?}\nDenied: {}", root, trust, is_denied);
+                        }
+                        "trust" => {
+                            settings.set_workspace_trust(&root, crate::domain::settings::WorkspaceTrustState::Trusted, true);
+                            settings.denied_roots.retain(|x| x != &root);
+                            message = format!("Workspace {} is now Trusted.", root);
+                            
+                            let settings_clone = settings.clone();
+                            tokio::spawn(async move {
+                                let _ = crate::infra::config_store::save_config(&settings_clone).await;
+                            });
+                        }
+                        "deny" => {
+                            settings.set_workspace_trust(&root, crate::domain::settings::WorkspaceTrustState::Restricted, true);
+                            if !settings.denied_roots.contains(&root) {
+                                settings.denied_roots.push(root.clone());
+                            }
+                            message = format!("Workspace {} is now Denied (Restricted).", root);
+                            
+                            let settings_clone = settings.clone();
+                            tokio::spawn(async move {
+                                let _ = crate::infra::config_store::save_config(&settings_clone).await;
+                            });
+                        }
+                        "clear" => {
+                            settings.remove_workspace_trust(&root);
+                            settings.denied_roots.retain(|x| x != &root);
+                            message = format!("Workspace {} trust records cleared.", root);
+                            
+                            let settings_clone = settings.clone();
+                            tokio::spawn(async move {
+                                let _ = crate::infra::config_store::save_config(&settings_clone).await;
+                            });
+                        }
+                        _ => {
+                            message = format!("Unknown workspace command: {}", subcmd);
+                        }
+                    }
+                } else {
+                    message = "Settings not available.".to_string();
+                }
+                
+                self.state.domain.session.add_message(crate::providers::types::ChatMessage {
+                    role: crate::providers::types::Role::System,
+                    content: Some(message),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    pinned: false,
+                });
             }
             _ => {
                 self.state

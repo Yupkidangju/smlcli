@@ -26,6 +26,11 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
                     list.push_str(&format!("   {}\n", prov));
                 }
             }
+            if let Some(err) = &state.ui.wizard.err_msg {
+                list.push_str("\n!! [Startup Error] !!\n");
+                list.push_str(err);
+                list.push('\n');
+            }
             list.push_str("\n(Use Up/Down to navigate, Enter to select)");
             list
         }

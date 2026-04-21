@@ -63,6 +63,12 @@ pub enum Action {
     /// [v0.1.0-beta.21] API 키 검증 결과 — 실패 시 ProviderError 사용.
     CredentialValidated(Result<(), crate::domain::error::ProviderError>),
 
+    /// [v0.1.0-beta.27] 비동기 Repo Map 갱신 완료.
+    RepoMapReady(String),
+
+    /// [v0.1.0-beta.27] Repo Map 갱신 실패.
+    RepoMapFailed(String),
+
     /// 컨텍스트 요약 성공
     ContextSummaryOk(String),
 

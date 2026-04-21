@@ -67,6 +67,7 @@ fn test_network_policy_deny_blocks_chat() {
         safe_commands: None,
         encrypted_keys: std::collections::HashMap::new(),
         theme: "default".to_string(),
+        ..Default::default()
     };
 
     // Deny 상태 확인
@@ -156,6 +157,7 @@ fn test_permission_engine_denies_shell_on_deny_policy() {
         safe_commands: None,
         encrypted_keys: std::collections::HashMap::new(),
         theme: "default".to_string(),
+        ..Default::default()
     };
 
     let tool = ToolCall {
@@ -190,7 +192,9 @@ fn test_config_state_defaults() {
 
 #[test]
 fn test_file_write_asks_permission() {
-    let settings = PersistedSettings::default();
+    let mut settings = PersistedSettings::default();
+    let root = std::env::current_dir().unwrap().to_string_lossy().to_string();
+    settings.set_workspace_trust(&root, crate::domain::settings::WorkspaceTrustState::Trusted, true);
     assert_eq!(settings.file_write_policy, FileWritePolicy::AlwaysAsk);
 
     let tool = ToolCall {
@@ -302,14 +306,156 @@ fn test_read_file_path_traversal_denied() {
 
 #[test]
 fn test_timeline_entry_creation() {
-    use crate::app::state::{TimelineBlock, TimelineBlockKind, BlockStatus};
+    use crate::app::state::{BlockStatus, TimelineBlock, TimelineBlockKind};
     // TimelineBlock 생성 및 상태 확인
     let mut block = TimelineBlock::new(TimelineBlockKind::ToolRun, "ExecShell");
     block.status = BlockStatus::Idle;
-    
+
     assert_eq!(block.kind, TimelineBlockKind::ToolRun);
     assert_eq!(block.status, BlockStatus::Idle);
     assert_eq!(block.title, "ExecShell");
+    assert_eq!(block.depth, 0, "기본 TimelineBlock은 루트 depth=0");
+    assert_eq!(
+        TimelineBlock::new(TimelineBlockKind::ToolRun, "ExecShell")
+            .with_depth(1)
+            .depth,
+        1,
+        "with_depth()로 depth를 지정할 수 있어야 함"
+    );
+}
+
+#[test]
+fn test_auto_verify_failure_context_preserves_tail_detail() {
+    use crate::app::App;
+    use crate::domain::tool_result::ToolResult;
+
+    let stderr = format!(
+        "{}\nTAIL_MARKER: mismatched types in src/lib.rs:88:17",
+        "rustc error context ".repeat(80)
+    );
+    let res = ToolResult {
+        tool_name: "ExecShell".to_string(),
+        stdout: "cargo check".to_string(),
+        stderr,
+        exit_code: 101,
+        is_error: true,
+        tool_call_id: None,
+    };
+
+    let detail = App::build_auto_verify_failure_context(&res);
+    assert!(
+        detail.contains("TAIL_MARKER"),
+        "자가 치유 컨텍스트는 후반부 에러 원인까지 보존해야 함"
+    );
+    assert!(
+        detail.contains("Exit Code: 101"),
+        "도구 실패 컨텍스트에 종료 코드가 포함되어야 함"
+    );
+}
+
+#[tokio::test]
+async fn test_load_config_from_path_reports_parse_error() {
+    let dir = std::env::temp_dir().join(format!(
+        "smlcli_bad_config_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "not = [valid toml").unwrap();
+
+    let err = crate::infra::config_store::load_config_from_path(&path)
+        .await
+        .expect_err("손상된 TOML은 명시적 에러를 반환해야 함");
+    let err_text = err.to_string();
+    assert!(
+        err_text.contains("설정 파일 파싱 실패"),
+        "파싱 실패 메시지가 유지되어야 함: {}",
+        err_text
+    );
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[test]
+fn test_apply_startup_config_error_guides_recovery() {
+    use crate::app::state::AppState;
+
+    let mut state = AppState::new_for_test();
+    state.ui.is_wizard_open = true;
+    state.apply_startup_config_error(
+        "설정 파일이 손상되었습니다. config.toml을 복구하거나 삭제 후 다시 설정하세요.".to_string(),
+    );
+
+    let err = state.ui.wizard.err_msg.as_deref().unwrap_or_default();
+    assert!(
+        err.contains("config.toml"),
+        "복구 가이드는 설정 파일 경로를 포함해야 함"
+    );
+    assert!(
+        err.contains("삭제"),
+        "복구 또는 초기화 안내가 포함되어야 함"
+    );
+    assert!(
+        state
+            .runtime
+            .logs_buffer
+            .iter()
+            .any(|line| line.contains("설정 파일이 손상되었습니다")),
+        "런타임 로그에도 시작 시점 설정 오류가 기록되어야 함"
+    );
+}
+
+#[test]
+fn test_git_checkpoint_non_git_repo_is_safe_false() {
+    let dir = std::env::temp_dir().join(format!(
+        "smlcli_non_git_repo_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let safe = crate::tools::git_checkpoint::create_checkpoint(
+        dir.to_string_lossy().as_ref(),
+        "WriteFile",
+    )
+    .expect("비-Git 디렉토리에서도 checkpoint 검사 자체는 실패하면 안 됨");
+    assert!(
+        !safe,
+        "Git 저장소가 아닌 경로에서는 rollback-safe checkpoint를 생성하면 안 됨"
+    );
+    crate::tools::git_checkpoint::rollback_checkpoint(dir.to_string_lossy().as_ref())
+        .expect("비-Git 디렉토리 rollback은 no-op 이어야 함");
+
+    let _ = std::fs::remove_dir(&dir);
+}
+
+#[test]
+fn test_detect_workspace_root_from_target_release() {
+    use crate::app::App;
+
+    let base = std::env::temp_dir().join(format!(
+        "smlcli_workspace_detect_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let repo_root = base.join("repo");
+    let target_release = repo_root.join("target").join("release");
+    std::fs::create_dir_all(&target_release).unwrap();
+    std::fs::write(repo_root.join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+
+    let detected = App::detect_workspace_root_from(&target_release);
+    assert_eq!(detected.as_deref(), Some(repo_root.as_path()));
+
+    let _ = std::fs::remove_file(repo_root.join("Cargo.toml"));
+    let _ = std::fs::remove_dir_all(&base);
 }
 
 // --- [v0.1.0-beta.18] Phase 9-C: 확장 테스트 6건 ---
@@ -372,7 +518,7 @@ fn test_read_file_normal_path_allowed() {
 
 #[test]
 fn test_timeline_entry_user_message() {
-    use crate::app::state::{TimelineBlock, TimelineBlockKind, BlockSection};
+    use crate::app::state::{BlockSection, TimelineBlock, TimelineBlockKind};
     let mut block = TimelineBlock::new(TimelineBlockKind::Conversation, "User");
     block.body.push(BlockSection::Markdown("hello".to_string()));
     assert_eq!(block.title, "User");
@@ -385,7 +531,7 @@ fn test_timeline_entry_user_message() {
 
 #[test]
 fn test_timeline_entry_system_notice() {
-    use crate::app::state::{TimelineBlock, TimelineBlockKind, BlockSection};
+    use crate::app::state::{BlockSection, TimelineBlock, TimelineBlockKind};
     let mut block = TimelineBlock::new(TimelineBlockKind::Notice, "SystemNotice");
     block.body.push(BlockSection::Markdown("경고".to_string()));
     assert_eq!(block.title, "SystemNotice");
@@ -945,7 +1091,7 @@ fn test_format_tool_name_and_detail() {
 /// 통합 테스트: process_tool_calls_from_response 실제 호출.
 /// - bare JSON(fenced 아님)은 도구로 디스패치되지 않아야 함
 /// - fenced JSON이 있으면 approval 상태로 전환되어야 함
-/// - 첫 턴이든 N번째 턴이든 동작이 동일해야 함 (하드가드 삭제 검증)
+/// - 비작업성 입력이어도 모델이 tool_calls를 반환하면 모델 판단을 우선해야 함
 #[tokio::test]
 async fn test_process_tool_calls_integration() {
     use crate::app::App;
@@ -989,18 +1135,27 @@ async fn test_process_tool_calls_integration() {
     };
     app.process_tool_calls_from_response(&tool_msg);
     let has_tool_activity = app.state.runtime.approval.pending_tool.is_some()
-        || app.state.ui.timeline.iter().any(|e| {
-            matches!(
-                e.kind,
-                crate::app::state::TimelineBlockKind::ToolRun
-            )
-        });
+        || app
+            .state
+            .ui
+            .timeline
+            .iter()
+            .any(|e| matches!(e.kind, crate::app::state::TimelineBlockKind::ToolRun));
     assert!(
         has_tool_activity,
         "tool_calls가 있는 메시지는 디스패치되어야 함 (승인 대기 또는 자동 실행)"
     );
+    assert!(
+        app.state
+            .ui
+            .timeline
+            .iter()
+            .filter(|e| matches!(e.kind, crate::app::state::TimelineBlockKind::ToolRun))
+            .all(|e| e.depth == 1),
+        "도구 블록은 Tree of Thoughts depth=1로 생성되어야 함"
+    );
 
-    // 3) 비작업성 입력(인삿말) — 도구 디스패치 차단
+    // 3) 비작업성 입력(인삿말) — 더 이상 런타임이 선제 차단하지 않음
     let (tx2, _rx2) = tokio::sync::mpsc::channel(8);
     let mut app2 = App {
         state: AppState::new_for_test(),
@@ -1008,16 +1163,24 @@ async fn test_process_tool_calls_integration() {
     };
     app2.state.runtime.user_intent_actionable = false;
     app2.process_tool_calls_from_response(&tool_msg);
-    let greeting_has_no_activity = app2.state.runtime.approval.pending_tool.is_none()
-        && !app2.state.ui.timeline.iter().any(|e| {
-            matches!(
-                e.kind,
-                crate::app::state::TimelineBlockKind::ToolRun
-            )
-        });
+    let greeting_has_activity = app2.state.runtime.approval.pending_tool.is_some()
+        || app2
+            .state
+            .ui
+            .timeline
+            .iter()
+            .any(|e| matches!(e.kind, crate::app::state::TimelineBlockKind::ToolRun));
     assert!(
-        greeting_has_no_activity,
-        "비작업성 입력(인삿말)에서는 도구가 디스패치되면 안 됨 (런타임 억제 검증)"
+        greeting_has_activity,
+        "비작업성 입력이어도 모델이 tool_calls를 반환하면 런타임이 차단하지 않아야 함"
+    );
+    assert!(
+        app2.state
+            .runtime
+            .logs_buffer
+            .iter()
+            .any(|line| line.contains("모델 판단을 우선")),
+        "완화된 가드레일은 로그로만 남겨야 함"
     );
 
     // 4) 작업 요청 입력(기본값 true) — 도구 디스패치 허용
@@ -1032,12 +1195,12 @@ async fn test_process_tool_calls_integration() {
     );
     app3.process_tool_calls_from_response(&tool_msg);
     let action_has_activity = app3.state.runtime.approval.pending_tool.is_some()
-        || app3.state.ui.timeline.iter().any(|e| {
-            matches!(
-                e.kind,
-                crate::app::state::TimelineBlockKind::ToolRun
-            )
-        });
+        || app3
+            .state
+            .ui
+            .timeline
+            .iter()
+            .any(|e| matches!(e.kind, crate::app::state::TimelineBlockKind::ToolRun));
     assert!(
         action_has_activity,
         "작업 요청 입력에서는 도구가 디스패치되어야 함"
@@ -1113,6 +1276,209 @@ fn test_is_actionable_input_heuristic() {
     assert!(is_actionable_input("build 해줘"), "빌드 요청은 작업성");
 }
 
+#[test]
+fn test_build_streaming_chat_request_includes_tool_schemas() {
+    use crate::app::App;
+    use crate::app::state::AppState;
+    use crate::providers::types::{ChatMessage, Role};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+    app.state.runtime.repo_map.cached =
+        Some("[Repo Map]\nFile: src/main.rs\n  - fn main".to_string());
+
+    let req = app.build_streaming_chat_request(
+        &crate::domain::provider::ProviderKind::OpenRouter,
+        "gpt-5".to_string(),
+        vec![ChatMessage {
+            role: Role::User,
+            content: Some("src/main.rs 읽어줘".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            pinned: false,
+        }],
+    );
+
+    assert!(req.stream, "표준 스트리밍 요청이어야 함");
+    assert!(
+        req.tools
+            .as_ref()
+            .is_some_and(|schemas| !schemas.is_empty()),
+        "초기 요청과 재전송 모두 도구 스키마를 포함해야 함"
+    );
+    assert!(
+        req.messages.iter().any(|msg| msg
+            .content
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with("[Repo Map]")),
+        "준비된 Repo Map 캐시는 실제 요청 메시지에 주입되어야 함"
+    );
+}
+
+#[tokio::test]
+async fn test_auto_verify_state_machine_caps_retries() {
+    use crate::app::App;
+    use crate::app::state::{
+        AppState, AutoVerifyState, BlockStatus, TimelineBlock, TimelineBlockKind,
+    };
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+    app.state.ui.timeline.push(
+        TimelineBlock::new(TimelineBlockKind::ToolRun, "ExecShell: cargo test").with_depth(1),
+    );
+
+    assert!(
+        app.advance_auto_verify_after_failure("cargo test failed"),
+        "첫 실패에서는 자동 복구를 시도해야 함"
+    );
+    assert_eq!(
+        app.state.runtime.auto_verify,
+        AutoVerifyState::Healing { retries: 1 }
+    );
+
+    assert!(
+        app.advance_auto_verify_after_failure("cargo test failed again"),
+        "두 번째 실패까지는 자동 복구를 계속 시도해야 함"
+    );
+    assert_eq!(
+        app.state.runtime.auto_verify,
+        AutoVerifyState::Healing { retries: 2 }
+    );
+
+    assert!(
+        !app.advance_auto_verify_after_failure("cargo test failed third time"),
+        "세 번째 실패에서는 자동 복구를 중단해야 함"
+    );
+    assert_eq!(app.state.runtime.auto_verify, AutoVerifyState::Idle);
+    let last = app.state.ui.timeline.last().expect("auto-verify notice");
+    assert_eq!(last.depth, 1, "자가 복구 알림도 depth=1이어야 함");
+    assert_eq!(
+        last.status,
+        BlockStatus::Error,
+        "마지막 알림은 Abort 에러 상태여야 함"
+    );
+    assert!(
+        matches!(last.kind, TimelineBlockKind::Notice),
+        "마지막 블록은 시스템 알림이어야 함"
+    );
+}
+
+#[test]
+fn test_repo_map_state_refresh_lifecycle() {
+    let mut state = crate::domain::repo_map::RepoMapState::new();
+    assert!(
+        state.begin_refresh(),
+        "빈 캐시는 즉시 refresh를 시작해야 함"
+    );
+    assert!(
+        !state.begin_refresh(),
+        "로딩 중에는 중복 refresh를 막아야 함"
+    );
+
+    state.finish_success("[Repo Map]\nFile: src/main.rs".to_string());
+    assert!(state.cached.is_some(), "성공 후 캐시가 채워져야 함");
+    assert!(!state.should_refresh(), "최신 캐시는 stale 아님");
+
+    state.mark_stale();
+    assert!(
+        state.should_refresh(),
+        "stale 처리 후 다시 refresh 대상이어야 함"
+    );
+}
+
+#[test]
+fn test_approval_timeout_expires_pending_request() {
+    use crate::app::App;
+    use crate::app::state::{AppState, BlockStatus, TimelineBlock, TimelineBlockKind};
+    use crate::domain::tool_result::ToolCall;
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+    let mut approval_block =
+        TimelineBlock::new(TimelineBlockKind::Approval, "ExecShell: cargo test").with_depth(1);
+    approval_block.status = BlockStatus::NeedsApproval;
+    app.state.ui.timeline.push(approval_block);
+    app.state.runtime.approval.pending_tool = Some(ToolCall {
+        name: "ExecShell".to_string(),
+        args: serde_json::json!({ "command": "cargo test" }),
+    });
+    app.state.runtime.approval.pending_since_ms = Some(1);
+
+    assert!(
+        app.expire_pending_approval_if_needed(5 * 60 * 1000 + 2),
+        "TTL 경과 후 승인 요청은 만료되어야 함"
+    );
+    assert!(
+        app.state.runtime.approval.pending_tool.is_none(),
+        "만료 후 pending tool이 비워져야 함"
+    );
+    assert!(
+        app.state
+            .ui
+            .timeline
+            .iter()
+            .any(|block| block.title == "승인 요청 시간 초과" && block.status == BlockStatus::Error),
+        "만료 사실이 타임라인에 시스템 알림으로 남아야 함"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn test_execute_shell_sandbox_blocks_etc_writes() {
+    let res = crate::tools::shell::execute_shell("touch /etc/smlcli_should_fail", Some("."))
+        .await
+        .expect("샌드박스 실행 자체는 ToolResult를 반환해야 함");
+    assert!(res.is_error, "샌드박스 밖 쓰기 시도는 실패해야 함");
+    assert!(
+        res.stderr.contains("Read-only file system"),
+        "읽기 전용 파일시스템 오류가 노출되어야 함: {}",
+        res.stderr
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn test_execute_shell_sandbox_allows_workspace_writes() {
+    let dir = std::env::temp_dir().join(format!(
+        "smlcli_sandbox_workspace_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let res = crate::tools::shell::execute_shell(
+        "touch sandbox_ok.txt && echo done",
+        Some(dir.to_string_lossy().as_ref()),
+    )
+    .await
+    .expect("워크스페이스 내부 쓰기는 실행 가능해야 함");
+    assert!(
+        !res.is_error,
+        "워크스페이스 쓰기는 성공해야 함: {}",
+        res.stderr
+    );
+    assert!(
+        dir.join("sandbox_ok.txt").exists(),
+        "샌드박스 내부 쓰기가 host cwd에 반영되어야 함"
+    );
+
+    let _ = std::fs::remove_file(dir.join("sandbox_ok.txt"));
+    let _ = std::fs::remove_dir(&dir);
+}
+
 // --- Phase 15 추가 회귀 테스트 ---
 
 #[test]
@@ -1135,13 +1501,27 @@ fn test_f2_inspector_toggle() {
     // F2 입력 (Inspector 토글 열기)
     let f2_key = KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE);
     app.handle_input(f2_key);
-    assert!(app.state.ui.show_inspector, "F2를 누르면 인스펙터가 보여야 함");
-    assert_eq!(app.state.ui.focused_pane, FocusedPane::Inspector, "인스펙터가 열리면 포커스를 받아야 함");
+    assert!(
+        app.state.ui.show_inspector,
+        "F2를 누르면 인스펙터가 보여야 함"
+    );
+    assert_eq!(
+        app.state.ui.focused_pane,
+        FocusedPane::Inspector,
+        "인스펙터가 열리면 포커스를 받아야 함"
+    );
 
     // 2) F2 다시 누름 -> Inspector 꺼지고 포커스 Composer로 복귀
     app.handle_input(f2_key);
-    assert!(!app.state.ui.show_inspector, "F2를 다시 누르면 인스펙터가 닫혀야 함");
-    assert_eq!(app.state.ui.focused_pane, FocusedPane::Composer, "인스펙터가 닫히면 포커스가 Composer로 복귀해야 함");
+    assert!(
+        !app.state.ui.show_inspector,
+        "F2를 다시 누르면 인스펙터가 닫혀야 함"
+    );
+    assert_eq!(
+        app.state.ui.focused_pane,
+        FocusedPane::Composer,
+        "인스펙터가 닫히면 포커스가 Composer로 복귀해야 함"
+    );
 }
 
 #[test]
@@ -1163,19 +1543,30 @@ fn test_ctrl_k_command_palette() {
     let ctrl_k = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
     app.handle_input(ctrl_k);
     assert!(app.state.ui.palette.is_open, "Ctrl+K로 팔레트가 열려야 함");
-    assert_eq!(app.state.ui.focused_pane, FocusedPane::Palette, "팔레트가 열리면 포커스를 받아야 함");
+    assert_eq!(
+        app.state.ui.focused_pane,
+        FocusedPane::Palette,
+        "팔레트가 열리면 포커스를 받아야 함"
+    );
 
     // 2) Ctrl+K 다시 누름 -> Palette 닫힘
     app.handle_input(ctrl_k);
-    assert!(!app.state.ui.palette.is_open, "Ctrl+K를 다시 누르면 팔레트가 닫혀야 함");
-    assert_eq!(app.state.ui.focused_pane, FocusedPane::Composer, "팔레트가 닫히면 포커스가 Composer로 복귀해야 함");
+    assert!(
+        !app.state.ui.palette.is_open,
+        "Ctrl+K를 다시 누르면 팔레트가 닫혀야 함"
+    );
+    assert_eq!(
+        app.state.ui.focused_pane,
+        FocusedPane::Composer,
+        "팔레트가 닫히면 포커스가 Composer로 복귀해야 함"
+    );
 }
 
 #[test]
 fn test_shift_enter_multiline_input() {
     use crate::app::App;
     use crate::app::state::{AppState, FocusedPane};
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, KeyEventKind, KeyEventState};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
     let mut app = App {
@@ -1198,16 +1589,15 @@ fn test_shift_enter_multiline_input() {
     app.handle_input(shift_enter);
 
     assert_eq!(
-        app.state.ui.composer.input_buffer,
-        "hello\n",
+        app.state.ui.composer.input_buffer, "hello\n",
         "Shift+Enter 입력 시 줄바꿈 문자가 버퍼에 추가되어야 함"
     );
 }
 #[test]
 fn test_mouse_wheel_routing() {
     use crate::app::App;
-    use crate::app::state::AppState;
-    use crossterm::event::{MouseEvent, MouseEventKind, KeyModifiers};
+    use crate::app::state::{AppState, FocusedPane};
+    use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
 
     let (tx, _rx) = tokio::sync::mpsc::channel(8);
     let mut app = App {
@@ -1218,29 +1608,183 @@ fn test_mouse_wheel_routing() {
     // Inspector 활성화
     app.state.ui.show_inspector = true;
     app.state.ui.inspector_scroll = 5;
-    app.state.ui.timeline_scroll_offset = 2;
+    app.state.ui.timeline_scroll = 2;
+    app.state.ui.timeline_follow_tail = false;
 
     // 1) column = 80 (Timeline width >= 72 이므로 Inspector 위)
     let mouse_up_insp = MouseEvent {
         kind: MouseEventKind::ScrollUp,
         column: 80,
-        row: 0,
+        row: 5,
         modifiers: KeyModifiers::NONE,
     };
     app.handle_mouse(mouse_up_insp);
-    assert_eq!(app.state.ui.inspector_scroll, 6, "Inspector 위에서 ScrollUp -> +1");
+    assert_eq!(
+        app.state.ui.inspector_scroll, 8,
+        "Inspector 위에서 ScrollUp -> +3"
+    );
     // 타임라인은 그대로여야 함
-    assert_eq!(app.state.ui.timeline_scroll_offset, 2);
+    assert_eq!(app.state.ui.timeline_scroll, 2);
 
     // 2) column = 10 (Timeline 위)
     let mouse_up_tl = MouseEvent {
         kind: MouseEventKind::ScrollUp,
         column: 10,
-        row: 0,
+        row: 5,
         modifiers: KeyModifiers::NONE,
     };
     app.handle_mouse(mouse_up_tl);
-    assert_eq!(app.state.ui.timeline_scroll_offset, 3, "Timeline 위에서 ScrollUp -> +1");
+    assert_eq!(
+        app.state.ui.timeline_scroll, 5,
+        "Timeline 위에서 ScrollUp -> +3"
+    );
+    assert!(
+        !app.state.ui.timeline_follow_tail,
+        "위로 스크롤하면 follow_tail이 꺼져야 함"
+    );
     // 인스펙터는 그대로여야 함
-    assert_eq!(app.state.ui.inspector_scroll, 6);
+    assert_eq!(app.state.ui.inspector_scroll, 8);
+
+    // 3) 맨 아래까지 내리면 follow_tail이 다시 켜져야 함
+    let mouse_down_tl = MouseEvent {
+        kind: MouseEventKind::ScrollDown,
+        column: 10,
+        row: 5,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(mouse_down_tl);
+    app.handle_mouse(mouse_down_tl);
+    app.handle_mouse(mouse_down_tl);
+    assert_eq!(app.state.ui.timeline_scroll, 0);
+    assert!(app.state.ui.timeline_follow_tail);
+
+    // 4) 클릭 위치에 따라 포커스가 올바른 패널로 이동해야 함
+    app.state.ui.focused_pane = FocusedPane::Timeline;
+    let click_composer = MouseEvent {
+        kind: MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        column: 5,
+        row: 29,
+        modifiers: KeyModifiers::NONE,
+    };
+    app.handle_mouse(click_composer);
+    assert_eq!(
+        app.state.ui.focused_pane,
+        FocusedPane::Composer,
+        "Composer 영역 클릭 시 Composer로 포커스가 가야 함"
+    );
+}
+
+// --- Phase 16/17 Regression Tests (Post-Audit Fixes) ---
+
+#[tokio::test]
+async fn test_trust_gate_modal_lock() {
+    use crate::app::App;
+    use crate::app::state::TrustGatePopup;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App::new(tx).await;
+    
+    // 강제로 TrustGate 열기
+    app.state.ui.trust_gate.popup = TrustGatePopup::Open { root: "/fake".to_string() };
+    
+    // 전역 키 (F2) 입력 시도
+    app.handle_input(KeyEvent::new(KeyCode::F(2), KeyModifiers::empty()));
+    // 무시되어야 하므로 show_inspector는 여전히 false여야 함
+    assert!(!app.state.ui.show_inspector);
+    
+    // 방향키 이동
+    app.handle_input(KeyEvent::new(KeyCode::Down, KeyModifiers::empty()));
+    assert_eq!(app.state.ui.trust_gate.cursor_index, 1);
+}
+
+#[tokio::test]
+async fn test_trust_once_non_persistence() {
+    use crate::domain::settings::{PersistedSettings, WorkspaceTrustState};
+    let mut settings = PersistedSettings::default();
+    
+    settings.set_workspace_trust("/trust_remember", WorkspaceTrustState::Trusted, true);
+    settings.set_workspace_trust("/trust_once", WorkspaceTrustState::Trusted, false);
+    
+    // config_store의 save 로직과 동일하게 필터링 적용 확인
+    let mut clean_settings = settings.clone();
+    clean_settings.trusted_workspaces.retain(|r| r.remember);
+    
+    let toml_str = toml::to_string(&clean_settings).unwrap();
+    assert!(toml_str.contains("/trust_remember"));
+    assert!(!toml_str.contains("/trust_once"));
+}
+
+#[tokio::test]
+async fn test_block_lifecycle_roles_runtime() {
+    use crate::app::App;
+    use crate::app::action::Action;
+    use crate::app::state::{BlockStatus, TimelineBlockKind};
+    use crate::providers::types::Role;
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App::new(tx).await;
+    
+    // Provide mock settings to pass credential validation
+    let mut mock_settings = crate::domain::settings::PersistedSettings {
+        default_provider: "Google".to_string(),
+        ..Default::default()
+    };
+    
+    // Use secret_store to set the encrypted api key
+    use secrecy::SecretString;
+    crate::infra::secret_store::save_api_key(&mut mock_settings, "google_key", &SecretString::new("mock_key".into())).unwrap();
+    
+    app.state.domain.settings = Some(mock_settings);
+    app.state.ui.is_wizard_open = false; // Disable wizard intercept
+    app.state.runtime.workspace.trust_state = crate::domain::settings::WorkspaceTrustState::Trusted;
+    app.state.ui.trust_gate.popup = crate::app::state::TrustGatePopup::Closed;
+    
+    // Simulate composer input
+    app.state.ui.composer.input_buffer = "hello AI".to_string();
+    app.dispatch_chat_request("hello AI".to_string());
+    
+    // Now there should be two blocks: User block and AI block.
+    // Wait, handle_enter_key in tests might not call send_chat_message if providers are not set or due to async task spawn...
+    // Actually, handle_enter_key triggers send_chat_message synchronously and spawns network call.
+    // Let's check timeline length.
+    let timeline = &app.state.ui.timeline;
+    assert_eq!(timeline.len(), 2, "Should create User block and AI block");
+    
+    let user_block = &timeline[0];
+    assert_eq!(user_block.kind, TimelineBlockKind::Conversation);
+    assert_eq!(user_block.role, Some(Role::User));
+    
+    let ai_block = &timeline[1];
+    assert_eq!(ai_block.kind, TimelineBlockKind::Conversation);
+    assert_eq!(ai_block.role, Some(Role::Assistant));
+    assert_eq!(ai_block.status, BlockStatus::Running);
+    
+    // Simulate ChatDelta
+    app.handle_action(Action::ChatDelta("streaming".to_string()));
+    
+    // Verify is_thinking is still true and content is appended correctly
+    assert!(app.state.runtime.is_thinking, "is_thinking should remain true during ChatDelta");
+    let ai_block = &app.state.ui.timeline[1];
+    if let crate::app::state::BlockSection::Markdown(text) = &ai_block.body[0] {
+        assert_eq!(text, "streaming");
+    } else {
+        panic!("Expected Markdown body");
+    }
+    
+    // Attempt concurrent chat submission
+    app.state.ui.composer.input_buffer = "Interrupt!".to_string();
+    app.handle_enter_key();
+    
+    // The timeline length should remain 2, because the submission was blocked
+    assert_eq!(app.state.ui.timeline.len(), 2, "Concurrent submission should be blocked");
+    assert_eq!(app.state.runtime.logs_buffer.last().unwrap(), "[Warning] 이전 요청이 진행 중입니다. 완료 후 입력해주세요.");
+    
+    // Simulate error action
+    app.handle_action(Action::ChatResponseErr(crate::domain::error::ProviderError::NetworkFailure("Mock Error".to_string())));
+    
+    // The AI block should now have the error appended and status Error
+    let updated_ai_block = &app.state.ui.timeline[1];
+    assert_eq!(updated_ai_block.status, BlockStatus::Error);
+    assert!(!app.state.runtime.is_thinking);
 }

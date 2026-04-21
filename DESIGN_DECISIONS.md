@@ -577,3 +577,151 @@ Phase 13~14를 통해 `smlcli`는 도구 호출, 자가 복구, 멀티라인 렌
 - **Negative**
   - `TimelineEntry` 중심 구현을 `TimelineBlock` 중심으로 재해석해야 하므로 초기 리팩토링 비용이 크다.
   - 포커스/스크롤 상태가 늘어나면서 상태 머신 테스트가 필수화된다.
+
+---
+
+## ADR-018: Auto-Verify 상태 머신 실연결과 LLM 우선 도구 판정
+
+### Status
+Accepted
+
+### Date
+2026-04-20
+
+### Context
+Phase 13 문서는 `AutoVerifyState::Healing`, 후속 재전송의 tool schema 유지, Tree of Thoughts depth 렌더링을 정의했지만 실제 구현은 이 세 축이 모두 느슨하게 연결되어 있었다.
+
+- `AutoVerifyState`는 `state.rs`에만 존재하고 `ToolFinished`/`ToolError` 경로에서 전혀 사용되지 않았다.
+- `send_chat_message_internal()` 재전송 경로는 초기 요청과 달리 tool schema를 포함하지 않아, 실패 이후 후속 도구 호출 능력이 약화됐다.
+- `is_actionable_input()` 휴리스틱이 모델의 구조화된 `tool_calls`를 런타임에서 차단하여 문서의 자율성 원칙과 충돌했다.
+- 타임라인 블록에는 `depth`가 없어 문서의 `└─` 계층 UI가 렌더링되지 않았다.
+
+### Decision
+1. 도구 실패는 모두 `advance_auto_verify_after_failure()`로 수렴시켜 동일한 상태 머신을 사용한다.
+   - 1차/2차 실패: `Healing { retries: 1|2 }`로 전이 후 재전송
+   - 3차 실패: `Abort` Notice를 남기고 `Idle`로 복귀, 추가 재전송 금지
+2. 초기 요청과 후속 재전송은 모두 `build_streaming_chat_request()`를 통해 동일한 tool schema 집합을 포함한다.
+3. 입력 의도 분류는 참고 신호만 제공하고, 구조화된 `tool_calls`는 모델 판단을 우선하여 실행 파이프라인으로 전달한다.
+4. `TimelineBlock.depth`를 도입하고 `ToolRun`/`Approval`/`Auto-Verify Notice`에 `depth: 1`을 부여하여 TUI에서 계층 인덴트를 렌더링한다.
+
+### Alternatives Considered
+- **문서를 구현에 맞춰 하향 조정**
+  - 감사 리포트가 지적한 실제 결함을 남겨둔 채 설명만 바꾸는 방식이므로 기각.
+- **휴리스틱 차단 유지 + 옵션 플래그 추가**
+  - 기본 경로가 계속 자율성 원칙을 어기므로 즉시 효과가 없다고 판단해 기각.
+
+### Consequences
+- 자가 복구 성공/중단 조건이 명시적 상태 전이로 정리되어 회귀 테스트가 쉬워진다.
+- 안전성 책임이 `is_actionable_input()`가 아니라 Permission Engine과 blocked command 정책으로 더 명확하게 수렴한다.
+- `mod.rs`의 액션 처리 책임이 다시 비대해졌으므로, 후속 단계에서 action handler 분리는 여전히 필요하다.
+
+---
+
+## ADR-019: 손상된 설정 파일 가시화와 Auto-Verify 상세 컨텍스트 분리
+
+### Status
+Accepted
+
+### Date
+2026-04-20
+
+### Context
+2차 감사 기준으로 보면 이전 수정 이후에도 두 가지 운영상 빈틈이 남아 있었다.
+
+- `load_config()` 자체는 `Err`를 반환하지만, 앱 초기화가 이를 `ok().flatten()`으로 삼켜서 손상된 `config.toml`이 단순한 "설정 없음"처럼 보였다.
+- Auto-Verify는 실패 후 재전송에서 UI용 짧은 요약을 그대로 사용해, 긴 Rust 컴파일 에러의 후반부 원인을 잃을 수 있었다.
+
+### Decision
+1. `DomainState::new_async()`는 설정 로드 실패를 삼키지 않고 `config_load_error`로 보존한다.
+2. `AppState::apply_startup_config_error()`가 Setup Wizard 첫 화면과 로그 버퍼에 복구/삭제 가이드를 즉시 주입한다.
+3. Auto-Verify는 두 종류의 실패 표현을 분리한다.
+   - 사용자 UI: 240자 Notice 요약
+   - 모델 재전송: `stderr` 우선, `stdout` 보조의 확장 실패 컨텍스트(앞/뒤 보존형)
+4. `logs_buffer`는 별도 락을 도입하지 않는다. 비동기 태스크가 직접 버퍼를 공유하지 않고 모두 `Event::Action`으로 직렬화되기 때문이다.
+
+### Alternatives Considered
+- **설정 파일 손상 시 즉시 앱 종료**
+  - 오류는 명확하지만, 사용자가 같은 화면에서 곧바로 복구를 시작할 수 없으므로 기각.
+- **logs_buffer에 `RwLock` 추가**
+  - 현재 소유권 모델상 경쟁 상태를 줄이지 못하고 복잡성만 늘리므로 기각.
+
+### Consequences
+- 사용자는 설정 파일 손상을 "API 키가 왜 없지?"가 아니라 구체적인 복구 지시로 받게 된다.
+- Auto-Verify가 긴 실패 로그의 후반부 단서를 더 잘 보존하여 무의미한 재시도를 줄일 수 있다.
+- 이벤트 루프 직렬화 계약이 코드와 문서 양쪽에서 더 분명해졌다.
+
+---
+
+## ADR-020: Linux Shell Sandbox 실체화와 Repo Map 비동기 캐시
+
+### Status
+Accepted
+
+### Date
+2026-04-20
+
+### Context
+3차 감사 기준으로 보면 두 가지 "이름만 있는" 기능이 실제로 남아 있었다.
+
+- `ExecShell`은 Permission 정책만 있었고 OS 레벨 격리가 전혀 없어, 승인 우회 시 호스트 전체에 쓰기를 시도할 수 있었다.
+- `Repo Map`은 생성 함수만 있고 실제 요청 주입 경로가 없었으며, 구현 자체도 동기 전체 스캔이었다.
+
+### Decision
+1. Linux `ExecShell`은 `bubblewrap (bwrap)`를 기본 샌드박스 백엔드로 사용한다.
+   - 호스트 루트는 읽기 전용 바인드
+   - 요청 `cwd`만 `/workspace`로 읽기/쓰기 허용
+   - `/tmp`는 tmpfs
+   - 네트워크는 유지(`--share-net`)하되 PID/IPC/UTS 등은 격리
+2. `Repo Map`은 `tokio::task::spawn_blocking`으로 생성하고, `RuntimeState.repo_map`에 캐시/로딩/오류/오염(stale) 상태를 유지한다.
+3. 채팅 요청은 준비된 Repo Map cache가 있을 때만 system message로 주입한다.
+4. `WriteFile`/`ReplaceFileContent`/`ExecShell` 후에는 Repo Map을 stale 처리하고 백그라운드 재생성을 예약한다.
+5. HITL 승인 대기는 5분 TTL을 두고 Tick 루프에서 자동 만료 처리한다.
+
+### Alternatives Considered
+- **블랙리스트 기반 PermissionEngine만 유지**
+  - 정책 우회 시 물리적 보호막이 없으므로 기각.
+- **Repo Map을 요청 직전에 동기 생성**
+  - 정확하지만 TUI 프리징을 피할 수 없으므로 기각.
+- **파일 감시 기반 증분 인덱서**
+  - 장기적으로는 더 좋지만 현재 슬라이스에서 구현 비용이 과도해 우선 stale+background refresh로 절충.
+
+### Consequences
+- Linux에서는 shell 실행이 실제 격리 계층을 갖게 되어 "정책만 있는 샌드박스" 상태를 벗어난다.
+- Repo Map은 이제 실제 요청에 주입되며, UI 루프를 막지 않는다.
+- Windows/macOS의 격리 parity는 아직 남아 있는 후속 과제다.
+
+---
+
+## ADR-021: Phase 17 Host Shell과 Exec Shell 분리 + Workspace Trust Gate 도입 계획
+
+### Status
+Accepted (구현 예정)
+
+### Date
+2026-04-21
+
+### Context
+현재 구현은 Windows에서 `ExecShell`이 PowerShell로 실행되지만, 사용자가 실제로 어떤 호스트 콘솔(`cmd.exe`, PowerShell, Windows Terminal) 위에서 앱을 띄웠는지와는 분리되어 있다. 또한 현재 작업 루트가 신뢰된 폴더인지 확인하는 단계가 없어, 사용자 관점에서 “어느 범위까지 제어권을 위임했는지”가 명확하지 않다.
+
+### Decision
+1. `Host shell`과 `Exec shell`은 별도 개념으로 문서와 UI에 구분해 노출한다.
+2. Windows exec shell은 `pwsh.exe`를 우선 사용하고, 없으면 `powershell.exe`로 fallback 한다.
+3. 앱 시작 시 현재 workspace root에 대한 `Workspace Trust Gate`를 통과해야 쓰기/셸 실행이 가능하다.
+4. Trust 상태는 `Unknown / Trusted / Restricted` 3상태로 동결한다.
+5. `Restricted`는 읽기 전용 탐색 모드이며, 쓰기/셸 실행은 Permission Engine 단계에서 강제 차단한다.
+6. trust 상태는 시작 시점 1회 선택만으로 끝내지 않고, REPL 명령과 설정 UI에서 계속 관리할 수 있게 한다.
+7. `denied_roots`는 trust 상태보다 우선하는 전역 차단 규칙으로 취급한다.
+8. 추가 workspace 디렉터리(`extra_workspace_dirs`)는 Gemini CLI의 multi-directory 지원 패턴처럼 별도 목록으로 관리한다.
+
+### Alternatives Considered
+- **호스트 콘솔을 강제로 PowerShell 창으로 재실행**
+  - 사용자의 기존 터미널 세션을 끊고 UX가 과도하게 침습적이므로 보류.
+- **Trust Gate 없이 경고 메시지만 표시**
+  - 사용자 의사결정이 구조화되지 않아 보호 루트 개념이 약해지므로 기각.
+- **시작 시 1회 trust prompt만 두고 이후 수정 불가**
+  - 운영 중 workspace 범위와 차단 루트를 조정할 수 없어 실제 사용성/관리성이 떨어지므로 기각.
+
+### Consequences
+- 사용자는 “어느 셸에서 앱이 돌고, 어느 셸이 실제 명령을 실행하는지”를 명확히 인지할 수 있다.
+- 작업 루트에 대한 신뢰 여부가 명시적 상태가 되어, 추후 보안 정책과 권한 모델을 더 정교하게 확장하기 쉬워진다.
+- trust workspace / deny roots / extra dirs를 REPL과 설정에서 함께 관리할 수 있어 장기 세션 운영성이 높아진다.

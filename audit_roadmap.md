@@ -177,3 +177,72 @@
 | Breakpoint 레이아웃 | 100/120/140 cols 스냅샷 | compact/standard/wide 레이아웃이 모두 안정적 |
 | Adaptive top bar | 상단 바 확인 | provider/model/mode/ctx가 우선 표시되고 덜 중요한 정보는 점진적으로 생략 |
 | ASCII 모션 정책 | 실행/승인/오류 상태 확인 | 상태 전달용 모션만 존재, 과한 깜빡임 없음 |
+
+---
+
+## Phase 16: Deep UI Interactivity & Provider Hardening 감사 기준
+
+### 16-A Collapsed Diff UI 감사
+
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| State 무결성 | `state.rs` 소스 확인 | `BlockDisplayMode` 타입 존재 및 `TimelineBlock`에 적용됨 |
+| 접기/펼치기 기본 조건 | 12줄 이상 Diff 생성 시뮬레이션 | 10줄을 초과하는 변경 사항은 타임라인 추가 시 `Collapsed`로 설정됨 |
+| 렌더링 표기 | 렌더링 결과 확인 | `[ +N lines / -M lines ] (Enter 키로 펼치기)` 형식의 `muted` 스타일 라인이 노출됨 |
+| 상태 스왑 라우팅 | 타임라인 포커스 후 Enter 입력 | Enter 입력 시 블록의 `Collapsed` ↔ `Expanded` 상태가 즉시 토글됨 |
+
+### 16-B Provider & Config Error 구조화 감사
+
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| ConfigError 타입 | `config_store.rs` 확인 | `anyhow::Result` 대신 `Result<T, ConfigError>`가 사용되며 NotFound/ParseFailure 등이 명확히 분리됨 |
+| ProviderError 타입 | `registry.rs` 확인 | `ProviderAdapter`가 `Result<T, ProviderError>`를 반환하며 Network/Api/Auth 에러가 도메인 레벨에서 구분됨 |
+| 에러 노출 무결성 | 설정 로드 실패 시뮬레이션 | 에러가 뭉뚱그려지지 않고 명시적인 복구 가이드와 함께 UI로 노출됨 |
+
+### 16-C Tool Dialect 추상화 감사
+
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| Dialect Enum | `provider.rs` 확인 | `ToolDialect` enum (`Anthropic`, `OpenAICompat`, `Gemini`) 존재 |
+| 스키마 변환 적용 | `tools/registry.rs` 확인 | `all_schemas(&dialect)` 호출 시 Provider에 맞춰 JSON Schema가 패치됨 (예: Gemini의 빈 `required` 배열 강제 삽입) |
+| Runtime 연동 | `chat_runtime.rs` 확인 | `ProviderKind`에 따라 올바른 `ToolDialect`를 추론하여 스키마 조립에 사용함 |
+
+---
+
+## Phase 17: Workspace Trust Gate & Shell Alignment 감사 기준
+
+### 17-A Workspace Trust Gate 감사
+
+| 항목 | 검증 초점 | 합격 기준 |
+|------|-----------|-----------|
+| 시작 차단 프롬프트 | `Unknown` 워크스페이스에서 앱 실행 | 메인 렌더링 전 Trust 선택(3옵션) 프롬프트가 노출되며 선택 전까지 입력 불가 |
+| Restricted 격리 | `Restricted` 선택 후 도구 동작 시뮬레이션 | `WriteFile`, `ReplaceFileContent`, `ExecShell` 권한 검사 시 `Denied` 반환 및 차단 알림 발생 |
+| Trust 영속화 | `Trust & Remember` 후 앱 재시작 | `config.toml`에 정책 저장되어 다음 실행 시 프롬프트 노출 없이 `Trusted` 상태 유지 |
+| REPL 및 상태 연동 | `/workspace` 커맨드 입력 | 현재 루트, 권한 상태가 상태바에 명시되며 슬래시 명령어로 신뢰/차단/조회 가능 |
+
+### 17-B Windows Shell Host Alignment 감사
+
+| 항목 | 검증 초점 | 합격 기준 |
+|------|-----------|-----------|
+| Exec Shell 환경 추론 | Windows에서 실행 후 `cmd` 또는 `pwsh` 환경 감지 | `pwsh` 혹은 `powershell.exe`가 최우선으로 `ExecShell`의 셸 백엔드로 동작함 |
+| 정책 예외 테스트 | Linux의 bwrap 모드 구동 확인 | OS별 분기(linux/windows)가 올바르게 분리 적용됨 |
+
+---
+
+## Phase 18: Multi-Provider Expansion & Advanced Agentic Tools 감사 기준 (계획)
+
+### 18-A Multi-Provider & Model Grounding 감사
+
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| 2026.04 모델명 유효성 | `src/domain/provider.rs` 및 `config.toml` 확인 | `gpt-5.4`, `claude-opus-4.7`, `grok-4.20` 등 최신 모델 라인업이 명시되어야 함 |
+| Base URL 무결성 | 각 Provider Adapter 네트워크 호출 인터셉트 | OpenAI(`api.openai.com/v1`), Anthropic(`api.anthropic.com/v1/messages`), xAI(`api.x.ai/v1`) 엔드포인트 올바른 전송 확인 |
+| Dialect 호환성 | `chat_runtime.rs` 및 Tool JSON Schema 조립 확인 | 각 Provider의 요구사항(Gemini의 빈 배열 required 등)이 Dialect를 통해 정확히 패치됨 |
+
+### 18-B Advanced Tools (에이전트 부가 도구) 감사
+
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| ListDirectory | `ListDirectory` ToolCall을 빈 디렉터리 및 다중 파일 디렉터리에 실행 | 파일 크기, 종류가 포함된 JSON 트리가 정상 반환되며 무한 루프나 권한 패닉이 발생하지 않음 |
+| GrepSearch | `GrepSearch` ToolCall로 정규표현식 매칭 실행 (`is_regex: true`) | 일치하는 파일 경로와 라인 넘버, 텍스트 일부분이 정확히 도출됨 |
+| FetchURL | `FetchURL` ToolCall로 외부 문서 URL 요청 시뮬레이션 | HTML/데이터가 Markdown 텍스트로 적절히 파싱되어 컨텍스트에 삽입됨 |

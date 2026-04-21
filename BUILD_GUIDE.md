@@ -6,6 +6,7 @@
 
 - **Rust**: 버킷의 안정적인 `stable` 채널 최신 버전 (Edition 2024 지원 필수)
 - **OS**: Linux (Ubuntu, Debian 계열 권장) 및 Windows 10/11 (PowerShell 환경 또는 WSL2 동시 검증용)
+- **Linux Sandbox Runtime**: Linux에서 `ExecShell`의 실제 격리를 사용하려면 `bubblewrap`(`bwrap`)가 설치되어 있어야 합니다.
 
 ## 프로젝트 빌드 과정
 
@@ -13,7 +14,7 @@
 OpenSSL이 빌드 과정 중 C-바인딩을 요구할 수 있습니다. (keyring 의존성은 v0.1.0-beta.14에서 제거됨)
 ```bash
 sudo apt-get update
-sudo apt-get install pkg-config libssl-dev libc++-dev
+sudo apt-get install pkg-config libssl-dev libc++-dev bubblewrap
 ```
 
 ### 2. 저장소 준비 및 실행

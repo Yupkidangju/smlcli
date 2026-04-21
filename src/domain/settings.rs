@@ -9,6 +9,22 @@ use super::permissions::{FileWritePolicy, NetworkPolicy, ShellPolicy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+#[derive(Default, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum WorkspaceTrustState {
+    #[default]
+    Unknown,
+    Trusted,
+    Restricted,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceTrustRecord {
+    pub root_path: String,
+    pub state: WorkspaceTrustState,
+    pub remember: bool,
+    pub updated_at_unix_ms: u64,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PersistedSettings {
     pub version: u32,
@@ -29,6 +45,13 @@ pub struct PersistedSettings {
     /// "default" 또는 "high_contrast". designs.md §21 참조.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// [Workspace Trust] Workspace root별 신뢰 상태 레코드 목록.
+    #[serde(default)]
+    pub trusted_workspaces: Vec<WorkspaceTrustRecord>,
+    #[serde(default)]
+    pub denied_roots: Vec<String>,
+    #[serde(default)]
+    pub extra_workspace_dirs: Vec<String>,
 }
 
 /// theme 필드의 기본값: "default"
@@ -48,6 +71,43 @@ impl Default for PersistedSettings {
             safe_commands: None,
             encrypted_keys: HashMap::new(),
             theme: default_theme(),
+            trusted_workspaces: Vec::new(),
+            denied_roots: Vec::new(),
+            extra_workspace_dirs: Vec::new(),
         }
+    }
+}
+
+impl PersistedSettings {
+    pub fn get_workspace_trust(&self, root: &str) -> WorkspaceTrustState {
+        self.trusted_workspaces
+            .iter()
+            .find(|r| r.root_path == root)
+            .map(|r| r.state.clone())
+            .unwrap_or(WorkspaceTrustState::Unknown)
+    }
+
+    pub fn set_workspace_trust(&mut self, root: &str, state: WorkspaceTrustState, remember: bool) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        if let Some(record) = self.trusted_workspaces.iter_mut().find(|r| r.root_path == root) {
+            record.state = state;
+            record.remember = remember;
+            record.updated_at_unix_ms = now;
+        } else {
+            self.trusted_workspaces.push(WorkspaceTrustRecord {
+                root_path: root.to_string(),
+                state,
+                remember,
+                updated_at_unix_ms: now,
+            });
+        }
+    }
+
+    pub fn remove_workspace_trust(&mut self, root: &str) {
+        self.trusted_workspaces.retain(|r| r.root_path != root);
     }
 }

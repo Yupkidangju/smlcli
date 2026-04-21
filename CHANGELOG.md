@@ -7,6 +7,36 @@
 
 ### Docs
 - **Phase 15: 2026 CLI UX 현대화 로드맵 문서화**: `spec.md`, `designs.md`, `IMPLEMENTATION_SUMMARY.md`, `DESIGN_DECISIONS.md`, `audit_roadmap.md`에 최신 CLI/TUI UX 패턴을 반영한 리팩토링 및 기능 강화 계획을 추가. 블록 기반 타임라인, 커맨드 팔레트, 입력 툴벨트, 반응형 상태바, 절제된 ASCII 애니메이션, 포커스/스크롤 상태 머신을 구현 전용 스펙으로 동결.
+- **Windows Host Shell / Workspace Trust Gate 구현 계획 문서화**: `spec.md`, `designs.md`, `IMPLEMENTATION_SUMMARY.md`, `DESIGN_DECISIONS.md`에 Host shell vs Exec shell 분리, Windows PowerShell fallback 규칙, Workspace Trust Gate 3상태 모델, 구현 태스크 및 검증 기준을 상세 계획으로 추가.
+
+### Added / Changed / Improved (Phase 16)
+- **Collapsible Diff UI**: 타임라인 내 긴 Diff(추가+삭제 10줄 초과)를 접기/펼치기 할 수 있는 토글 UI 추가.
+- **Provider-Specific Tool Dialect**: Provider (Gemini/OpenRouter) 특성에 맞게 도구의 JSON Schema를 변환해주는 `ToolDialect` 추상화 및 런타임 적용. Gemini 모델 호출 시 `parameters.required`가 명시적으로 존재하도록 보정하여 파싱 에러 방지.
+- **Error Unification**: `ConfigError`와 `ProviderError` 구조체로의 일관성 있는 오류 반환을 위해, 어댑터 및 I/O 설정 파일 저장/읽기 과정에서 발생하던 `anyhow::Result` 문자열 에러를 도메인 에러 타입으로 전면 전환.
+
+### Fixed
+- **Auto-Verify 상태 머신 실연결**: `src/app/mod.rs`의 `ToolFinished(is_error=true)` 및 `ToolError` 경로를 `AutoVerifyState::Healing`에 연결. 1~2회 실패는 힐링 프롬프트 주입 후 재전송, 3회 실패는 `Abort` Notice를 남기고 중단하도록 수정.
+- **후속 재전송 도구 스키마 누락 수정**: `send_chat_message_internal()`이 초기 요청과 동일하게 Tool Registry 스키마를 포함하도록 `build_streaming_chat_request()` 공용 헬퍼를 도입.
+- **Tree of Thoughts depth 실구현**: `TimelineBlock.depth` 필드 추가, `ToolRun`/`Approval`/`Auto-Verify Notice`를 `depth: 1`로 생성하고 `tui/layout.rs`에서 `└─` 인덴트 렌더링을 연결.
+- **LLM 우선 도구 판정으로 조정**: `is_actionable_input()`은 참고 신호만 남기고, 비작업성 입력으로 분류되어도 모델이 구조화된 `tool_calls`를 반환하면 런타임이 선제 차단하지 않도록 완화.
+- **Auto-Verify 오류 컨텍스트 확장**: 자가 치유 프롬프트가 240자 요약만 보던 문제를 수정. `ToolFinished` 실패 시 `stderr` 우선, `stdout` 보조의 확장 실패 컨텍스트를 앞/뒤 보존형으로 재전송하고, 사용자 Notice만 짧게 유지하도록 분리.
+- **설정 파일 손상 가시화**: `load_config()` 오류가 앱 초기화에서 `Ok(None)`처럼 삼켜지던 문제를 제거하고, 손상된 `config.toml`은 Setup Wizard 첫 화면과 런타임 로그에 복구/삭제 가이드로 즉시 노출.
+- **로그 버퍼 정합성 근거 명시**: `logs_buffer`는 비동기 태스크가 직접 건드리지 않고 이벤트 루프에서 직렬화된다는 계약을 Inspector Logs 렌더러 주석에 명시.
+- **Linux Shell Sandbox 실체화**: `ExecShell`이 Linux에서 `bwrap` 기반 실제 격리 환경으로 실행되도록 변경. 호스트 루트는 읽기 전용, 요청 `cwd`만 `/workspace`에 쓰기 가능하게 bind mount.
+- **Repo Map 유령 기능 연결**: `Repo Map`을 비동기 worker + 캐시 상태로 재구성하고, 준비된 캐시를 실제 채팅 요청의 system message로 주입하도록 연결.
+- **HITL TTL 도입**: 승인 대기 요청이 5분 초과 시 자동 거부되도록 Tick 루프 만료 처리 추가.
+- **타임라인 마우스 스크롤 실연결**: 마우스 휠이 더 이상 사용되지 않는 `timeline_scroll_offset`이 아니라 실제 렌더링에 사용되는 `timeline_scroll`을 조작하도록 수정. Timeline/Inspector 모두 3줄 단위 스크롤.
+- **follow-tail 스크롤 복구**: 최하단으로 내려왔을 때 `timeline_follow_tail`이 다시 켜져, 새 응답/로그가 추가되면 화면이 자동으로 최신 내용에 따라붙도록 보정.
+- **마우스 클릭 포커스 오판 수정**: column만 보던 패널 판정을 row+column 기반으로 변경하여 Top Bar/Composer 클릭 시 Timeline이 잘못 포커스를 먹지 않도록 수정.
+- **작업 루트 자동 보정**: `target/release` 같은 빌드 산출물 디렉터리에서 앱을 실행해도 저장소 루트(`Cargo.toml`/`.git` 기준)를 작업 디렉터리로 재설정하여 `ReadFile`/`Stat`/`ListDir`가 잘못된 경로를 보지 않도록 수정.
+- **Composer Toolbar 힌트 복원**: 하단 툴바에 `F2 Inspector` 힌트를 다시 표시.
+- **Inspector 헤더 축약/2줄화**: Inspector 상단 탭 제목이 오른쪽에서 잘리던 문제를 줄이기 위해 고정 제목 + 적응형 1줄/2줄 탭 헤더로 변경.
+- **과한 반전 하이라이트 완화**: 선택된 타임라인 블록 전체를 배경 반전하던 렌더링을 첫 줄만 약하게 강조하는 방식으로 변경하여 “전체 내용이 선택된 것처럼 보이는” 현상 완화.
+
+### Tests
+- **실패 경로 회귀 테스트 확충**: 손상된 `config.toml` 파싱 실패, 시작 시점 설정 오류 가이드, Auto-Verify tail-context 보존, 비-Git 디렉토리의 Git checkpoint no-op 경로를 테스트에 추가.
+- **샌드박스/TTL/Repo Map 테스트 추가**: Linux 샌드박스의 `/etc` 쓰기 차단과 workspace 쓰기 허용, 승인 만료 자동 거부, Repo Map cache lifecycle 및 실제 요청 주입 경로를 회귀 테스트로 추가.
+- **스크롤/포커스 회귀 테스트 보강**: 마우스 휠의 Timeline/Inspector 라우팅, follow-tail 복구, Composer 클릭 포커스 전환을 테스트로 고정.
 
 ### Changed/Improved (Phase 15-A: TimelineBlock 마이그레이션)
 - **블록 기반 타임라인 도입**: 기존 `TimelineEntry` 기반 단일 텍스트 렌더링에서 `TimelineBlock`, `BlockSection`, `BlockStatus` 상태 머신 기반의 모듈식 아키텍처로 완전히 교체. 
@@ -341,6 +371,20 @@
 - `chat_runtime.rs`에 `resolve_credentials()` / `resolve_credentials_for_provider()` 중앙 보안 가드 메서드 도입
 - `dispatch_chat_request()`를 동기 사전 검증 → 비동기 spawn 패턴으로 리팩토링
 
+## [0.1.0-beta.9] - 2026-04-21
+
+### Fixed (High - 5차/최종 감사)
+- **[H-1]** 동시 채팅 요청 차단: `is_thinking` 상태일 때 사용자가 Composer에서 Enter를 눌러 새 요청을 전송하지 못하도록 차단 (응답 덮어쓰기 Race condition 방지)
+- **[H-2]** 초기 사용자 턴 블록 분리: 첫 요청 시 `Assistant` 롤을 확인하고 명시적인 전용 AI 블록을 생성하여 오류가 사용자 블록에 섞이지 않도록 분리 
+- **[H-3]** 도구 루프 후속 렌더링 블록 오염 방지: `send_chat_message_internal()`을 통해 도구 실행 완료 후 발생하는 LLM 재전송 요청에서도 `active_chat_block_idx`를 정확히 설정하도록 통합 헬퍼(`spawn_chat_request`)로 리팩토링. 이를 통해 이전 턴의 블록을 오염시키는 경로 차단
+
+### Fixed (Medium)
+- **[M-1]** Trust Gate 마우스 우회 차단: Trust Gate 모달이 띄워져 있을 때 마우스 클릭이나 스크롤 라우팅을 차단하여 접근 통제
+- **[M-2]** Windows Shell 호환성 검증: `host_shell`을 하드코딩에서 환경변수 `ComSpec`으로 개선하고, `exec_shell` 탐색 시 `pwsh`와 `powershell.exe` 존재 여부를 런타임에 직접 확인하여 없으면 에러 반환
+
+### Fixed (Low)
+- **[L-1]** Command Palette 스펙 부합 보완: 렌더러 최대 표시 개수를 8개로 제한하고 검색 로직에 순차 문자 매칭(Fuzzy search) 및 최대 50건 반환 스펙 적용
+
 ## [0.1.0-beta.8] - 2026-04-15
 
 ### Fixed (High - 4차 감사)
@@ -451,4 +495,3 @@
 
 ### Security
 - 프로젝트 전반에 걸친 보안 검토 가이드 등록 (`audit_roadmap.md`)
-

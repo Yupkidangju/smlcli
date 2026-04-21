@@ -111,7 +111,7 @@ smlcli/
 │   ├── main.rs
 │   ├── app/
 │   │   ├── mod.rs (Event Loop & Top-level Dispatch, ~510줄)
-│   │   ├── state.rs (AppState, TimelineEntry, WizardState, ConfigState, FuzzyState)
+│   │   ├── state.rs (AppState, TimelineBlock, AutoVerifyState, WizardState, ConfigState, FuzzyState)
 │   │   ├── event_loop.rs (Crossterm 이벤트 + Action 채널 수신)
 │   │   ├── action.rs (14종 비동기 이벤트 타입 정의)
 │   │   ├── command_router.rs (슬래시 커맨드 엔진, 11개 커맨드)
@@ -166,7 +166,7 @@ smlcli/
 애플리케이션은 단일 `AppState`를 중심으로 동작한다. 입력 이벤트, 렌더 요청, AI 응답, 툴 결과, modal 상태를 모두 `Action` 단위로 정규화한다. 이벤트 루프는 TUI 렌더링과 비동기 작업을 분리하되, 사용자에게는 하나의 연속된 터미널 경험처럼 보이게 유지한다.
 
 **이중 데이터 모델 (Dual Data Model)**
-`session.messages`는 LLM 컨텍스트 전용이며, 사용자 화면 표시는 `timeline: Vec<TimelineEntry>`로 분리한다. 이 분리를 통해 도구 실행 요약 카드, 승인 카드, 실행 로그, 결과 요약을 독립적으로 관리한다. timeline이 비어있을 때만 session.messages 폴백을 허용한다(하위 호환).
+`session.messages`는 LLM 컨텍스트 전용이며, 사용자 화면 표시는 `timeline: Vec<TimelineBlock>`로 분리한다. 이 분리를 통해 도구 실행 요약 카드, 승인 카드, 실행 로그, 결과 요약을 독립적으로 관리한다. timeline이 비어있을 때만 session.messages 폴백을 허용한다(하위 호환).
 
 **이벤트 세분화 (14종+ Action)**
 채팅과 도구 호출의 전체 라이프사이클(시작·진행·완료·에러)을 별도 이벤트로 정규화하여 Codex 스타일 진행 표시를 구현한다.
@@ -179,9 +179,14 @@ LLM 응답에서 도구 호출을 감지할 때 3단계 필터를 적용한다:
 
 **첫 턴 자연어 가드 (v0.1.0-beta.22)**
 시스템 프롬프트에 다음 정책을 명시한다:
-- 첫 응답은 반드시 자연어 인삿말/확인으로 시작하며, 도구를 사용하지 않는다.
 - 인삿말, 질문, 설명 등 비작업성 입력에는 도구 없이 자연어로만 응답한다.
+- 파일 읽기/수정, 명령 실행, 검색 등 명시적 작업 요청은 첫 턴이라도 즉시 도구를 사용할 수 있다.
 - 도구 카탈로그는 이름만 나열하며, 필드 스키마와 예시 JSON은 시스템 프롬프트에 포함하지 않는다.
+
+**LLM 우선 도구 판정 (v0.1.0-beta.25)**
+- 입력 의도 분류(`is_actionable_input`)는 사용자 입력의 성격을 설명하는 참고 신호로만 유지한다.
+- 모델이 구조화된 `tool_calls`를 반환한 경우, 런타임은 이를 선제 차단하지 않고 LLM의 판단을 우선한다.
+- 비작업성으로 분류된 턴에서 도구 호출이 발생하면 런타임 로그에 기록하되, 후속 안전성은 기존 Permission Engine이 담당한다.
 
 **bare JSON 렌더링 필터 (v0.1.0-beta.22)**
 `filter_tool_json()`은 fenced JSON 블록뿐 아니라 bare JSON도 감지한다. `"tool"` 키가 있는 bare JSON은 사용자 친화적 요약으로 대체하여 스키마가 사용자에게 직접 노출되지 않도록 한다.
@@ -240,7 +245,8 @@ smlcli export-log
 #### User Scenario A: 최초 실행
 
 * 사용자가 `smlcli` 실행
-* 설정 파일이 없으면 자동으로 `/setting` wizard 진입
+* 설정 파일이 없거나 `config.toml` 파싱에 실패하면 자동으로 `/setting` wizard 진입
+* 설정 파일이 손상된 경우, Wizard 첫 단계에서 "설정 파일을 복구하거나 삭제 후 다시 설정하라"는 안내를 즉시 노출
 * provider 선택
 * API key 입력 및 즉시 검증
 * model 조회 또는 수동 입력
@@ -344,6 +350,9 @@ smlcli export-log
 
 5. **Permission Visibility**
    현재 권한 모드는 항상 상태 패널에 노출한다.
+
+6. **Workspace Trust Gate**
+   처음 진입한 작업 루트(workspace root)에 대해서는 사용자가 해당 폴더를 신뢰하는지 명시적으로 선택해야 한다. 신뢰 상태가 확정되기 전에는 쓰기/셸 실행을 허용하지 않는다.
 
 ### 3.9 Data Models & Interfaces (Logical Equivalence)
 
@@ -456,6 +465,194 @@ pub enum NetworkPolicy {
 }
 ```
 
+### 3.10 Phase 17: Windows Shell Host Alignment & Workspace Trust Gate
+(구현 완료)
+
+### 3.11 Phase 18: Multi-Provider Expansion & Advanced Agentic Tools (계획)
+이 페이즈는 다양한 최신 상용 LLM Provider를 네이티브로 지원하고, 에이전트의 자율성과 탐색 능력을 극대화할 수 있는 고급 도구(Tools)를 추가하는 것을 목표로 한다. 2026년 4월 기준 최신 모델의 역량을 최대한 끌어올리기 위한 컨텍스트 호환성에 중점을 둔다.
+
+#### 18.1 Multi-Provider Integration (2026.04 Grounded)
+기존 `OpenRouter` 및 `Gemini` 의존성을 넘어, 주요 모델 제공사의 네이티브 API 연동을 추가한다. 각 제공사별 Dialect 추상화를 확장한다.
+
+| Provider | Base URL | 대표 지원 모델 (2026.04 기준) | 비고 |
+| --- | --- | --- | --- |
+| **OpenAI** | `https://api.openai.com/v1` | `gpt-5.4`, `gpt-5.4-thinking`, `gpt-5.4-mini` | 최신 GPT-5.4 제품군. 1M 컨텍스트 윈도우. |
+| **Anthropic** | `https://api.anthropic.com/v1/messages` | `claude-opus-4.7`, `claude-sonnet-4.7` | Agentic Software Engineering 및 복잡한 추론 특화. |
+| **xAI** | `https://api.x.ai/v1` | `grok-4.20`, `grok-4.20-reasoning` | 극도로 빠른 속도와 낮은 환각(Hallucination)율, OpenAI SDK 호환 API 제공. |
+
+- `ToolDialect` enum 확장 (`OpenAINative`, `AnthropicNative`, `XAI`).
+- 설정(`config.toml`)의 `encrypted_keys`에 `openai_key`, `anthropic_key`, `xai_key` 확장.
+
+#### 18.2 Advanced Agentic Tools
+기존의 파일 읽기/쓰기/실행 도구 외에, 컨텍스트 비용을 절감하고 에이전트의 상황 인지(Situational Awareness) 능력을 강화하는 특화 도구를 추가한다.
+
+1. **`ListDirectory` (디렉터리 탐색)**
+   - `ExecShell("ls")` 대비 JSON 형태로 구조화된 파일 크기, 타입(파일/디렉터리), 자식 노드 수를 반환하여 LLM의 파싱 오동작 방지.
+2. **`GrepSearch` (코드 심층 검색)**
+   - 정규식 및 글로브 필터링(`*.rs`)을 지원하여, 전체 파일을 읽지 않고도 함수 정의와 변수 사용처를 정확하게 매핑.
+3. **`FetchURL` (웹 문서/API 그라운딩)**
+   - 외부 공식 API 문서나 레퍼런스 페이지를 실시간으로 읽어와(Markdown 변환) 자체 컨텍스트로 편입하는 도구.
+
+이 섹션은 **구현 전 동결하는 계획 명세**다. 아래 항목이 문서화된 이후에만 코드를 변경한다.
+
+**참고 제품 / 공개 레퍼런스**
+- OpenAI Codex CLI 계열: sandbox / approvals / workspace 범위 분리 개념
+- Gemini CLI 공개 문서: 계층형 설정 파일, `/permissions trust`, `/directory add/show`, 정책 파일 경로 관리
+
+이 구현은 특정 제품을 그대로 복제하지 않는다. 다만 아래 개념을 차용한다.
+- 설정을 **user / project / admin** 수준으로 분리 가능한 구조
+- REPL에서 workspace/trust를 직접 조회·추가·제거하는 관리 명령
+- 현재 세션이 신뢰하는 루트와 추가 workspace 디렉터리를 명시적으로 노출하는 UX
+- 일반 사용자 설정과 관리자 강제 정책을 장기적으로 분리 가능한 데이터 모델
+
+#### A. Scope
+
+**목표**
+- Windows 11에서 앱이 `cmd.exe` 호스트에서 실행되더라도, 내부 명령 실행(`ExecShell`)은 일관되게 PowerShell 계열(`pwsh` 우선, 없으면 `powershell.exe`)로 수행한다.
+- 현재 작업 루트에 대한 신뢰 여부를 사용자에게 명시적으로 묻는 `Workspace Trust Gate`를 추가한다.
+- 신뢰되지 않은 루트에서는 읽기 전용 탐색만 허용하고, 파일 쓰기/셸 실행/파괴적 도구는 모두 차단한다.
+
+**비목표**
+- 이번 단계에서 Windows 콘솔 호스트 자체를 새 PowerShell 창으로 강제 재실행하지 않는다.
+- 전역적인 OS 보안 모델(예: Windows Defender 정책, AppLocker)은 다루지 않는다.
+- 다중 워크스페이스 동시 신뢰 편집 UI는 이번 범위에 포함하지 않는다.
+
+#### B. Frozen Decisions
+
+1. **Host shell과 exec shell을 분리한다.**
+   - Host shell: 사용자가 앱을 띄운 실제 콘솔(`cmd.exe`, PowerShell, Windows Terminal 등)
+   - Exec shell: `ExecShell` 도구가 실제 명령을 수행하는 런타임 셸
+   - 상태바와 진단 메시지에는 이 둘을 구분하여 표기한다.
+
+2. **Windows exec shell 선택 우선순위**
+   - 1순위: `pwsh.exe`
+   - 2순위: `powershell.exe`
+   - 둘 다 없으면 명시적 오류를 표시하고 `ExecShell` 실행을 중단한다.
+
+3. **Workspace root는 시작 시 1회 결정한다.**
+   - 우선순위: 명시적 CLI 인자(향후) > 현재 디렉터리에서 상향 탐색한 저장소 루트 > 현재 디렉터리
+   - 저장소 루트 판별 기준: `.git` 또는 `Cargo.toml`
+
+4. **Trust Gate는 3상태 모델을 사용한다.**
+   - `Unknown`
+   - `Trusted`
+   - `Restricted`
+
+5. **Restricted 상태의 정책**
+   - `ReadFile`, `ListDir`, `Stat`, `GrepSearch`, `SysInfo`만 허용
+   - `WriteFile`, `ReplaceFileContent`, `ExecShell`은 모두 거부
+   - UI는 명시적으로 “신뢰 전 읽기 전용 모드”임을 표시
+
+6. **Trust persistence**
+   - 신뢰 결과는 `workspace_root -> trust_state` 형태로 로컬 설정에 저장
+   - 저장 위치는 기존 `config.toml` 체계를 확장한다
+   - “한 번만 신뢰”는 세션 메모리에서만 유지하고 프로세스 종료 시 폐기한다
+
+7. **Workspace policy management**
+   - 신뢰된 workspace 목록, 추가 workspace 디렉터리, 접근 금지 루트(denied roots)는 시작 시점 프롬프트뿐 아니라 REPL 명령과 설정 UI에서 모두 관리 가능해야 한다.
+   - denied root는 trust 상태와 무관하게 최우선 차단 규칙을 갖는다.
+
+#### C. Typed Contracts
+
+```rust
+pub enum WorkspaceTrustState {
+    Unknown,
+    Trusted,
+    Restricted,
+}
+
+pub struct WorkspaceTrustRecord {
+    pub root_path: String,
+    pub state: WorkspaceTrustState,
+    pub remember: bool,
+    pub updated_at_unix_ms: u64,
+}
+
+pub struct WorkspacePolicySettings {
+    pub trusted_workspaces: Vec<WorkspaceTrustRecord>,
+    pub denied_roots: Vec<String>,
+    pub extra_workspace_dirs: Vec<String>,
+}
+
+pub struct RuntimeWorkspaceState {
+    pub root_path: String,
+    pub host_shell: String,
+    pub exec_shell: String,
+    pub trust_state: WorkspaceTrustState,
+    pub trust_prompt_visible: bool,
+    pub extra_workspace_dirs: Vec<String>,
+}
+```
+
+#### D. Concrete Rules
+
+- Trust Gate가 `Unknown`인 경우, 앱 시작 직후 **첫 화면**에서 선택해야 한다.
+- 선택지는 3개로 고정한다.
+  - `Trust Once`
+  - `Trust & Remember`
+  - `Restricted`
+- Restricted 상태에서는 차단 메시지에 항상 다음 문구를 포함한다.
+  - `"Workspace is not trusted. Enable trust before write or shell actions."`
+- denied root와 매칭되는 경로는 trust 상태와 무관하게 읽기/쓰기/셸 참조가 모두 거부된다.
+- `extra_workspace_dirs`는 현재 세션에서 추가로 허용한 디렉터리 집합이며, 각 경로는 개별 trust 평가 및 설정 저장 대상이다.
+- Windows exec shell 진단 문자열은 아래 형식으로 통일한다.
+  - `Host: cmd.exe | Exec: pwsh`
+  - `Host: WindowsTerminal | Exec: powershell.exe`
+
+#### E. Execution Path
+
+1. **Task 1: Workspace root 결정 유틸리티**
+   - 현재 디렉터리 기준으로 상향 탐색하여 루트를 결정하는 함수 추가
+   - `target/release` 보정 로직과 충돌하지 않도록 통합
+
+2. **Task 2: Trust/Workspace 정책 모델 및 설정 영속화**
+   - `PersistedSettings`에 trust record 맵, denied roots, extra workspace dirs 추가
+   - 시작 시 현재 root의 trust state와 관련 정책을 로드
+   - user/project/admin 계층 확장을 막지 않는 저장 포맷으로 설계
+
+3. **Task 3: Trust Gate UI**
+   - Trust가 `Unknown`이면 메인 채팅 대신 startup prompt를 띄운다
+   - 방향키 + Enter로 3개 선택지 제공
+   - Restricted 선택 시 즉시 읽기 전용 상태로 진입
+
+4. **Task 4: Permission Engine 연동**
+   - trust state가 `Restricted`이면 쓰기/셸 도구 차단
+   - denied root에 매칭되는 경로는 읽기 포함 전면 차단
+   - 차단 메시지와 타임라인 Notice 추가
+
+5. **Task 5: Windows exec shell 정렬**
+   - `pwsh.exe`/`powershell.exe` 탐지 유틸리티 추가
+   - `ExecShell` 실행 경로와 system prompt의 shell 표기를 동일 기준으로 맞춤
+
+6. **Task 6: REPL 명령 / 설정 UI 추가**
+   - `/workspace show`: 현재 root, 추가 workspace dirs, trust state, denied roots 표시
+   - `/workspace trust [path]`: 현재 또는 지정 path를 `Trust Once / Trust & Remember / Restricted`로 변경
+   - `/workspace add <path>`: 추가 workspace dir 등록
+   - `/workspace remove <path>`: 추가 workspace dir 해제
+   - `/workspace deny add <path>` / `/workspace deny remove <path>` / `/workspace deny list`
+   - `/config`와 `/setting`에서도 동일 정보를 읽고 수정할 수 있게 연결
+
+7. **Task 7: 상태바/툴바/Doctor 반영**
+   - Host shell, exec shell, trust state를 상태바와 `/status` 또는 doctor 출력에 노출
+
+#### F. Verification Path
+
+- Linux + bash/zsh
+  - trust gate에서 Restricted 선택 시 `WriteFile`/`ExecShell` 차단 확인
+  - denied root 추가 후 `ReadFile`/`ListDir`까지 차단되는지 확인
+- Windows 11 + `cmd.exe`
+  - 앱 실행 후 상태바에 `Host: cmd.exe` 또는 동등 정보 노출
+  - `ExecShell`이 `pwsh` 또는 `powershell.exe`로 실제 실행되는지 확인
+- Windows Terminal + PowerShell
+  - host shell과 exec shell이 동일/호환 표기로 안정적으로 노출되는지 확인
+- 공통 테스트
+  - trust record 저장/복원 테스트
+  - denied roots 저장/복원 테스트
+  - `/workspace add/remove/show` 명령 테스트
+  - Restricted 상태 permission deny 테스트
+  - denied root permission deny 테스트
+  - exec shell fallback 테스트 (`pwsh` 없음 → `powershell.exe`)
+
 **IP Isolation**
 
 ```rust
@@ -463,7 +660,7 @@ pub enum NetworkPolicy {
 // The AI runtime may request tools, but the final authority remains in the policy layer.
 ```
 
-### 3.10 Context Optimization (Phase 7: Advanced Compaction)
+### 3.11 Context Optimization (Phase 7: Advanced Compaction)
 
 세션 길이가 길어질수록 컨텍스트 오염을 막기 위해 하이브리드 압축 전략(Hybrid Context Compression)을 도입한다.
 
@@ -478,7 +675,7 @@ pub enum NetworkPolicy {
 3. **중요 컨텍스트 핀 지정 (Pinning & Anchor)**
    - `spec.md` 등 핵심 설계 원칙이 담긴 메시지나 사용자가 핀(Pin) 처리한 컨텍스트는 수명 주기를 무한대로 유지하여 압축 대상에서 제외한다.
 
-### 3.11 Extended Prompt Commands (@ and !)
+### 3.12 Extended Prompt Commands (@ and !)
 
 프롬프트 입력창(Composer)에서 `ignore` 기반 파일 검색 및 매크로/히스토리 확장을 지원하기 위한 구조적 명세다. 이 스펙은 "예측 가능한 컨텍스트 주입"과 "안전한 셸 실행"을 목표로 하며, 슬래시 커맨드와의 통합이나 터미널 외의 GUI 확장은 **비목표(Non-goal)**로 한다.
 
@@ -538,7 +735,7 @@ pub struct ComposerState {
 
 ---
 
-### 3.12 Phase 12: Native Structured Tool Call Integration
+### 3.13 Phase 12: Native Structured Tool Call Integration
 
 현재 정규식 기반의 Fenced JSON 스크래핑 방식을 폐기하고, OpenAI 호환(OpenRouter/Gemini 지원) Native Tool Call API로 전환하기 위한 명세.
 본 명세는 `AI_IMPLEMENTATION_DOC_STANDARD.md`의 규칙에 따라 Typed Contracts와 Concrete Numbers를 정의한다.
@@ -619,7 +816,7 @@ pub struct ChatRequest {
 
 ---
 
-### 3.13 Phase 13: Agentic Autonomy & Architectural Refactoring
+### 3.14 Phase 13: Agentic Autonomy & Architectural Refactoring
 
 이 페이즈는 `smlcli`를 단순한 프롬프트 기반 도구를 넘어, 자율적으로 에러를 복구하고(Auto-healing), 전체 저장소 구조를 파악하며(Repo Map), 안전한 작업 롤백(Git Checkpoints)을 수행하는 "참조 등급(Reference Grade)" 에이전트로 승격시키기 위한 명세다.
 
@@ -653,17 +850,25 @@ pub enum AutoVerifyState {
 #### 2. Concrete Numbers (제한 수치 및 규칙)
 
 - **자가 치유 재시도(Self-Correction Retries)**: `AutoVerifyState::Healing { retries }` 상태에서 도구 실행이 실패할 때마다 `retries`를 1씩 증가시킨다. **3회(`retries == 3`)**에 도달하면 자동 복구를 포기하고 `Idle`로 전환하며 사용자에게 수동 개입을 요청한다. `ToolFinished(is_error=true)`와 `ToolError` 양쪽 경로 모두에서 동일한 상한을 적용한다. **Abort 시에는 `send_chat_message_internal()` 호출을 중단**하여 LLM 재전송 루프를 완전히 종료한다.
+- **자가 치유 오류 컨텍스트 보존**: Auto-Verify가 LLM에 재전송하는 실패 원문은 UI 요약과 분리한다. 모델에는 `stderr` 우선, `stdout` 보조의 풍부한 실패 컨텍스트를 **최대 1,200자(앞/뒤 보존형)** 로 전달하고, 사용자용 Notice는 240자 요약으로 제한한다.
 - **Tree-sitter Repo Map**: `tree-sitter`로 추출한 저장소의 Rust(.rs) AST(함수, 구조체 시그니처) 맵을 시스템 프롬프트에 `[Repo Map]` 헤더로 주입한다. 최대 **8,000바이트**를 넘지 않도록 자른다(Truncate).
+- **Repo Map 백그라운드 생성 규칙**: Repo Map 생성은 `tokio::task::spawn_blocking` 워커에서 수행한다. UI/입력 루프는 절대 동기 스캔을 기다리지 않는다. 최근 생성본은 캐시에 유지하고, `WriteFile`/`ReplaceFileContent`/`ExecShell` 이후 stale 처리 후 백그라운드로 재생성한다.
 - **Git Checkpoint 안전 정책**: `create_checkpoint()`는 강제 커밋을 수행하지 **않는다**. 워킹 트리가 깨끗한지만 검사하여 `bool`을 반환하고, `true`일 때만 롤백(`git reset --hard HEAD`)이 허용된다. `git clean -fd`는 사용하지 **않으며**, untracked 파일은 어떤 경우에도 삭제되지 않는다.
 - **직접 셸 실행(`!`) 정책**: 사용자가 `!` 접두사로 직접 입력한 명령에 대해서도 `safe_to_auto_run: false`를 설정하여 `SafeOnly` 모드의 allowlist 정책을 반드시 존중한다. 블랙리스트와 allowlist 모두 동일하게 적용된다.
+- **Linux 샌드박스 백엔드**: Linux의 `ExecShell`은 `bubblewrap(bwrap)` 기반의 실제 프로세스 격리를 사용한다. 호스트 파일시스템은 기본 읽기 전용으로 노출하고, 요청한 작업 디렉터리만 `/workspace`로 쓰기 가능하게 bind mount 한다.
+- **HITL 만료 시간**: 승인 대기(`Approval`)는 시작 시각을 기록하고 **5분**이 지나면 자동 `Abort` 처리한다. 만료 시 pending queue와 diff preview를 즉시 비우고, 타임라인/세션에 시스템 알림을 남긴다.
 
 #### 3. Execution Path (실행 및 검증 흐름)
 
 1. **Tool Registry 도입**: `src/tools/` 내부의 기존 도구들(`ReadFile`, `WriteFile`, `ExecShell` 등)을 `Tool` 트레이트 구현체로 일괄 리팩토링. 각 도구의 `is_destructive()` 메서드로 파괴적 여부를 판별한다. `ExecShell`은 기본값(`false`)을 사용하여 쉘 명령이 Git 롤백을 트리거하지 않도록 한다.
-2. **Tree-sitter 통합**: `tree-sitter` 크레이트를 도입하여 작업 디렉터리의 Rust 소스의 함수/구조체 시그니처를 추출, `[Repo Map]` 블록으로 `System` 프롬프트에 백그라운드 주입한다.
+2. **Tree-sitter 통합**: `tree-sitter` 크레이트를 도입하여 작업 디렉터리의 Rust 소스의 함수/구조체 시그니처를 추출, `[Repo Map]` 블록으로 `System` 프롬프트에 백그라운드 주입한다. 생성은 blocking worker로 분리하고, 준비된 캐시만 요청에 삽입한다.
 3. **Automated Git Checkpoints**: `WriteFile`이나 `ReplaceFileContent` 같은 파괴적 도구(`is_destructive()=true`) 실행 직전, `create_checkpoint()`가 워킹 트리 상태를 검사한다. 변경사항이 없는(clean) 상태에서만 `safe_to_rollback=true`를 반환하며, 도구 실행 실패 시 `git reset --hard HEAD`로 tracked 파일만 복원한다. WIP가 있으면 롤백 자체를 건너뛴다.
 4. **Auto-Verify 루프**: 도구 실행 실패 시(`ToolFinished.is_error=true` 또는 `ToolError`), 힐링 프롬프트를 세션에 주입하고 `send_chat_message_internal()`로 LLM에 재전송한다. 이때 도구 스키마(`tools`)를 반드시 포함하여 모델이 후속 도구를 호출할 수 있게 한다. 최대 3회 실패 시 `Idle`로 전환하고 사용자에게 안내한다.
-5. **Tree of Thoughts UI**: `tui/layout.rs` 타임라인 렌더링에 `depth` 속성 기반 들여쓰기를 적용. 메인 응답 아래에 AI의 도구 호출 및 에러 수정 내역(`└─ ⚙️ ExecShell (cargo check) → Error → Retrying...`)을 트리 형태로 시각화한다.
+   - 1차/2차 실패는 `Healing { retries: 1|2 }`로 전이하고 재전송을 수행한다.
+   - 3차 실패에서는 `Abort` Notice를 남기고 `Idle`로 되돌리며, 추가 재전송을 하지 않는다.
+   - `ToolFinished(is_error=true)` 경로에서는 2~4줄 요약이 아니라 `stderr/stdout`의 확장 실패 컨텍스트를 힐링 프롬프트에 주입한다.
+5. **Tree of Thoughts UI**: `tui/layout.rs` 타임라인 렌더링에 `depth` 속성 기반 들여쓰기를 적용. `ToolRun`, `Approval`, `Auto-Verify Notice`는 기본적으로 `depth: 1`을 사용하여 메인 응답 아래에 AI의 도구 호출 및 에러 수정 내역(`└─ ⚙️ ExecShell (cargo check) → Error → Retrying...`)을 트리 형태로 시각화한다.
+6. **HITL TTL**: 승인 대기 카드 생성 시 `pending_since_ms`를 기록하고, Tick 루프에서 5분 초과 여부를 검사한다. 초과 시 자동 거부 처리 후 시스템 Notice와 세션 메시지를 남긴다.
 
 ---## 4. Environment-Specific Configuration (Agent Rules)
 
@@ -1508,3 +1713,47 @@ cargo test
 - 신규 의존성 없이 구현할 경우 palette/animation 품질이 제한될 수 있다.
 - 블록 모델 도입으로 `session.messages ↔ timeline` 동기화 경계가 다시 복잡해질 수 있다.
 - Phase 15-A~15-C 완료 전에는 일부 UX가 "과도기 형태"가 될 수 있으므로, 중간 단계에서도 항상 빌드 가능 상태를 유지해야 한다.
+
+### Phase 16: Deep UI Interactivity & Provider Hardening (v0.1.0-beta.26)
+
+이 페이즈는 Phase 15의 블록 기반 TUI 위에 접기/펼치기(Fold/Unfold) 상호작용과 Provider-Specific Tool Call Dialect 최적화를 더하는 것을 목표로 한다.
+
+#### 16.1 Scope Closure
+- **목표**: 10줄 이상의 긴 Diff 블록 접기/펼치기, Provider 간 호환성 파편화 해결(Dialect 추상화), 도메인 에러(`ProviderError`) 일원화.
+- **성공 기준**: `ReplaceFileContent` 블록의 기본 렌더링이 변경된 줄 수(+N/-M) 요약으로 노출되며 Enter로 토글 가능. 모든 설정 저장 에러가 `ProviderError` 또는 `AppError`로 반환.
+- **비목표**: 마우스 드래그를 통한 텍스트 복사, 터미널 밖의 시스템 알림 등은 구현하지 않는다.
+
+#### 16.2 Typed Contracts (동결된 타입 계약)
+```rust
+// 타임라인 블록의 렌더링 상태 확장을 위한 타입
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockDisplayMode {
+    Collapsed,
+    Expanded,
+}
+
+// TimelineBlock 내부 필드 추가
+pub struct TimelineBlock {
+    // ... 기존 필드 ...
+    pub display_mode: BlockDisplayMode,
+    pub diff_summary: Option<(usize, usize)>, // (additions, deletions)
+}
+
+// Provider 호환성을 맞추기 위한 방언(Dialect) 설정
+#[derive(Debug, Clone, PartialEq)]
+pub enum ToolDialect {
+    OpenAICompat, // 기본 JSON Schema
+    Anthropic,    // strict XML/JSON 혼합 구조 (미래 대비)
+    Gemini,       // function parameter required fields 제약 엄격
+}
+```
+
+#### 16.3 Concrete Formulas (동결된 수치 공식)
+- **Diff Collapsing Threshold**: `ReplaceFileContent` 등에서 변경 사항(추가/삭제 줄 수의 합)이 **10줄을 초과**(`additions + deletions > 10`)하면 `BlockDisplayMode::Collapsed`를 기본값으로 갖는다.
+- **Collapsed View Format**: `[ +{add} lines / -{del} lines ] (Enter 키로 펼치기)` 텍스트를 Muted 스타일로 렌더링.
+
+#### 16.4 Execution Path
+1. `src/app/state.rs`: `TimelineBlock`에 `display_mode`, `diff_summary` 필드 및 상태 토글(`toggle_collapse`) 추가.
+2. `src/app/mod.rs`: `FocusedPane::Timeline`일 때 현재 선택된 블록에 대해 `Enter` 키 이벤트 처리 추가 (토글 호출).
+3. `src/tui/layout.rs`: `TimelineBlockKind::ToolRun(ReplaceFileContent)` 렌더러에서 `display_mode`에 따라 요약 라벨 또는 원본 Diff 노출 로직 추가.
+4. (Task 2 & 3 이관) `ProviderError` 마이그레이션.

@@ -42,6 +42,24 @@ pub struct PermissionEngine;
 
 impl PermissionEngine {
     pub fn check(call: &ToolCall, settings: &PersistedSettings) -> PermissionResult {
+        if matches!(call.name.as_str(), "WriteFile" | "ReplaceFileContent" | "ExecShell") {
+            let root = std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if settings.denied_roots.contains(&root) {
+                return PermissionResult::Deny("Workspace is not trusted. Modifying files or executing commands is blocked.".to_string());
+            }
+            match settings.get_workspace_trust(&root) {
+                crate::domain::settings::WorkspaceTrustState::Restricted => {
+                    return PermissionResult::Deny("Workspace is not trusted. Modifying files or executing commands is blocked.".to_string());
+                }
+                crate::domain::settings::WorkspaceTrustState::Unknown => {
+                    return PermissionResult::Deny("Workspace trust is unknown. Please select trust level in the UI.".to_string());
+                }
+                crate::domain::settings::WorkspaceTrustState::Trusted => {}
+            }
+        }
+
         if let Some(tool) = crate::tools::registry::GLOBAL_REGISTRY.get_tool(&call.name) {
             tool.check_permission(&call.args, settings)
         } else {

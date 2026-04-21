@@ -1,8 +1,51 @@
 use anyhow::Result;
 use ignore::WalkBuilder;
 use std::fs;
-use tree_sitter::{Parser, Query, QueryCursor};
 use streaming_iterator::StreamingIterator;
+use tree_sitter::{Parser, Query, QueryCursor};
+
+#[derive(Debug, Clone, Default)]
+pub struct RepoMapState {
+    pub cached: Option<String>,
+    pub is_loading: bool,
+    pub stale: bool,
+    pub last_error: Option<String>,
+}
+
+impl RepoMapState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn should_refresh(&self) -> bool {
+        self.cached.is_none() || self.stale
+    }
+
+    pub fn begin_refresh(&mut self) -> bool {
+        if self.is_loading || !self.should_refresh() {
+            return false;
+        }
+        self.is_loading = true;
+        self.last_error = None;
+        true
+    }
+
+    pub fn mark_stale(&mut self) {
+        self.stale = true;
+    }
+
+    pub fn finish_success(&mut self, repo_map: String) {
+        self.cached = Some(repo_map);
+        self.is_loading = false;
+        self.stale = false;
+        self.last_error = None;
+    }
+
+    pub fn finish_error(&mut self, error: String) {
+        self.is_loading = false;
+        self.last_error = Some(error);
+    }
+}
 
 /// 워킹 디렉토리 내 `.rs` 파일들의 구조(struct, enum, fn)를 추출하여 요약본(Repo Map)을 생성합니다.
 pub fn generate_repo_map(cwd: &str) -> Result<String> {
@@ -15,7 +58,9 @@ pub fn generate_repo_map(cwd: &str) -> Result<String> {
 
     let language = tree_sitter_rust::LANGUAGE.into();
     let mut parser = Parser::new();
-    parser.set_language(&language).map_err(|e| anyhow::anyhow!("Parser setup failed: {}", e))?;
+    parser
+        .set_language(&language)
+        .map_err(|e| anyhow::anyhow!("Parser setup failed: {}", e))?;
 
     // 구조체, 열거형, 함수 선언부를 찾는 Query
     let query_source = r#"
@@ -23,7 +68,8 @@ pub fn generate_repo_map(cwd: &str) -> Result<String> {
         (enum_item name: (type_identifier) @name) @enum
         (function_item name: (identifier) @name) @func
     "#;
-    let query = Query::new(&language, query_source).map_err(|e| anyhow::anyhow!("Query parse failed: {}", e))?;
+    let query = Query::new(&language, query_source)
+        .map_err(|e| anyhow::anyhow!("Query parse failed: {}", e))?;
 
     let mut cursor = QueryCursor::new();
 
@@ -87,4 +133,11 @@ pub fn generate_repo_map(cwd: &str) -> Result<String> {
     }
 
     Ok(repo_map)
+}
+
+/// [v0.1.0-beta.27] 대형 저장소에서도 TUI를 막지 않기 위해 Repo Map 생성을 blocking worker로 분리한다.
+pub async fn generate_repo_map_async(cwd: String) -> Result<String> {
+    tokio::task::spawn_blocking(move || generate_repo_map(&cwd))
+        .await
+        .map_err(|e| anyhow::anyhow!("Repo Map worker join 실패: {}", e))?
 }

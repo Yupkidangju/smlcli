@@ -13,7 +13,7 @@ use ratatui::{
 
 pub fn render_preview(f: &mut Frame, state: &AppState, area: Rect) {
     let p = state.palette();
-    
+
     if state.ui.timeline.is_empty() {
         let text = "No active blocks.\n\nTimeline is empty.";
         let paragraph = Paragraph::new(text).style(Style::default().fg(p.muted));
@@ -21,26 +21,39 @@ pub fn render_preview(f: &mut Frame, state: &AppState, area: Rect) {
         return;
     }
 
-    let cursor = state.ui.timeline_cursor.min(state.ui.timeline.len().saturating_sub(1));
+    let cursor = state
+        .ui
+        .timeline_cursor
+        .min(state.ui.timeline.len().saturating_sub(1));
     let block = &state.ui.timeline[cursor];
-    
+
     let mut lines = Vec::new();
-    lines.push(Line::from(vec![
-        Span::styled(format!("Block: {}", block.title), Style::default().fg(p.accent).add_modifier(Modifier::BOLD)),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        format!("Block: {}", block.title),
+        Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
+    )]));
     lines.push(Line::from(""));
-    
+
     for section in &block.body {
         match section {
             crate::app::state::BlockSection::Markdown(msg) => {
                 for line in msg.lines() {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(p.text_primary))));
+                    lines.push(Line::from(Span::styled(
+                        line,
+                        Style::default().fg(p.text_primary),
+                    )));
                 }
             }
             crate::app::state::BlockSection::ToolSummary { tool_name, summary } => {
-                lines.push(Line::from(Span::styled(format!("Tool: {}", tool_name), Style::default().fg(p.info))));
+                lines.push(Line::from(Span::styled(
+                    format!("Tool: {}", tool_name),
+                    Style::default().fg(p.info),
+                )));
                 for line in summary.lines() {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(p.text_secondary))));
+                    lines.push(Line::from(Span::styled(
+                        line,
+                        Style::default().fg(p.text_secondary),
+                    )));
                 }
             }
             crate::app::state::BlockSection::KeyValueTable(entries) => {
@@ -53,11 +66,20 @@ pub fn render_preview(f: &mut Frame, state: &AppState, area: Rect) {
             }
             crate::app::state::BlockSection::CodeFence { language, content } => {
                 let lang_str = language.as_deref().unwrap_or("text");
-                lines.push(Line::from(Span::styled(format!("```{}", lang_str), Style::default().fg(p.muted))));
+                lines.push(Line::from(Span::styled(
+                    format!("```{}", lang_str),
+                    Style::default().fg(p.muted),
+                )));
                 for line in content.lines() {
-                    lines.push(Line::from(Span::styled(line, Style::default().fg(p.text_primary))));
+                    lines.push(Line::from(Span::styled(
+                        line,
+                        Style::default().fg(p.text_primary),
+                    )));
                 }
-                lines.push(Line::from(Span::styled("```", Style::default().fg(p.muted))));
+                lines.push(Line::from(Span::styled(
+                    "```",
+                    Style::default().fg(p.muted),
+                )));
             }
         }
         lines.push(Line::from(""));
@@ -74,18 +96,21 @@ pub fn render_preview(f: &mut Frame, state: &AppState, area: Rect) {
 /// Diff 탭 렌더링: 승인 대기 중인 변경사항 미리보기.
 pub fn render_diff(f: &mut Frame, state: &AppState, area: Rect) {
     let p = state.palette();
-    
+
     if let Some(diff) = &state.runtime.approval.diff_preview {
-        let lines: Vec<Line> = diff.lines().map(|line| {
-            let color = if line.starts_with('+') {
-                p.success
-            } else if line.starts_with('-') {
-                p.danger
-            } else {
-                p.text_primary
-            };
-            Line::from(Span::styled(line, Style::default().fg(color)))
-        }).collect();
+        let lines: Vec<Line> = diff
+            .lines()
+            .map(|line| {
+                let color = if line.starts_with('+') {
+                    p.success
+                } else if line.starts_with('-') {
+                    p.danger
+                } else {
+                    p.text_primary
+                };
+                Line::from(Span::styled(line, Style::default().fg(color)))
+            })
+            .collect();
 
         let para = Paragraph::new(lines)
             .block(Block::default().borders(Borders::NONE))
@@ -104,6 +129,9 @@ pub fn render_logs(f: &mut Frame, state: &AppState, area: Rect) {
     // [v0.1.0-beta.21] 동적 팔레트 참조
     let p = state.palette();
     let mut log_lines = Vec::new();
+    // [v0.1.0-beta.26] logs_buffer는 비동기 태스크가 직접 수정하지 않고,
+    // 모두 Event::Action -> handle_action 경유로 직렬화되어 반영된다.
+    // 따라서 렌더링 시점에는 단일 이벤트 루프 소유권 아래 일관된 스냅샷을 읽는다.
 
     if state.runtime.logs_buffer.is_empty() {
         log_lines.push(Line::from(Span::styled(
@@ -139,8 +167,6 @@ pub fn render_logs(f: &mut Frame, state: &AppState, area: Rect) {
 /// Composer 입력 버퍼를 검색어로 사용하여 타임라인 전체를 대소문자 무시로 필터링.
 /// 검색어가 비어있으면 전체 텍스트 콘텐츠를 인덱스 형태로 표시한다.
 pub fn render_search(f: &mut Frame, state: &AppState, area: Rect) {
-
-
     // [v0.1.0-beta.21] 동적 팔레트 참조
     let p = state.palette();
 
@@ -281,7 +307,8 @@ pub fn render_recent(f: &mut Frame, state: &AppState, area: Rect) {
             if block.kind == crate::app::state::TimelineBlockKind::ToolRun {
                 let mut summary = "";
                 for section in &block.body {
-                    if let crate::app::state::BlockSection::ToolSummary { summary: s, .. } = section {
+                    if let crate::app::state::BlockSection::ToolSummary { summary: s, .. } = section
+                    {
                         summary = s;
                         break;
                     }

@@ -103,6 +103,7 @@ impl App {
             safe_commands: None,
             encrypted_keys: std::collections::HashMap::new(),
             theme: "default".to_string(),
+            ..Default::default()
         };
 
         // API 키를 암호화하여 settings.encrypted_keys에 저장
