@@ -235,9 +235,17 @@ pub(crate) async fn execute_shell_streaming(
                 lines
             });
 
-            // 프로세스 완료 대기 + 출력 수집 (취소 토큰 명시적 감지 및 kill)
+            // 프로세스 완료 대기 + 출력 수집 (취소 토큰 명시적 감지 및 kill, [v1.5.0] 타임아웃 방어 포함)
             let status = tokio::select! {
-                res = child.wait() => res?,
+                res = tokio::time::timeout(std::time::Duration::from_secs(SHELL_TIMEOUT_SECS), child.wait()) => {
+                    match res {
+                        Ok(status_res) => status_res?,
+                        Err(_) => {
+                            let _ = child.kill().await;
+                            return Err(anyhow::anyhow!("Process timed out after {} seconds", SHELL_TIMEOUT_SECS));
+                        }
+                    }
+                },
                 _ = cancel_token.cancelled() => {
                     let _ = child.kill().await;
                     return Err(anyhow::anyhow!("Process cancelled by CancellationToken"));

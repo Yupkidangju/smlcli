@@ -40,6 +40,29 @@ fn truncate_middle(s: &str, max_len: usize) -> String {
 pub fn draw(f: &mut Frame, state: &AppState) {
     let size = f.area();
 
+    // [v1.5.0] 터미널 최소 크기 경고 및 리사이즈 붕괴 방지
+    if size.width < 80 || size.height < 24 {
+        let p = state.palette();
+        let warning = Paragraph::new(vec![
+            Line::from(Span::styled("⚠️ 터미널 크기가 너무 작습니다.", Style::default().fg(p.danger))),
+            Line::from(Span::styled(format!("현재: {}x{} / 권장: 80x24", size.width, size.height), Style::default().fg(p.text_secondary))),
+            Line::from("터미널 창을 늘려주세요."),
+        ])
+        .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(p.danger)))
+        .alignment(ratatui::layout::Alignment::Center);
+        
+        let warning_area = Rect {
+            x: size.width.saturating_sub(40) / 2,
+            y: size.height.saturating_sub(5) / 2,
+            width: 40.min(size.width),
+            height: 5.min(size.height),
+        };
+        
+        f.render_widget(ratatui::widgets::Clear, size);
+        f.render_widget(warning, warning_area);
+        return;
+    }
+
     // 메인 레이아웃 분할: 상단바, 본문 영역(타임라인+인스펙터), 커맨드 상태바, 컴포저
     let chunks = Layout::default()
         .direction(Direction::Vertical)

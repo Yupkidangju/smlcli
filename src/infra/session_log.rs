@@ -55,10 +55,55 @@ impl SessionLogger {
             .open(&file_path)
             .map_err(|e| SmlError::InfraError(format!("세션 로그 파일 열기 실패: {}", e)))?;
 
-        Ok(Self {
+        let logger = Self {
             file_path,
             writer: Mutex::new(BufWriter::new(file)),
-        })
+        };
+        let _ = logger.cleanup_old_logs();
+        Ok(logger)
+    }
+
+    /// [v1.5.0] 오래된 세션 로그 정리 (최근 5개 유지)
+    fn cleanup_old_logs(&self) -> Result<(), SmlError> {
+        let log_dir = Self::get_log_dir()?;
+        if let Ok(entries) = std::fs::read_dir(log_dir) {
+            let mut log_files: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file() && e.path().to_string_lossy().contains("session_"))
+                .collect();
+            
+            log_files.sort_by_key(|a| a.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH));
+            
+            let keep = 5;
+            if log_files.len() > keep {
+                for file in log_files.iter().take(log_files.len() - keep) {
+                    let _ = std::fs::remove_file(file.path());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// [v1.5.0] 10MB 초과 시 롤오버 (.1 백업)
+    fn rotate_if_needed(&self, w: &mut BufWriter<File>) -> Result<(), SmlError> {
+        if let Ok(metadata) = std::fs::metadata(&self.file_path)
+            && metadata.len() > 10 * 1024 * 1024
+        {
+            let _ = w.flush();
+            let mut backup_path = self.file_path.clone();
+            backup_path.set_extension("jsonl.1");
+            let _ = std::fs::rename(&self.file_path, &backup_path);
+            
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.file_path)
+                .map_err(|e| SmlError::InfraError(format!("새 로그 열기 실패: {}", e)))?;
+            
+            *w = BufWriter::new(file);
+            let _ = self.cleanup_old_logs();
+        }
+        Ok(())
     }
 
     /// [v0.1.0-beta.20] 기존 JSONL 파일로부터 로거를 생성. 세션 복원용.
@@ -86,6 +131,7 @@ impl SessionLogger {
         let json_line = serde_json::to_string(message).map_err(|e| SmlError::InfraError(format!("메시지 직렬화 실패: {}", e)))?;
         
         let mut w = self.writer.lock().map_err(|_| SmlError::InfraError("로거 락 획득 실패".into()))?;
+        self.rotate_if_needed(&mut w)?;
         writeln!(w, "{}", json_line).map_err(|e| SmlError::InfraError(format!("세션 로그 쓰기 실패: {}", e)))?;
         // [v1.0.0] BufWriter 플러시 타이밍 결함 해소 (비정상 종료 시 로그 유실 방지)
         w.flush().map_err(|e| SmlError::InfraError(format!("세션 로그 flush 실패: {}", e)))?;
@@ -98,6 +144,7 @@ impl SessionLogger {
         let json_line = serde_json::to_string(message).map_err(|e| SmlError::InfraError(format!("메시지 직렬화 실패: {}", e)))?;
         
         let mut w = self.writer.lock().map_err(|_| SmlError::InfraError("로거 락 획득 실패".into()))?;
+        self.rotate_if_needed(&mut w)?;
         writeln!(w, "{}", json_line).map_err(|e| SmlError::InfraError(format!("세션 로그 쓰기 실패: {}", e)))?;
         w.flush().map_err(|e| SmlError::InfraError(format!("세션 로그 flush 실패: {}", e)))?;
         Ok(())

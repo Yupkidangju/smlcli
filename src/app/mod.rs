@@ -118,6 +118,10 @@ impl App {
                         }
                         self.state.should_quit = true;
                     }
+                    Event::Resize(_, _) => {
+                        // [v1.5.0] 터미널 리사이즈 처리
+                        let _ = terminal.autoresize();
+                    }
                     Event::Input(key) => {
                         self.handle_input(key);
                         self.sync_toolbar();

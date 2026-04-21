@@ -15,6 +15,8 @@ pub enum Event {
     Mouse(MouseEvent),
     Action(crate::app::action::Action),
     Quit,
+    /// [v1.5.0] 터미널 리사이즈 이벤트
+    Resize(u16, u16),
 }
 
 pub struct EventLoop {
@@ -51,6 +53,11 @@ impl EventLoop {
                         }
                         Ok(CrosstermEvent::Mouse(mouse)) => {
                             if tx.blocking_send(Event::Mouse(mouse)).is_err() {
+                                break;
+                            }
+                        }
+                        Ok(CrosstermEvent::Resize(w, h)) => {
+                            if tx.blocking_send(Event::Resize(w, h)).is_err() {
                                 break;
                             }
                         }

@@ -812,3 +812,16 @@ cargo test  ✅ 46 passed (0 failed)
 - [x] **Phase 3: Optimization** (라인 래핑 최적화 및 토큰 계산 정교화)
   - `src/tui/widgets/inspector_tabs.rs`: `ratatui`의 `Wrap`으로 인한 CPU 스파이크를 방지하기 위해 가로 스크롤(Horizontal Scroll)을 도입하거나 사전 Hard Wrap 로직 구축.
   - `src/domain/session.rs`: 영문 4문자당 1토큰, 한글 1문자당 1~2토큰 등의 가중치를 부여한 토큰 계산 휴리스틱 고도화 (오차율 10% 이내 목표).
+
+## Phase 23: v1.5.0 Final Refinement (시스템 고도화 및 최종 품질 보증)
+**목표(Scope):** 터미널 리사이징 대응, LLM 의 비정형/오류 도구 호출 자동 복구, RepoMap 스캔 지연 해소, 서브 프로세스 데드락을 방지하는 하드 타임아웃, 세션 로그 파일의 10MB 분할 및 유지 정책(Rotation)을 적용하여 완성도를 극대화합니다.
+
+### 23.1 구현 및 검증 경로 (Execution Path)
+- [x] **Phase 1: Robustness** (리사이즈 가드 및 도구 호출 검증)
+  - `src/tui/terminal.rs`, `src/app/mod.rs`: `Event::Resize` 수신 시 `terminal.autoresize()` 호출 및 `area.width/height` 기반으로 80x24 미만 시 경고 화면 출력, scroll offset 클램핑 적용.
+  - `src/app/tool_runtime.rs`: 도구 인자가 유효한 JSON 스키마를 따르지 않거나 필드가 누락된 경우 즉각 에러로 종료하지 않고 LLM에게 복구를 요청하는 피드백 루프 구현.
+- [x] **Phase 2: Scalability** (스캔 최적화 및 타임아웃)
+  - `src/domain/repo_map.rs`: `WalkBuilder`에 기본 스캔 깊이(`max_depth`) 제한을 두어 `node_modules` 등 거대 트리가 깊게 들어가는 것을 방지.
+  - `src/tools/executor.rs`: 도구 실행 비동기 블록을 `tokio::time::timeout(Duration::from_secs(30))`으로 감싸서 타임아웃 발생 시 강제 종료(`SIGKILL`) 처리.
+- [x] **Phase 3: Sustainability** (로그 로테이션)
+  - `src/infra/session_log.rs`: 로그 파일 저장 시 10MB 초과를 감지하고, 초과 시 파일 롤오버 및 최신 5개만 유지하는 Retention 로직 적용.

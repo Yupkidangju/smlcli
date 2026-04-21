@@ -50,7 +50,8 @@ impl RepoMapState {
 /// 워킹 디렉토리 내 `.rs` 파일들의 구조(struct, enum, fn)를 추출하여 요약본(Repo Map)을 생성합니다.
 pub fn generate_repo_map(cwd: &str) -> Result<String> {
     let mut builder = WalkBuilder::new(cwd);
-    builder.hidden(true).ignore(true).git_ignore(true);
+    // [v1.5.0] 스캔 성능 최적화: 깊이 10 제한 적용
+    builder.hidden(true).ignore(true).git_ignore(true).max_depth(Some(10));
     let walker = builder.build();
 
     let mut repo_map = String::new();

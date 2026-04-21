@@ -27,8 +27,21 @@ impl App {
             let mut found_count = 0;
             for call in tool_calls {
                 let name = call.function.name.clone();
-                let args = serde_json::from_str::<serde_json::Value>(&call.function.arguments)
-                    .unwrap_or_else(|_| serde_json::json!({}));
+                // [v1.5.0] 잘못된 JSON 인자(Malformed Tool Call) 시 복구 피드백 루프 전송
+                let args = match serde_json::from_str::<serde_json::Value>(&call.function.arguments) {
+                    Ok(parsed) => parsed,
+                    Err(e) => {
+                        let err_msg = format!("Invalid JSON format in tool arguments: {}", e);
+                        self.state.runtime.logs_buffer.push(format!("[Tool Parse Error] {}", err_msg));
+                        // 에러를 발생시켜 Auto-Verify(Healing) 루프 진입 유도
+                        let _ = self.action_tx.try_send(crate::app::event_loop::Event::Action(
+                            crate::app::action::Action::ToolError(
+                                crate::domain::error::ToolError::ExecutionFailure(err_msg)
+                            )
+                        ));
+                        continue;
+                    }
+                };
                 let tool_call = crate::domain::tool_result::ToolCall { name, args };
 
                 // [v0.1.0-beta.22] 빈 명령은 권한 검사 이전에 즉시 차단
