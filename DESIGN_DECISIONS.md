@@ -695,7 +695,7 @@ Accepted
 ## ADR-021: Phase 17 Host Shell과 Exec Shell 분리 + Workspace Trust Gate 도입 계획
 
 ### Status
-Accepted (구현 예정)
+Implemented
 
 ### Date
 2026-04-21
@@ -722,6 +722,36 @@ Accepted (구현 예정)
   - 운영 중 workspace 범위와 차단 루트를 조정할 수 없어 실제 사용성/관리성이 떨어지므로 기각.
 
 ### Consequences
-- 사용자는 “어느 셸에서 앱이 돌고, 어느 셸이 실제 명령을 실행하는지”를 명확히 인지할 수 있다.
 - 작업 루트에 대한 신뢰 여부가 명시적 상태가 되어, 추후 보안 정책과 권한 모델을 더 정교하게 확장하기 쉬워진다.
 - trust workspace / deny roots / extra dirs를 REPL과 설정에서 함께 관리할 수 있어 장기 세션 운영성이 높아진다.
+
+---
+
+## ADR-022: Race Condition Prevention & Block Isolation in Async LLM Responses
+
+### Status
+Implemented
+
+### Date
+2026-04-21
+
+### Context
+초기 구현에서는 LLM 응답 스트리밍(`ChatDelta`, `ChatResponseOk`)을 렌더링할 때 무조건 `timeline.last_mut()`에 의존했다. 이로 인해 LLM이 응답을 생성하는 도중(`is_thinking == true`) 사용자가 새 프롬프트를 제출하거나, 도구 실행(`ToolFinished`) 후 LLM에 후속 요청을 보내는 과정에서 새 블록이 타임라인의 맨 끝에 추가되면, 진행 중이던 이전 응답 스트림이 잘못된 블록(예: 사용자의 새 입력 블록이나 다른 도구 블록)에 덮어써지는 심각한 Race Condition(블록 오염)이 발생했다.
+
+### Decision
+1. **`active_chat_block_idx` 도입**: LLM 요청(자연어 전송 및 도구 후속 전송)이 발생하는 시점에 `timeline`의 길이를 측정하여 갱신할 타겟 블록의 인덱스를 `RuntimeState`에 저장한다.
+2. **명시적 인덱스 라우팅**: 모든 비동기 응답 액션(`ChatDelta`, `ChatResponseOk`, `ChatResponseErr`)은 `last_mut()`가 아닌 `active_chat_block_idx`에 해당하는 블록만을 찾아가서 갱신한다.
+3. **`is_thinking` 철저한 잠금**: 스트리밍 중간(`ChatDelta` 수신 시점)에 `is_thinking`을 해제하던 버그를 제거하여, 요청이 시작되고 끝날 때까지 완전한 `true` 상태를 유지하도록 변경한다.
+4. **사용자 입력 원천 차단**: `is_thinking == true`일 때 사용자가 Composer에서 `Enter`를 누르거나 명령어를 실행하려고 하면 즉각 거부(`[Warning]`)하여 동시 요청으로 인한 상태 머신 교란을 아키텍처 레벨에서 차단한다.
+5. **통합 헬퍼 사용**: `dispatch_chat_request`와 `send_chat_message_internal` 양쪽 모두 블록 생성과 인덱스 할당을 통일하기 위해 `spawn_chat_request` 헬퍼 메서드로 리팩토링한다.
+
+### Alternatives Considered
+- **액션 메시지에 블록 ID/Request ID 포함**
+  - 안전한 방법이지만, Provider Adapter 규격을 변경하고 기존 이벤트 구조체를 대규모 수정해야 하므로 오버헤드가 크다고 판단하여 기각. 
+- **`chat_in_flight` 플래그 도입**
+  - 단순 플래그만으로는 "어디에 기록해야 하는지"를 지정할 수 없으므로 근본 해결책이 아님.
+
+### Consequences
+- 동시 요청으로 인한 블록 텍스트 섞임 현상이 원천 차단되었다.
+- LLM과 통신 중 사용자의 예기치 못한 단축키/명령어 난입으로 인한 런타임 Crash 및 예외 상황 방어력이 대폭 상승했다.
+- 네트워크 비동기 렌더링의 타겟이 확정적이므로 안정성이 극대화되었다.
