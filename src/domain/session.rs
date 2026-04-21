@@ -110,7 +110,22 @@ impl SessionState {
     pub fn estimate_current_tokens(&self) -> u32 {
         self.messages
             .iter()
-            .map(|m| (m.content.as_ref().map(|s| s.len()).unwrap_or(0) as u32 / 3).max(1))
+            .map(|m| {
+                if let Some(s) = &m.content {
+                    // [v1.4.0] 토큰 계산 휴리스틱 고도화: 영문 4글자당 1토큰, 비-ASCII 1글자당 1.5토큰
+                    let mut tokens: f32 = 0.0;
+                    for c in s.chars() {
+                        if c.is_ascii() {
+                            tokens += 0.25;
+                        } else {
+                            tokens += 1.5;
+                        }
+                    }
+                    (tokens.ceil() as u32).max(1)
+                } else {
+                    1
+                }
+            })
             .sum()
     }
 

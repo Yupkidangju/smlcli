@@ -450,6 +450,7 @@ pub struct RuntimeState {
     pub workspace: RuntimeWorkspaceState,
     pub active_chat_block_idx: Option<usize>,
     pub active_tool_cancel_token: Option<tokio_util::sync::CancellationToken>,
+    pub stream_accumulator: String,
 }
 
 impl RuntimeState {
@@ -464,6 +465,7 @@ impl RuntimeState {
             workspace: RuntimeWorkspaceState::new(),
             active_chat_block_idx: None,
             active_tool_cancel_token: None,
+            stream_accumulator: String::new(),
         }
     }
 }

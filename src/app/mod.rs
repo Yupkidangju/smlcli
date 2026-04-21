@@ -112,6 +112,10 @@ impl App {
             if let Ok(event) = event_loop.next().await {
                 match event {
                     Event::Quit => {
+                        // [v1.4.0] Graceful Shutdown: 활성 도구 실행 취소
+                        if let Some(token) = &self.state.runtime.active_tool_cancel_token {
+                            token.cancel();
+                        }
                         self.state.should_quit = true;
                     }
                     Event::Input(key) => {
@@ -421,6 +425,16 @@ impl App {
         self.state.ui.timeline_follow_tail = false;
     }
 
+    fn flush_stream_accumulator(&mut self) {
+        let mut rest = String::new();
+        std::mem::swap(&mut self.state.runtime.stream_accumulator, &mut rest);
+        if !rest.is_empty() {
+            if rest.ends_with('\n') { rest.pop(); }
+            if rest.ends_with('\r') { rest.pop(); }
+            self.state.runtime.logs_buffer.push(rest);
+        }
+    }
+
     fn scroll_timeline_down(&mut self, lines: u16) {
         self.state.ui.timeline_scroll = self.state.ui.timeline_scroll.saturating_sub(lines);
         if self.state.ui.timeline_scroll == 0 {
@@ -631,8 +645,24 @@ impl App {
             }
 
             action::Action::ToolOutputChunk(chunk) => {
-                // 원문 로그를 logs_buffer에 추가 (Inspector Logs 탭)
-                self.state.runtime.logs_buffer.push(chunk);
+                self.state.runtime.stream_accumulator.push_str(&chunk);
+                let mut new_lines: i32 = 0;
+                
+                while let Some(idx) = self.state.runtime.stream_accumulator.find('\n') {
+                    let mut rest = self.state.runtime.stream_accumulator.split_off(idx + 1);
+                    std::mem::swap(&mut self.state.runtime.stream_accumulator, &mut rest);
+                    
+                    let mut line = rest;
+                    if line.ends_with('\n') { line.pop(); }
+                    if line.ends_with('\r') { line.pop(); }
+                    
+                    self.state.runtime.logs_buffer.push(line);
+                    new_lines += 1;
+                }
+
+                if new_lines == 0 {
+                    return; // 라인이 추가되지 않았으므로 스크롤 로직 생략
+                }
 
                 // [v1.2.0] OOM 방지 및 Pruning 시 Sticky Scroll Sync
                 let max_lines = 10000;
@@ -644,9 +674,9 @@ impl App {
 
                 if !self.state.ui.timeline_follow_tail {
                     let mut current_scroll = self.state.ui.inspector_scroll as i32;
-                    // 새 청크가 1개 추가되었으므로 offset +1.
+                    // 새 라인이 new_lines개 추가되었으므로 offset +new_lines.
                     // 상단이 trimmed개 지워졌으므로 offset -trimmed.
-                    current_scroll += 1 - (trimmed as i32);
+                    current_scroll += new_lines - (trimmed as i32);
                     
                     if current_scroll < 0 {
                         // 보고 있던 라인이 삭제된 경우, 새로운 상단(가장 큰 값)에 위치시킴
@@ -660,6 +690,7 @@ impl App {
             }
 
             action::Action::ToolFinished(res) => {
+                self.flush_stream_accumulator();
                 self.state.runtime.active_tool_cancel_token = None;
                 // LLM 컨텍스트에 도구 결과 추가
                 let content = format!(
@@ -762,6 +793,7 @@ impl App {
             }
 
             action::Action::ToolError(e) => {
+                self.flush_stream_accumulator();
                 self.state.runtime.active_tool_cancel_token = None;
                 let failure_detail = e.to_string();
                 self.mark_repo_map_stale();

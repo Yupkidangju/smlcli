@@ -158,8 +158,7 @@ pub fn render_logs(f: &mut Frame, state: &AppState, area: Rect) {
             " (No logs recorded in this session) ",
             Style::default().fg(p.muted).add_modifier(Modifier::ITALIC),
         ))])
-        .block(Block::default().borders(Borders::NONE))
-        .wrap(Wrap { trim: false });
+        .block(Block::default().borders(Borders::NONE));
         f.render_widget(para, area);
         return;
     }
@@ -184,16 +183,22 @@ pub fn render_logs(f: &mut Frame, state: &AppState, area: Rect) {
         
         // [v1.3.0] ANSI 코드 제거 (Strip)
         let clean_log = ansi_regex().replace_all(log.as_str(), "");
+        // [v1.4.0] 긴 출력에 의한 Soft Wrap CPU 스파이크를 방지하기 위해 200자로 Hard Wrap (자르기)
+        let max_len = 250;
+        let clean_str = if clean_log.chars().count() > max_len {
+            format!("{}... (truncated for UI perf)", clean_log.chars().take(max_len).collect::<String>())
+        } else {
+            clean_log.into_owned()
+        };
         
         log_lines.push(Line::from(Span::styled(
-            clean_log.into_owned(),
+            clean_str,
             Style::default().fg(color),
         )));
     }
 
     let para = Paragraph::new(log_lines)
-        .block(Block::default().borders(Borders::NONE))
-        .wrap(Wrap { trim: false });
+        .block(Block::default().borders(Borders::NONE));
 
     f.render_widget(para, area);
 }

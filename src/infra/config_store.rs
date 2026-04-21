@@ -35,6 +35,7 @@ pub async fn save_config(settings: &PersistedSettings) -> Result<(), SmlError> {
         .map_err(|e| SmlError::Config(ConfigError::ParseFailure(format!("~/.smlcli 디렉토리 생성 실패: {}", e))))?;
 
     let path = config_path();
+    let tmp_path = path.with_extension("toml.tmp");
 
     let mut options = fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
@@ -43,14 +44,24 @@ pub async fn save_config(settings: &PersistedSettings) -> Result<(), SmlError> {
         options.mode(0o600);
     }
 
-    let mut file = options.open(&path)
+    let mut file = options.open(&tmp_path)
         .await
-        .map_err(|e| SmlError::Config(ConfigError::ParseFailure(format!("config.toml 파일 생성 실패: {}", e))))?;
+        .map_err(|e| SmlError::Config(ConfigError::ParseFailure(format!("config.toml.tmp 임시 파일 생성 실패: {}", e))))?;
 
     use tokio::io::AsyncWriteExt;
     file.write_all(toml_str.as_bytes())
         .await
-        .map_err(|e| SmlError::Config(ConfigError::ParseFailure(format!("config.toml 저장 실패: {}", e))))?;
+        .map_err(|e| SmlError::Config(ConfigError::ParseFailure(format!("config.toml.tmp 저장 실패: {}", e))))?;
+
+    // [v1.4.0] fsync 호출로 디스크 기록 보장
+    file.sync_all()
+        .await
+        .map_err(|e| SmlError::Config(ConfigError::ParseFailure(format!("config.toml.tmp 동기화 실패: {}", e))))?;
+
+    // [v1.4.0] 원본 파일로 원자적 덮어쓰기(rename)
+    fs::rename(&tmp_path, &path)
+        .await
+        .map_err(|e| SmlError::Config(ConfigError::ParseFailure(format!("config.toml 원자적 교체 실패: {}", e))))?;
 
     Ok(())
 }

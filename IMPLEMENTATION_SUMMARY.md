@@ -799,3 +799,16 @@ cargo test  ✅ 46 passed (0 failed)
   - `src/tui/widgets/inspector_tabs.rs`에 정규식 또는 ANSI 파싱 라이브러리를 도입하여, 도구 출력의 ANSI 코드를 렌더링 가능한 Span 구조로 치환하거나 필터링.
 - [x] **Phase 3: Optimization** (컨텍스트 윈도잉 및 메모리 관리)
   - `src/domain/session.rs` 및 `src/app/state.rs`에 채팅 기록 무한 증식을 방지하기 위한 최대 컨텍스트 길이/메시지 수 기반의 Sliding Window 및 자동 요약(Summarize) 구조 도입.
+
+## Phase 22: v1.4.0 Production Hardening (시스템 안정화 및 프로덕션 폴리싱)
+**목표(Scope):** 설정 파일 저장의 원자성(Atomicity) 확보, 종료 신호(SIGINT/SIGTERM) 수신 시 Graceful Shutdown 구현, 스트리밍 시 ANSI 시퀀스 분절 현상 해결, UI 라인 래핑 성능 최적화, 정교한 토큰 추정을 통한 메모리 관리 고도화.
+
+### 22.1 구현 및 검증 경로 (Execution Path)
+- [x] **Phase 1: Data Integrity** (설정 저장 원자성 및 종료 신호 처리)
+  - `src/infra/config_store.rs`: Write-and-Rename 패턴(`.tmp` 확장자로 임시 저장 후 `fs::rename`) 및 `fsync` 호출로 원자적 파일 쓰기 구현.
+  - `src/main.rs`, `src/tui/terminal.rs`: `tokio::signal::ctrl_c` 캡처를 통한 이벤트 루프 종료(`AppAction::Quit`) 및 Graceful Shutdown 구현 (자식 프로세스 정리 포함).
+- [x] **Phase 2: Streaming** (ANSI 시퀀스 분절 처리)
+  - `src/app/tool_runtime.rs`, `src/tui/widgets/inspector_tabs.rs`: `vte` 파서 또는 Stateful Byte Accumulator를 도입하여 버퍼 경계에서 발생하는 ANSI 코드 분절에 의한 깨짐 현상 완벽 대응.
+- [x] **Phase 3: Optimization** (라인 래핑 최적화 및 토큰 계산 정교화)
+  - `src/tui/widgets/inspector_tabs.rs`: `ratatui`의 `Wrap`으로 인한 CPU 스파이크를 방지하기 위해 가로 스크롤(Horizontal Scroll)을 도입하거나 사전 Hard Wrap 로직 구축.
+  - `src/domain/session.rs`: 영문 4문자당 1토큰, 한글 1문자당 1~2토큰 등의 가중치를 부여한 토큰 계산 휴리스틱 고도화 (오차율 10% 이내 목표).

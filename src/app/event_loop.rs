@@ -60,6 +60,24 @@ impl EventLoop {
             }
         });
 
+        // [v1.4.0] 시스템 신호 (SIGINT, SIGTERM) 수신 시 Graceful Shutdown (Event::Quit 전송)
+        let signal_tx = app_tx.clone();
+        task::spawn(async move {
+            #[cfg(unix)]
+            {
+                let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = sigterm.recv() => {}
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+            let _ = signal_tx.send(Event::Quit).await;
+        });
+
         (Self { rx }, app_tx)
     }
 
