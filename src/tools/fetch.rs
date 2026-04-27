@@ -38,13 +38,22 @@ impl Tool for FetchUrlTool {
         })
     }
 
+    // [v2.5.0] ProviderOnly 정책 보안 의미론 정합:
+    // ProviderOnly = "오직 LLM 프로바이더 API 엔드포인트만 허용".
+    // FetchURL은 사용자가 지정한 임의의 외부 URL을 호출하므로,
+    // ProviderOnly 환경에서는 SSRF(Server-Side Request Forgery) 방지를 위해
+    // Deny로 처리한다. FetchURL을 사용하려면 AllowAll 정책을 선택해야 한다.
     fn check_permission(&self, _args: &Value, settings: &PersistedSettings) -> PermissionResult {
-        if settings.network_policy == crate::domain::permissions::NetworkPolicy::Deny {
-            PermissionResult::Deny("FetchURL is blocked by NetworkPolicy::Deny.".to_string())
-        } else if settings.network_policy == crate::domain::permissions::NetworkPolicy::ProviderOnly {
-            PermissionResult::Ask
-        } else {
-            PermissionResult::Allow
+        match settings.network_policy {
+            crate::domain::permissions::NetworkPolicy::AllowAll => PermissionResult::Allow,
+            crate::domain::permissions::NetworkPolicy::ProviderOnly => {
+                PermissionResult::Deny(
+                    "FetchURL은 ProviderOnly 정책에서 차단됩니다. 임의 외부 URL 호출은 SSRF 위험이 있으므로, AllowAll 정책으로 변경 후 사용하세요.".to_string(),
+                )
+            }
+            crate::domain::permissions::NetworkPolicy::Deny => {
+                PermissionResult::Deny("FetchURL is blocked by NetworkPolicy::Deny.".to_string())
+            }
         }
     }
 
@@ -56,11 +65,15 @@ impl Tool for FetchUrlTool {
             .to_string();
 
         if url.is_empty() {
-            return Err(ToolError::ExecutionFailure("url parameter is missing or empty".to_string()));
+            return Err(ToolError::ExecutionFailure(
+                "url parameter is missing or empty".to_string(),
+            ));
         }
-        
+
         if !url.starts_with("https://") && !url.starts_with("http://") {
-            return Err(ToolError::ExecutionFailure("URL must start with http:// or https://".to_string()));
+            return Err(ToolError::ExecutionFailure(
+                "URL must start with http:// or https://".to_string(),
+            ));
         }
 
         let mut response = reqwest::get(&url)
@@ -68,7 +81,11 @@ impl Tool for FetchUrlTool {
             .map_err(|e| ToolError::ExecutionFailure(format!("Failed to fetch URL: {}", e)))?;
 
         let mut body_bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.map_err(|e| ToolError::ExecutionFailure(format!("Failed to read chunk: {}", e)))? {
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| ToolError::ExecutionFailure(format!("Failed to read chunk: {}", e)))?
+        {
             body_bytes.extend_from_slice(&chunk);
             if body_bytes.len() > 500_000 {
                 break;
@@ -78,7 +95,7 @@ impl Tool for FetchUrlTool {
         let content = String::from_utf8_lossy(&body_bytes).to_string();
 
         let clean_text = html2md::parse_html(&content);
-        
+
         let mut truncated = clean_text;
         if truncated.len() > 10_000 {
             truncated.truncate(10_000);
@@ -92,6 +109,9 @@ impl Tool for FetchUrlTool {
             exit_code: 0,
             is_error: false,
             tool_call_id: None,
+            is_truncated: false,
+            original_size_bytes: None,
+            affected_paths: vec![],
         })
     }
 }

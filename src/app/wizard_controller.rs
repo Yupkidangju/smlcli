@@ -3,7 +3,7 @@
 // ProviderSelection → ApiKeyInput → (validate) → ModelSelection → Saving 플로우를 관리.
 // Config 팝업의 Enter 키 처리 로직도 이 모듈에서 담당.
 
-use super::{action, event_loop, state, App};
+use super::{App, action, event_loop, state};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum WizardError {
@@ -13,8 +13,12 @@ pub enum WizardError {
 impl App {
     /// 위자드 필수 필드 검증 (Phase 19 Audit Remediation)
     fn validate_wizard_fields(&self) -> Result<(), WizardError> {
-        if self.state.ui.wizard.step == state::WizardStep::ApiKeyInput && self.state.ui.wizard.api_key_input.trim().is_empty() {
-            return Err(WizardError::MissingRequiredField("API Key is required.".to_string()));
+        if self.state.ui.wizard.step == state::WizardStep::ApiKeyInput
+            && self.state.ui.wizard.api_key_input.trim().is_empty()
+        {
+            return Err(WizardError::MissingRequiredField(
+                "API Key is required.".to_string(),
+            ));
         }
         Ok(())
     }
@@ -96,7 +100,9 @@ impl App {
                 self.state.ui.wizard.step = state::WizardStep::Saving;
             }
             state::WizardStep::Saving => {
-                self.save_wizard_settings();
+                if !self.state.ui.wizard.is_loading_models {
+                    self.save_wizard_settings();
+                }
             }
         }
     }
@@ -123,7 +129,8 @@ impl App {
             default_model,
             shell_policy: crate::domain::permissions::ShellPolicy::Ask,
             file_write_policy: crate::domain::permissions::FileWritePolicy::AlwaysAsk,
-            network_policy: crate::domain::permissions::NetworkPolicy::ProviderOnly,
+            // [v2.5.0] Safe Starter preset (designs.md §8 Step 4): network AllowAll
+            network_policy: crate::domain::permissions::NetworkPolicy::AllowAll,
             safe_commands: None,
             encrypted_keys: std::collections::HashMap::new(),
             theme: "default".to_string(),
@@ -144,17 +151,30 @@ impl App {
         }
 
         // 설정을 TOML로 디스크에 비동기 저장
-        let _action_tx = self.action_tx.clone();
+        let tx = self.action_tx.clone();
         let settings_clone = settings.clone();
 
-        // [v0.1.0-beta.19] 비동기 저장을 위해 tokio::spawn 사용 (wizard_controller가 sync 메서드이므로)
         tokio::spawn(async move {
-            let _ = crate::infra::config_store::save_config(&settings_clone).await;
+            match crate::infra::config_store::save_config(&settings_clone).await {
+                Ok(_) => {
+                    let _ = tx
+                        .send(event_loop::Event::Action(
+                            action::Action::WizardSaveFinished(Ok(())),
+                        ))
+                        .await;
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(event_loop::Event::Action(
+                            action::Action::WizardSaveFinished(Err(e.to_string())),
+                        ))
+                        .await;
+                }
+            }
         });
 
         self.state.domain.settings = Some(settings); // 메모리에 반영하여 앱의 구동 상태 보장
-        crate::providers::registry::reload_providers(); // [v1.2.0] 동적 갱신
-        self.state.ui.is_wizard_open = false;
+        self.state.ui.wizard.is_loading_models = true; // 저장 중 스피너 표시 등 로딩 상태 활용
     }
 
     /// Config 팝업의 Enter 키 처리: Dashboard/ProviderList/ModelList 각 화면에서의 선택 및 저장.
@@ -244,9 +264,16 @@ impl App {
                                 }
                             };
                             let settings_clone = s.clone();
+                            let tx = self.action_tx.clone();
                             tokio::spawn(async move {
-                                let _ =
-                                    crate::infra::config_store::save_config(&settings_clone).await;
+                                let res = crate::infra::config_store::save_config(&settings_clone)
+                                    .await
+                                    .map_err(|e| e.to_string());
+                                let _ = tx
+                                    .send(crate::app::event_loop::Event::Action(
+                                        crate::app::action::Action::ConfigSaveFinished(res),
+                                    ))
+                                    .await;
                             });
                         }
                     }
@@ -266,9 +293,34 @@ impl App {
                                 }
                             };
                             let settings_clone = s.clone();
+                            let tx = self.action_tx.clone();
                             tokio::spawn(async move {
-                                let _ =
-                                    crate::infra::config_store::save_config(&settings_clone).await;
+                                let res = crate::infra::config_store::save_config(&settings_clone)
+                                    .await
+                                    .map_err(|e| e.to_string());
+                                let _ = tx
+                                    .send(crate::app::event_loop::Event::Action(
+                                        crate::app::action::Action::ConfigSaveFinished(res),
+                                    ))
+                                    .await;
+                            });
+                        }
+                    }
+                    4 => {
+                        // Sandbox 토글
+                        if let Some(s) = &mut self.state.domain.settings {
+                            s.sandbox.enabled = !s.sandbox.enabled;
+                            let settings_clone = s.clone();
+                            let tx = self.action_tx.clone();
+                            tokio::spawn(async move {
+                                let res = crate::infra::config_store::save_config(&settings_clone)
+                                    .await
+                                    .map_err(|e| e.to_string());
+                                let _ = tx
+                                    .send(crate::app::event_loop::Event::Action(
+                                        crate::app::action::Action::ConfigSaveFinished(res),
+                                    ))
+                                    .await;
                             });
                         }
                     }
@@ -277,16 +329,25 @@ impl App {
             }
             state::ConfigPopup::ProviderList => {
                 let new_provider_str = match self.state.ui.config.cursor_index {
-                    0 => "OpenAI",
-                    1 => "Anthropic",
-                    2 => "xAI",
-                    3 => "OpenRouter",
-                    _ => "Google",
+                    0 => "OpenAI".to_string(),
+                    1 => "Anthropic".to_string(),
+                    2 => "xAI".to_string(),
+                    3 => "OpenRouter".to_string(),
+                    4 => "Google".to_string(),
+                    idx => {
+                        let mut res = "OpenAI".to_string();
+                        if let Some(settings) = &self.state.domain.settings
+                            && let Some(cp) = settings.custom_providers.get(idx.saturating_sub(5))
+                        {
+                            res = format!("Custom: {}", cp.id);
+                        }
+                        res
+                    }
                 };
 
                 // [v0.1.0-beta.9] 중앙 보안 가드: NetworkPolicy + 암호화 저장소 사전 검증
                 let (provider_kind, api_key) =
-                    match self.resolve_credentials_for_provider(new_provider_str) {
+                    match self.resolve_credentials_for_provider(&new_provider_str) {
                         Ok(creds) => creds,
                         Err(err_msg) => {
                             self.state.ui.config.active_popup = state::ConfigPopup::Dashboard;
@@ -370,8 +431,16 @@ impl App {
 
                         // [v0.1.0-beta.14] 이 시점에서 비로소 provider 전환이 디스크에 영속화됨 (원자성 보장).
                         let settings_clone = s.clone();
+                        let tx = self.action_tx.clone();
                         tokio::spawn(async move {
-                            let _ = crate::infra::config_store::save_config(&settings_clone).await;
+                            let res = crate::infra::config_store::save_config(&settings_clone)
+                                .await
+                                .map_err(|e| e.to_string());
+                            let _ = tx
+                                .send(crate::app::event_loop::Event::Action(
+                                    crate::app::action::Action::ConfigSaveFinished(res),
+                                ))
+                                .await;
                         });
                         crate::providers::registry::reload_providers(); // [v1.2.0] 동적 갱신
 

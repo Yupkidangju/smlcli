@@ -27,6 +27,7 @@ pub struct WorkspaceTrustRecord {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PersistedSettings {
+    #[serde(default = "default_version")]
     pub version: u32,
     pub default_provider: String,
     pub default_model: String,
@@ -52,11 +53,87 @@ pub struct PersistedSettings {
     pub denied_roots: Vec<String>,
     #[serde(default)]
     pub extra_workspace_dirs: Vec<String>,
+    /// [v2.3.0] Phase 31: Configurable Whitelist for Environment Variables
+    #[serde(default)]
+    pub allowed_env_vars: Vec<String>,
+    /// [v2.5.0] Phase 33: ASCII Border Fallback (로케일 호환성)
+    #[serde(default)]
+    pub use_ascii_borders: bool,
+    /// [v3.0.0] Phase 40: Git-Native Integration 설정
+    #[serde(default)]
+    pub git_integration: GitIntegrationConfig,
+    /// [v3.1.0] Phase 41: 커스텀 Provider 리스트
+    #[serde(default)]
+    pub custom_providers: Vec<crate::domain::provider::CustomProviderConfig>,
+    /// [v3.2.0] Phase 42: OS-Level Sandbox 설정
+    #[serde(default)]
+    pub sandbox: SandboxConfig,
+    /// [v3.3.0] Phase 43: MCP 클라이언트 서버 설정
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+/// [v3.0.0] Git 통합 설정
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GitIntegrationConfig {
+    /// 도구 실행 성공 시 자동 커밋 여부 (기본: false, 명시적 opt-in 필요)
+    pub auto_commit: bool,
+    /// 커밋 메시지 접두사 (기본: "smlcli: ")
+    pub commit_prefix: String,
+    /// 자동 커밋 대상 도구 목록
+    pub commit_tools: Vec<String>,
+}
+
+impl Default for GitIntegrationConfig {
+    fn default() -> Self {
+        Self {
+            // [v2.5.2] 감사 MEDIUM-2: 기본값 false로 변경.
+            // 사용자 워크트리에 직접 영향을 주는 자동 커밋은 명시적 opt-in이 더 안전한 UX.
+            auto_commit: false,
+            commit_prefix: "smlcli: ".to_string(),
+            commit_tools: vec![
+                "WriteFile".to_string(),
+                "ReplaceFileContent".to_string(),
+                "DeleteFile".to_string(),
+            ],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SandboxConfig {
+    pub enabled: bool,
+    #[serde(default)]
+    pub allow_network: bool,
+    #[serde(default)]
+    pub extra_binds: Vec<String>,
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            allow_network: true,
+            extra_binds: Vec::new(),
+        }
+    }
 }
 
 /// theme 필드의 기본값: "default"
 fn default_theme() -> String {
     "default".to_string()
+}
+
+fn default_version() -> u32 {
+    1
 }
 
 impl Default for PersistedSettings {
@@ -74,6 +151,12 @@ impl Default for PersistedSettings {
             trusted_workspaces: Vec::new(),
             denied_roots: Vec::new(),
             extra_workspace_dirs: Vec::new(),
+            allowed_env_vars: Vec::new(),
+            use_ascii_borders: false,
+            git_integration: GitIntegrationConfig::default(),
+            custom_providers: Vec::new(),
+            sandbox: SandboxConfig::default(),
+            mcp_servers: Vec::new(),
         }
     }
 }
@@ -93,7 +176,11 @@ impl PersistedSettings {
             .unwrap_or_default()
             .as_millis() as u64;
 
-        if let Some(record) = self.trusted_workspaces.iter_mut().find(|r| r.root_path == root) {
+        if let Some(record) = self
+            .trusted_workspaces
+            .iter_mut()
+            .find(|r| r.root_path == root)
+        {
             record.state = state;
             record.remember = remember;
             record.updated_at_unix_ms = now;
@@ -109,5 +196,16 @@ impl PersistedSettings {
 
     pub fn remove_workspace_trust(&mut self, root: &str) {
         self.trusted_workspaces.retain(|r| r.root_path != root);
+    }
+
+    /// [v2.2.0] Phase 30: Config Schema Auto-Migration
+    pub fn migrate(&mut self) -> bool {
+        let mut migrated = false;
+        if self.version < 1 {
+            // v0 -> v1 승격 로직
+            self.version = 1;
+            migrated = true;
+        }
+        migrated
     }
 }

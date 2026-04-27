@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout},
     style::Style,
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Borders, Clear, Paragraph},
 };
 
 pub fn draw_config(f: &mut Frame, state: &AppState) {
@@ -36,10 +36,17 @@ pub fn draw_config(f: &mut Frame, state: &AppState) {
 
     f.render_widget(Clear, area); // 배경 클리어
 
-    let block = Block::default()
-        .title(" Configuration ")
-        .borders(Borders::ALL)
-        .style(Style::default().fg(p.warning));
+    let block = crate::tui::widgets::block_with_borders(
+        Borders::ALL,
+        state
+            .domain
+            .settings
+            .as_ref()
+            .map(|s| s.use_ascii_borders)
+            .unwrap_or(false),
+    )
+    .title(" Configuration ")
+    .style(Style::default().fg(p.warning));
     let inner_area = block.inner(area);
     f.render_widget(block, area);
 
@@ -71,11 +78,25 @@ pub fn draw_config(f: &mut Frame, state: &AppState) {
                 .map(|st| format!("{:?}", st.network_policy))
                 .unwrap_or("None".to_string());
 
+            let sandbox_policy = state
+                .domain
+                .settings
+                .as_ref()
+                .map(|st| {
+                    if st.sandbox.enabled {
+                        "Enabled"
+                    } else {
+                        "Disabled"
+                    }
+                })
+                .unwrap_or("Disabled");
+
             let items = [
                 format!("Provider: {}", provider),
                 format!("Model: {}", model),
                 format!("Shell Policy: {}", shell_policy),
                 format!("Network Policy: {}", network_policy),
+                format!("Sandbox: {}", sandbox_policy),
             ];
 
             for (i, item) in items.iter().enumerate() {
@@ -96,7 +117,20 @@ pub fn draw_config(f: &mut Frame, state: &AppState) {
         }
         ConfigPopup::ProviderList => {
             let mut s = "Select Provider\n\n".to_string();
-            let items = ["OpenAI", "Anthropic", "xAI", "OpenRouter", "Google (Gemini)"];
+            let mut items = vec![
+                "OpenAI".to_string(),
+                "Anthropic".to_string(),
+                "xAI".to_string(),
+                "OpenRouter".to_string(),
+                "Google (Gemini)".to_string(),
+            ];
+
+            if let Some(settings) = &state.domain.settings {
+                for cp in &settings.custom_providers {
+                    items.push(format!("Custom: {}", cp.id));
+                }
+            }
+
             for (i, item) in items.iter().enumerate() {
                 if i == state.ui.config.cursor_index {
                     s.push_str(&format!(" > {}\n", item));

@@ -26,6 +26,18 @@ impl TerminalGuard {
         let terminal = Terminal::new(backend)?;
         Ok(Self { terminal })
     }
+
+    /// 서브 프로세스 종료 직후 터미널 잔상(Ghosting) 제거 및 커서 명시적 재설정.
+    pub fn clear_and_reset(&mut self) -> Result<()> {
+        let mut stdout = io::stdout();
+        execute!(
+            stdout,
+            crossterm::cursor::Show,
+            crossterm::cursor::MoveTo(0, 0)
+        )?;
+        self.terminal.clear()?;
+        Ok(())
+    }
 }
 
 impl Drop for TerminalGuard {

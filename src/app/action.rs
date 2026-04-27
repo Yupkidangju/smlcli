@@ -18,7 +18,10 @@ pub enum FetchSource {
     Wizard,
 }
 
+// [v3.7.0] ChatStarted, ToolQueued, ToolStarted, ToolSummaryReady variant는
+// 이벤트 기반 리팩토링 시 활성화 예정. 현재 세단화된 핸들러 방식으로 동작 중.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum Action {
     // === 채팅 라이프사이클 ===
     /// [v1.3.0] 파일 멘션 파싱이 완료된 텍스트를 LLM에 제출
@@ -51,13 +54,13 @@ pub enum Action {
     ToolOutputChunk(String),
 
     /// 도구 실행 완료. 결과를 세션 메시지에 추가.
-    ToolFinished(Box<crate::domain::tool_result::ToolResult>),
+    ToolFinished(Box<crate::domain::tool_result::ToolResult>, usize),
 
     /// [v0.1.0-beta.18] 2~4줄 요약 생성 완료. 타임라인 카드의 summary 갱신.
     ToolSummaryReady(String),
 
-    /// [v0.1.0-beta.21] 도구 실행 실패 — ToolError 타입으로 구조화.
-    ToolError(crate::domain::error::ToolError),
+    /// [v0.1.0-beta.21] 도구 실행 실패 — ToolError 타입으로 구조화. (tool_call_id 포함)
+    ToolError(crate::domain::error::ToolError, Option<String>, usize),
 
     // === 기존 유지 ===
     /// [v0.1.0-beta.21] 비동기 모델 목록 조회 결과 — 실패 시 ProviderError 사용.
@@ -80,4 +83,39 @@ pub enum Action {
 
     /// 컨텍스트 요약 실패
     ContextSummaryErr(String),
+
+    /// [v2.4.0] 무소음 환경 진단 실패
+    SilentHealthCheckFailed,
+
+    /// [v3.3.0] MCP 도구 로드 완료
+    /// [v3.3.2] 감사 HIGH-3 수정: 4번째 인자로 tool name 역매핑 테이블 추가.
+    /// key: 정규화된 전체 도구명("mcp_{sanitized_server}_{sanitized_tool}"),
+    /// value: (sanitized_server, original_tool_name)
+    McpToolsLoaded(
+        String,                                              // 정규화된 서버명
+        Vec<serde_json::Value>,                              // 스키마 목록
+        crate::infra::mcp_client::McpClient,                 // 클라이언트
+        std::collections::HashMap<String, (String, String)>, // 역매핑 테이블
+    ),
+
+    /// [v3.3.1] 감사 MEDIUM-1: MCP 서버 로드 실패 시 사용자에게 피드백 제공.
+    /// spawn() 또는 list_tools() 실패 시 서버명과 에러 메시지를 전달.
+    McpLoadFailed(String, String),
+
+    /// [v3.7.0] Phase 47 Task Q-3: AskClarification 도구 호출 시 TUI 모달 렌더링.
+    /// 파싱된 질문 목록, tool_call_id, tool_index를 전달하여
+    /// QuestionnaireState를 생성하고 UI를 Questionnaire 모드로 전환.
+    ShowQuestionnaire(
+        Vec<crate::domain::questionnaire::ClarificationQuestion>,
+        Option<String>, // tool_call_id
+        usize,          // tool_index
+    ),
+
+    /// QuestionnaireState에서 수집된 답변을 ToolResult로 조립하여 LLM에 전달.
+    QuestionnaireCompleted,
+
+    /// [v3.7.1] 설정 마법사 저장 완료 이벤트
+    WizardSaveFinished(Result<(), String>),
+    /// [v3.7.1] 일반 설정 비동기 저장 완료 이벤트
+    ConfigSaveFinished(Result<(), String>),
 }

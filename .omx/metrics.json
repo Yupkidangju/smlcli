@@ -1,8 +1,10 @@
 {
-  "total_turns": 67,
-  "session_turns": 67,
-  "last_activity": "2026-04-21T06:05:30.919Z",
+  "total_turns": 20,
+  "session_turns": 20,
+  "last_activity": "2026-04-25T07:12:18.173Z",
   "session_input_tokens": 0,
   "session_output_tokens": 0,
-  "session_total_tokens": 0
+  "session_total_tokens": 0,
+  "five_hour_limit_pct": 0,
+  "weekly_limit_pct": 0
 }

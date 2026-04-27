@@ -41,7 +41,7 @@ pub(crate) fn grep_search(query: &str, path: &str, is_regex: bool) -> Result<Too
 
                 let all_lines: Vec<&str> = content.lines().collect();
                 let mut file_has_match = false;
-                
+
                 let re = if is_regex {
                     match regex::Regex::new(query) {
                         Ok(r) => Some(r),
@@ -124,6 +124,9 @@ pub(crate) fn grep_search(query: &str, path: &str, is_regex: bool) -> Result<Too
         exit_code: 0,
         is_error: false,
         tool_call_id: None,
+        is_truncated: false,
+        original_size_bytes: None,
+        affected_paths: vec![],
     })
 }
 
@@ -169,7 +172,14 @@ impl Tool for GrepSearchTool {
         })
     }
 
-    fn check_permission(&self, _args: &Value, _settings: &PersistedSettings) -> PermissionResult {
+    fn check_permission(&self, args: &Value, _settings: &PersistedSettings) -> PermissionResult {
+        if let Some(e) = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .and_then(|path| crate::tools::file_ops::validate_sandbox(path).err())
+        {
+            return PermissionResult::Deny(e);
+        }
         PermissionResult::Allow
     }
 
@@ -184,12 +194,18 @@ impl Tool for GrepSearchTool {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+
+        let safe_path = match crate::tools::file_ops::validate_sandbox(&path) {
+            Ok(p) => p.to_string_lossy().to_string(),
+            Err(e) => return Err(ToolError::ExecutionFailure(e)),
+        };
+
         let is_regex = args
             .get("is_regex")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        grep_search(&query, &path, is_regex)
+        grep_search(&query, &safe_path, is_regex)
             .map_err(|e| ToolError::ExecutionFailure(e.to_string()))
     }
 }

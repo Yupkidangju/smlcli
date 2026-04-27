@@ -27,14 +27,17 @@ fn master_key_path() -> PathBuf {
 /// [v0.1.0-beta.19] secrecy::SecretBox<Vec<u8>>을 사용하여 메모리 상의 키 노출을 방지.
 pub fn get_or_create_master_key() -> Result<SecretBox<Vec<u8>>, SmlError> {
     let config_dir = get_config_dir();
-    std::fs::create_dir_all(&config_dir).map_err(|e| SmlError::InfraError(format!("~/.smlcli 디렉토리 생성 실패: {}", e)))?;
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| SmlError::InfraError(format!("~/.smlcli 디렉토리 생성 실패: {}", e)))?;
 
     let path = master_key_path();
 
     if path.exists() {
-        let encoded = std::fs::read_to_string(&path).map_err(|e| SmlError::InfraError(format!("마스터 키 파일 읽기 실패: {}", e)))?;
-        let key =
-            hex::decode(encoded.trim()).map_err(|e| SmlError::InfraError(format!("마스터 키 hex 디코딩 실패 (파일 손상 가능): {}", e)))?;
+        let encoded = std::fs::read_to_string(&path)
+            .map_err(|e| SmlError::InfraError(format!("마스터 키 파일 읽기 실패: {}", e)))?;
+        let key = hex::decode(encoded.trim()).map_err(|e| {
+            SmlError::InfraError(format!("마스터 키 hex 디코딩 실패 (파일 손상 가능): {}", e))
+        })?;
         if key.len() != 32 {
             return Err(SmlError::InfraError(format!(
                 "마스터 키 길이 불일치: {}바이트 (32바이트 필요)",
@@ -44,7 +47,8 @@ pub fn get_or_create_master_key() -> Result<SecretBox<Vec<u8>>, SmlError> {
         Ok(SecretBox::new(key.into()))
     } else {
         let mut key = vec![0u8; 32];
-        getrandom::fill(&mut key).map_err(|e| SmlError::InfraError(format!("난수 생성 실패: {}", e)))?;
+        getrandom::fill(&mut key)
+            .map_err(|e| SmlError::InfraError(format!("난수 생성 실패: {}", e)))?;
         let encoded = hex::encode(&key);
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create(true).truncate(true);
@@ -54,21 +58,28 @@ pub fn get_or_create_master_key() -> Result<SecretBox<Vec<u8>>, SmlError> {
             options.mode(0o600);
         }
 
-        let mut file = options.open(&path).map_err(|e| SmlError::InfraError(format!("마스터 키 파일 생성 실패: {}", e)))?;
+        let mut file = options
+            .open(&path)
+            .map_err(|e| SmlError::InfraError(format!("마스터 키 파일 생성 실패: {}", e)))?;
         use std::io::Write;
-        file.write_all(encoded.as_bytes()).map_err(|e| SmlError::InfraError(format!("마스터 키 파일 저장 실패: {}", e)))?;
+        file.write_all(encoded.as_bytes())
+            .map_err(|e| SmlError::InfraError(format!("마스터 키 파일 저장 실패: {}", e)))?;
 
         Ok(SecretBox::new(key.into()))
     }
 }
 
 /// 평문 값을 암호화하여 "hex_nonce:hex_ciphertext" 형식 반환.
-pub fn encrypt_value(master_key: &SecretBox<Vec<u8>>, plaintext: &SecretString) -> Result<String, SmlError> {
+pub fn encrypt_value(
+    master_key: &SecretBox<Vec<u8>>,
+    plaintext: &SecretString,
+) -> Result<String, SmlError> {
     let cipher = XChaCha20Poly1305::new_from_slice(master_key.expose_secret())
         .map_err(|e| SmlError::InfraError(format!("암호화 키 길이 오류: {}", e)))?;
 
     let mut nonce_bytes = [0u8; 24];
-    getrandom::fill(&mut nonce_bytes).map_err(|e| SmlError::InfraError(format!("논스 생성 실패: {}", e)))?;
+    getrandom::fill(&mut nonce_bytes)
+        .map_err(|e| SmlError::InfraError(format!("논스 생성 실패: {}", e)))?;
     let nonce = XNonce::from_slice(&nonce_bytes);
 
     let ciphertext = cipher
@@ -83,14 +94,19 @@ pub fn encrypt_value(master_key: &SecretBox<Vec<u8>>, plaintext: &SecretString) 
 }
 
 /// 암호화된 값을 복호화하여 SecretString으로 반환.
-pub fn decrypt_value(master_key: &SecretBox<Vec<u8>>, encrypted: &str) -> Result<SecretString, SmlError> {
+pub fn decrypt_value(
+    master_key: &SecretBox<Vec<u8>>,
+    encrypted: &str,
+) -> Result<SecretString, SmlError> {
     let parts: Vec<&str> = encrypted.splitn(2, ':').collect();
     if parts.len() != 2 {
         return Err(SmlError::InfraError("암호화된 값 형식 오류".into()));
     }
 
-    let nonce_bytes = hex::decode(parts[0]).map_err(|e| SmlError::InfraError(format!("논스 hex 디코딩 실패: {}", e)))?;
-    let ciphertext = hex::decode(parts[1]).map_err(|e| SmlError::InfraError(format!("암호문 hex 디코딩 실패: {}", e)))?;
+    let nonce_bytes = hex::decode(parts[0])
+        .map_err(|e| SmlError::InfraError(format!("논스 hex 디코딩 실패: {}", e)))?;
+    let ciphertext = hex::decode(parts[1])
+        .map_err(|e| SmlError::InfraError(format!("암호문 hex 디코딩 실패: {}", e)))?;
 
     let cipher = XChaCha20Poly1305::new_from_slice(master_key.expose_secret())
         .map_err(|e| SmlError::InfraError(format!("복호화 키 길이 오류: {}", e)))?;
@@ -100,8 +116,9 @@ pub fn decrypt_value(master_key: &SecretBox<Vec<u8>>, encrypted: &str) -> Result
         .decrypt(nonce, ciphertext.as_ref())
         .map_err(|_e| SmlError::InfraError("복호화 실패 (키 불일치 또는 데이터 손상)".into()))?;
 
-    let secret_str =
-        String::from_utf8(plaintext).map_err(|e| SmlError::InfraError(format!("복호화된 값이 유효한 UTF-8이 아닙니다: {}", e)))?;
+    let secret_str = String::from_utf8(plaintext).map_err(|e| {
+        SmlError::InfraError(format!("복호화된 값이 유효한 UTF-8이 아닙니다: {}", e))
+    })?;
     Ok(SecretString::new(secret_str.into()))
 }
 

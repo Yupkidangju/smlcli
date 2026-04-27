@@ -3,25 +3,9 @@
   "active": true,
   "skill": "cancel",
   "keyword": "Abort",
-  "phase": "planning",
+  "phase": "reviewing",
   "activated_at": "2026-04-20T04:51:02.983Z",
-  "updated_at": "2026-04-20T04:51:02.983Z",
+  "updated_at": "2026-04-22T18:42:20.859Z",
   "source": "keyword-detector",
-  "session_id": "",
-  "thread_id": "019da8ca-d466-75d2-84fd-fc8581b167df",
-  "turn_id": "019da92e-eb72-71c2-b0e5-1e1508f8e981",
-  "active_skills": [
-    {
-      "skill": "cancel",
-      "phase": "planning",
-      "active": true,
-      "activated_at": "2026-04-20T04:51:02.983Z",
-      "updated_at": "2026-04-20T04:51:02.983Z",
-      "session_id": "",
-      "thread_id": "019da8ca-d466-75d2-84fd-fc8581b167df",
-      "turn_id": "019da92e-eb72-71c2-b0e5-1e1508f8e981"
-    }
-  ],
-  "iteration": 20,
-  "last_turn_at": "2026-04-21T06:05:30.913Z"
+  "input_lock": null
 }

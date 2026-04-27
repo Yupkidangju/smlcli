@@ -1,6 +1,6 @@
 [package]
 name = "smlcli"
-version = "1.2.0-rc.1"
+version = "3.7.1"
 edition = "2024"
 
 [dependencies]
@@ -31,6 +31,15 @@ uuid = { version = "1.23.1", features = ["v4"] }
 regex = "1.12.3"
 html2md = "0.2.15"
 tokio-util = "0.7.18"
+unicode-width = "0.2.2"
+libc = "0.2.185"
+fs2 = "0.4.3"
+arboard = "3.6.1"
+clap_complete = "4.6.2"
+shadow-rs = "1.7.1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+[build-dependencies]
+shadow-rs = "1.7.1"

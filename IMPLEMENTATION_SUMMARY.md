@@ -41,7 +41,7 @@
 - [x] **Task 10: 파일 읽기 도구 및 Preview 탭 구현**
   - 파일 읽기 기능 및 `Inspector -> Preview` 화면에 안전한 Line 출력 기능 추가
 - [x] **Task 11: Grep 검색과 Search 탭 구현**
-  - 재귀적 검색 (`ignore` 기반 탐색), 일치 항목의 컨텍스트를 Search 창에 목록 처리 
+  - 재귀적 검색 (`ignore` 기반 탐색), 일치 항목의 컨텍스트를 Search 창에 목록 처리
 - [x] **Task 12: 파일 수정, Diff 뷰, 승인 UI 구성 (CRITICAL)**
   - 모델의 변경 제안에 따라 Inspector의 Diff 탭 활성화
   - 타임라인 내에 [Approve], [Deny] 카드 노출
@@ -79,6 +79,13 @@
 
 ## 최근 구현 요약
 _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니다.)_
+
+- [2026-04-21] : **[Implemented - Phase 25 Ultimate Polish & Security Hardening]**
+  - ✅ **UTF-8 안전성 보장 (UX/UI)**: TUI 렌더링 시 `unicode-width` 크레이트를 적용하여 한국어/이모지 멀티바이트 문자가 깨지거나 패닉이 발생하는 현상 수정.
+  - ✅ **심볼릭 링크 샌드박스 탈옥 방지 (Security)**: `file_ops`에서 `std::fs::canonicalize`를 통해 파일 절대 경로를 확인하여 Workspace 외부 경로 접근(Path Traversal/Symlink) 차단.
+  - ✅ **네트워크 타임아웃 및 재시도 (Robustness)**: LLM API 호출(429/5xx) 및 행(Hanging) 현상 방어를 위해 지수 백오프 기반의 재시도(Retry)와 60초 타임아웃 적용.
+  - ✅ **ENOSPC 디스크 에러 그레이스풀 폴백 (Reliability)**: 로그(`session_log`) 및 설정(`config_store`) 기록 시 디스크 용량 부족(`StorageFull`) 오류를 캡처하여 패닉 방지 및 보존 정책 적용.
+  - ✅ **터미널 프로세스 잔상 제거 (UX)**: `ExecShell`을 통한 서브 프로세스 실행 후 TUI 복귀 시, 화면 잔상(Ghosting) 방지를 위한 `terminal.clear()` 및 커서 재설정 로직 반영.
 
 - [2026-04-21] : **[Implemented - Windows Host Shell / Workspace Trust Gate]** 계획된 Workspace Trust Gate 및 호스트 셸 정렬 구현 완료.
   - ✅ **Task 1: Workspace root 결정 유틸리티 통합**: `.git` 또는 `Cargo.toml` 상향 탐색이 성공하면 root를 확정하고, 실패 시 현재 디렉터리를 사용하도록 통합.
@@ -437,8 +444,8 @@ cargo clippy  ✅ 0 warnings (-D warnings 게이트 통과)
   - 파일 읽기 에러 발생 -> `TimelineEntryKind::SystemNotice(msg)` 변환 -> 타임라인 Push. (UI 블로킹 없음)
 
 ### 11.3 핵심 알고리즘 메모
-- **Fuzzy Finder 다형성**: 
-  - TUI 렌더링 컴포넌트는 `FuzzyMode`가 무엇인지 알 필요가 없다. 오직 `app/mod.rs`의 `update_fuzzy_matches()` 루틴만 `FuzzyMode`를 보고 `ignore::WalkBuilder`를 돌릴지, 아니면 하드코딩된 `Macros` 배열을 필터링할지 결정한다. 
+- **Fuzzy Finder 다형성**:
+  - TUI 렌더링 컴포넌트는 `FuzzyMode`가 무엇인지 알 필요가 없다. 오직 `app/mod.rs`의 `update_fuzzy_matches()` 루틴만 `FuzzyMode`를 보고 `ignore::WalkBuilder`를 돌릴지, 아니면 하드코딩된 `Macros` 배열을 필터링할지 결정한다.
 - **매크로 문자열 역분해**:
   - `build      (cargo build)` 형태로 렌더링된 문자열을 `handle_enter_key`에서 선택할 시, 괄호 안의 실제 명령어 부분만 파싱(`.split('(').nth(1)...`)하여 Composer 버퍼에 `!cargo build` 텍스트로 치환한다.
 
@@ -550,7 +557,7 @@ cargo test  ✅ 46 passed (0 failed)
 
 ---
 
-## Phase 15: 2026 CLI UX 현대화 로드맵 (진행 중)
+## Phase 15: 2026 CLI UX 현대화 로드맵 (완료)
 
 이 페이즈는 이미 구현된 Phase 13~14의 기반을 유지하면서, `smlcli`를 **블록 기반 작업 콘솔**로 승격시키는 계획 단계다. 목적은 "더 화려한 TUI"가 아니라, 빠른 명령 발견, 작업 재참조, 긴 출력 관리, 독립 패널 포커스, 절제된 모션을 갖춘 실사용 CLI UX를 만드는 것이다.
 
@@ -658,7 +665,7 @@ cargo test  ✅ 46 passed (0 failed)
 | **Trust Gate UI** | `src/app/wizard_controller.rs`<br>`src/tui/widgets/trust_gate.rs` | 시작 시 현재 작업 디렉터리가 `Unknown` 상태일 경우, 3가지 선택지(Trust Once, Trust & Remember, Restricted)를 제공하는 프롬프트 렌더링. |
 | **Permission Engine 연동** | `src/domain/permissions.rs` | 권한 검사 시 현재 `trust_state`를 조회하여 `Restricted` 또는 `Denied` 상태면 쓰기/실행 도구(`WriteFile`, `ExecShell`)의 권한을 차단. |
 | **Shell Host 추론 및 실행** | `src/tools/shell.rs`<br>`src/app/state.rs` | Windows 환경에서 현재 호스트 셸과 무관하게 실행 셸(`exec_shell`)을 `pwsh` 또는 `powershell.exe`로 강제 지정 및 런타임 탐지 로직 추가. |
-| **REPL 명령어 및 상태 표시** | `src/app/command_router.rs`<br>`src/tui/layout.rs` | `/workspace trust`, `/workspace add`, `/workspace deny` 슬래시 명령어 추가. 상태바 및 `/status` 명령어 출력에 현재 Host/Exec 셸 정보 및 Trust 상태 노출. |
+| **REPL 명령어 및 상태 표시** | `src/app/command_router.rs`<br>`src/tui/layout.rs` | `/workspace show/trust/deny/clear` 슬래시 명령어 구현 완료. `/workspace add/remove`는 **v3.0에서 구현 예정**. 상태바 및 `/status` 명령어 출력에 현재 Host/Exec 셸 정보 및 Trust 상태 노출. |
 
 ### 17.2 경계 계약 요약 (Typed Contracts)
 - **신뢰 상태 모델 (WorkspaceTrustState)**:
@@ -712,7 +719,7 @@ cargo test  ✅ 46 passed (0 failed)
 
 ---
 
-## Phase 19: v1.0.0 Audit Remediation (진행 중)
+## Phase 19: v1.0.0 Audit Remediation (완료)
 **목표(Scope):** v1.0.0 출시 전 식별된 9가지 시스템 결함(상태 의존성, 데드락 위험, 권한 우회 등)을 해결하여 완전한 무상태 도구 실행과 이벤트 루프의 동시성 안정성을 확보합니다.
 **비목표(Non-Scope):** 새로운 AI 모델 연동이나 TUI의 신규 레이아웃 추가 등은 이 단계에 포함되지 않습니다.
 
@@ -746,7 +753,7 @@ cargo test  ✅ 46 passed (0 failed)
 - **상태바 갱신 주기**: 기존 대비 틱(tick) 레이트 `100ms`로 강제 동기화.
 
 ### 19.3 구현 및 검증 경로 (Execution & Verification Path)
-- [ ] **Phase 1: Core Error & Config** (에러 통합 및 리소스 누수 방지)
+- [x] **Phase 1: Core Error & Config** (에러 통합 및 리소스 누수 방지)
   - `src/domain/error.rs` 리팩토링 및 `infra` 반환형 강제 변환. `SessionLogger` `BufWriter` 적용.
   - *검증*: 손상된 설정 파일 로드시 `SmlError::IoError`가 UI에 정상 전파되는지 확인. 도구 100회 실행 후 `lsof -p <PID>`로 파일 핸들 누수 확인.
 - [x] **Phase 2: Logic & Security** (보안 강화 및 위저드 무결성)
@@ -825,3 +832,248 @@ cargo test  ✅ 46 passed (0 failed)
   - `src/tools/executor.rs`: 도구 실행 비동기 블록을 `tokio::time::timeout(Duration::from_secs(30))`으로 감싸서 타임아웃 발생 시 강제 종료(`SIGKILL`) 처리.
 - [x] **Phase 3: Sustainability** (로그 로테이션)
   - `src/infra/session_log.rs`: 로그 파일 저장 시 10MB 초과를 감지하고, 초과 시 파일 롤오버 및 최신 5개만 유지하는 Retention 로직 적용.
+
+## Phase 24: v1.6.0 Final Integrity Hardening (시스템 무결성 확정 및 최종 고도화)
+**목표(Scope):** 워크스페이스 변화 동적 감지, 쉘 도구 인터렉티브 블로킹 방지, 스마트 컨텍스트 요약, 민감 정보(Secret) 마스킹, 그리고 유닛 테스트 지원을 위한 Mocking 구조를 도입하여 최종적인 무결성을 확정합니다.
+
+### 24.1 구현 및 검증 경로 (Execution Path)
+- [x] **Phase 1: Security & Safety** (민감 정보 마스킹 및 인터렉티브 쉘 가드)
+  - `src/tools/shell.rs`: `Stdio::null()`을 `stdin`으로 명시적 할당하여, LLM이 입력을 대기하는 명령(`git commit` 등)을 실행 시 행(Hang)이 걸리지 않고 즉각 에러로 반환되게 함.
+  - `src/app/mod.rs` & `src/infra/secret_store.rs`: UI 및 로그에 출력되는 텍스트 스트림을 가로채어, 로드된 Secret Key들을 `[REDACTED]`로 치환(Lazy Regex)하는 마스킹 파이프라인 구축.
+- [x] **Phase 2: Data Consistency** (RepoMap 갱신 결함 해결)
+  - `src/app/state.rs`, `src/app/tool_runtime.rs`: `state.repo_map_dirty` 플래그를 추가. 파일시스템 조작 도구 실행 시 플래그를 `true`로 켜고, 다음 채팅 전송 직전에 백그라운드로 RepoMap을 재빌드하는 Lazy Refresh 로직.
+- [x] **Phase 3: Intelligence & Architecture** (컨텍스트 압축 및 DI 도입)
+  - `src/domain/session.rs`: 세션 메시지 히스토리 정리 시 초기 3개(System, User Goal)는 절대 지워지지 않도록 보호 구역(Protected Range) 지정 및 요약 주입 로직 도입.
+  - `src/providers/mod.rs`: `LlmProvider` 트레이트를 분리하고, 네트워크 요청을 배제한 단위 테스트용 `MockProvider` 의존성 주입 패턴 적용.
+
+## Phase 30: v2.2.0 The Ultimate Hardening (시스템 운영 무결성 확정 및 배포 준비)
+**상태**: ✅ 완료
+**관련 문서**: spec.md §30
+
+### 30.1 구현 및 검증 경로 (Execution Path)
+- [x] **Phase 1: Resilience** (설정 마이그레이션 및 상태 복원력)
+  - `src/infra/config_store.rs`: `settings.json` 스키마 변경 시의 하위 호환성을 위해 `Settings::migrate()` 기반의 버전 관리 파이프라인 도입. 프로그램 실행 시 고립된 좀비 `.tmp` 파일을 제거하는 `cleanup_tmp_files` 구현.
+- [x] **Phase 2: Diagnostics** (smlcli doctor 도입)
+  - `src/infra/doctor.rs`: `smlcli doctor` 커맨드 추가. Git, TTY, 환경 설정, API 접근성 등 핵심 요구사항을 사전에 테스트하고 리포트를 터미널에 출력.
+- [x] **Phase 3: UX & Performance** (Windows 프로세스 정리 및 클립보드)
+  - `src/app/mod.rs` & `src/tools/shell.rs`: Windows 환경 하위 프로세스 그룹 정리를 위해 `taskkill /F /T /PID` 호출 적용. `arboard` 라이브러리를 통해 TUI `y` 키 입력 시 타임라인/인스펙터 텍스트 복사 연동.
+
+## Phase 31: v2.3.0 The Final Polish & Resilience (운영 안정성 고도화 및 최종 릴리즈 품질 확정)
+**상태**: ✅ 완료
+**관련 문서**: spec.md §31
+
+### 31.1 구현 및 검증 경로 (Execution Path)
+- [x] **Phase 1: Data Integrity** (설정 파일 롤백 및 네트워크 타임아웃)
+  - `src/infra/config_store.rs`: 마이그레이션 실패 시를 대비하여 `.bak` 파일을 선 백업하고, 실패 시 원상 복구(Rollback)하는 트랜잭션 개념 도입.
+  - `src/infra/doctor.rs`: 네트워크 API 진단 시 `tokio::time::timeout` 5초 제한을 걸어 행(Hang) 현상 방지.
+- [x] **Phase 2: UX Notification & Policy** (Toast 알림 및 환경변수 화이트리스트)
+  - `src/app/state.rs` & `src/tui/layout.rs`: 클립보드 복사 등 주요 동작에 대해 2초 만료(`expires_at`)를 가지는 하단 Toast Notification 팝업 구현.
+  - `src/domain/settings.rs` & `src/tools/shell.rs`: 실행 환경 제어를 위해 `allowed_env_vars` 화이트리스트를 추가하고, `exec_shell_stream` 동작 시 해당 목록만 노출하도록 보안 제어 강화.
+- [x] **Phase 3: Performance** (RepoMap 디스크 캐싱)
+  - `src/domain/repo_map.rs`: 파일 개수와 수정시간(`mtime`)을 조합한 가벼운 해시(`cheap_hash`) 알고리즘을 도입. `repo_map_cache_{hash}.json` 형태로 디스크에 저장하여, 매번 AST 파싱 비용이 발생하는 대형 리포지토리의 성능 저하 해결.
+
+## Phase 32: v2.4.0 Final Release Candidate (시스템 운영 무결성 확정 및 배포 준비)
+**상태**: ✅ 완료
+**관련 문서**: spec.md §32
+
+### 32.1 구현 및 검증 경로 (Execution Path)
+- [x] **Phase 1: Performance** (다중 도구 비동기 실행 및 쓰기 직렬화)
+  - `src/app/tool_runtime.rs` 및 `state.rs`: `VecDeque`를 활용한 다중 도구 비동기 실행을 구현하고, `write_tool_queue`를 통한 쓰기 전용 도구(WriteFile, ExecShell) 순차 처리 로직(Mutex) 확보.
+  - `TimelineBlock` 에 `tool_call_id` 연결로 비동기 렌더링 무결성 확보.
+- [x] **Phase 2: UX** (TUI Help Overlay 및 CLI Auto-Completion)
+  - `src/tui/help_overlay.rs`: 현재 활성화된 패널(Composer, Timeline 등)에 따라 컨텍스트에 맞는 단축키 헬프 오버레이 모달 창 렌더링.
+  - `src/main.rs`: `clap_complete` 크레이트를 통해 다중 셸 지원(bash, zsh, fish 등) 오프라인 자동 완성 스크립트 출력 서브 커맨드 구현.
+- [x] **Phase 3: Reliability & Security** (무소음 건강 검진 및 취약점 패치)
+  - `src/app/mod.rs` & `infra/doctor.rs`: `App::new_async` 구동 시 토키오 태스크로 `DoctorReport::run_diagnostics()` 수행, 문제 발생 시 Toast 알림(`SilentHealthCheckFailed` 액션 트리거) 표시.
+  - `Cargo.toml`: rand 의존성 및 패키지 버전을 `2.4.0`으로 갱신, 취약점 경고 회피 패치 완료.
+
+## Phase 35: v2.5.0 System Hardening & Metadata (시스템 무결성 확정)
+**상태**: ✅ 완료
+**관련 문서**: spec.md §35
+
+### 35.1 구현 및 검증 경로 (Execution Path)
+- [x] **Phase 1: Process Management & DevOps** (고아 프로세스 및 메타데이터)
+  - `src/infra/process_reaper.rs` 및 `src/tools/shell.rs`: `sysinfo` 기반으로 `SMLCLI_PID` 환경 변수가 일치하지 않는 고아 셸 프로세스를 감지하여 종료(Reap)하는 시스템 자원 정리.
+  - `build.rs`, `src/infra/doctor.rs`: `shadow-rs`를 연동하여 릴리즈 바이너리에 Git 해시 및 빌드 타임 내장.
+- [x] **Phase 2: UX Locale & Concurrency** (어댑티브 UI 보더 및 비동기 출력 순서)
+  - `src/tui/widgets/mod.rs`: `ratatui::symbols::border::Set<'static>` 반환 구조체에서 `use_ascii_borders`나 `LANG` 환경변수 지원 불가 시 순수 ASCII(`+-|`)로 보더 fallback 변환.
+  - `src/app/mod.rs`: 병렬 도구 실행(ToolFinished)이 순서없이 도착하더라도, 렌더링 시에는 호출된 순서(tool_index)에 맞추어 `pending_tool_outcomes`에 캐싱해두었다가 순서대로 로그/타임라인에 쓰도록 Ordered Aggregation 정렬 적용.
+- [x] **Phase 3: Log Reliability** (세션 로거 안정성)
+  - `src/infra/session_log.rs`: `read_to_string()` 대신 `BufReader::lines()`로 `SessionLogger::restore()`를 변경하여, 대용량 로그 파일 파싱 시 메모리 초과/패닉 문제를 구조적으로 차단.
+
+---
+
+## v3.0 Roadmap — 경쟁력 확보 태스크 리스트
+
+> **관련 문서**: spec.md §v3.0 Roadmap (Phase 40-45)
+> **배경**: v2.5.0 평가 리포트에서 도출된 5대 약점을 순차적으로 해소.
+> **상태**: ⏳ 계획 (v2.5.0 마무리 후 착수)
+
+### Phase 40: Git-Native Integration (v3.0.0)
+- [x] **Task G-1: GitCheckpointTool 레지스트리 등록**
+  - `tools/git_checkpoint.rs` → `Tool` trait 래핑 + `GLOBAL_REGISTRY` 등록
+  - `is_write_tool()`/guard 테스트 `known_unregistered`에서 `GitCheckpoint` 제거
+- [x] **Task G-2: GitEngine 자동 커밋 엔진**
+  - `infra/git_engine.rs` 신규 생성: `auto_commit()`, `undo_last()`, `list_history()` API
+  - `domain/settings.rs`에 `GitIntegrationConfig` 추가 + config.toml 영속화
+- [x] **Task G-3: ToolFinished 자동 커밋 훅**
+  - `app/mod.rs` ToolFinished 핸들러에서 `GitEngine::auto_commit()` 연동
+  - 타임라인 `GitCommit` 블록 추가
+- [x] **Task G-4: `/undo` 슬래시 명령어**
+  - `commands/mod.rs` 라우팅 + `GitEngine::undo_last()` 호출 + Revert 블록
+- [x] **Task G-5: Inspector Git 히스토리 탭**
+  - Inspector 패널에 `Git` 탭 추가 + `list_history()` 리스트 렌더링 + diff 프리뷰
+
+### Phase 41: Provider 확장성 (v3.1.0)
+- [x] **Task P-1: ProviderKind Custom 변형 추가**
+  - `domain/provider.rs`에 `Custom(String)` enum 변형 + `CustomProviderConfig` 타입
+  - `PersistedSettings`에 `custom_providers` 필드 + config.toml 영속화
+- [x] **Task P-2: OpenAICompatAdapter 커스텀 인스턴스화**
+  - `get_adapter()`에서 `Custom` → 기존 `OpenAICompatAdapter`/`AnthropicAdapter` base_url 교체
+  - `ToolDialect` 자동 감지 분기
+- [x] **Task P-3: `/provider add/remove/list` 명령어**
+  - TUI 오버레이 또는 CLI 인자로 커스텀 provider CRUD
+  - `validate_credentials()` smoke test 연동
+
+### Phase 42: OS-Level Sandbox (v3.2.0)
+- [x] **Task S-1: 샌드박스 백엔드 감지**
+  - `infra/sandbox.rs` 신규 생성: `detect_backend()`, `doctor` 출력 반영
+- [x] **Task S-2: bubblewrap 래퍼**
+  - `wrap_command_bwrap()` 구현: ro-bind/bind/proc/dev/unshare-net
+- [x] **Task S-3: ExecShellTool 통합**
+  - `execute()` 내부에서 sandbox 활성화 시 `bwrap` 래핑, 비활성화 시 기존 폴백
+- [x] **Task S-4: `/config` Sandbox 섹션**
+  - config 대시보드에 Sandbox 토글/경로 편집 UI + config.toml `[sandbox]` 테이블
+
+### Phase 43: MCP 클라이언트 (v3.3.0) ⚠️ 인프라 구현 완료 / E2E 테스트 미비
+- [x] **Task M-1: MCP JSON-RPC 클라이언트**
+  - `infra/mcp_client.rs` 신규 생성: `McpClient` 구조체 (`Debug`, `Clone` 파생)
+  - mpsc::channel(32) 기반 요청 큐 + oneshot::channel 기반 응답 매칭
+  - Stdin Writer Task: `AtomicU64` 자동 ID 채번 → JSON-RPC 2.0 직렬화 → `\n` 구분 전송
+  - Stdout Reader Task: `BufReader::read_line()` 라인 파싱 → `Arc<Mutex<HashMap<u64, Sender>>>` pending 역탐색
+  - `initialize()` → `notifications/initialized` → `list_tools()` → `call_tool()` 프로토콜 구현
+  - `tokio::time::timeout(10초)` 래퍼로 응답 무한 대기 차단
+  - `McpToolInfo` 구조체: `name`, `description`, `inputSchema(rename)` 필드
+  - **[v2.5.3]** `Arc<Mutex<Option<Child>>>` 핸들 보관 → `shutdown()` 메서드로 앱 종료 시 명시적 kill
+  - **[v3.3.1]** 감사 HIGH-1: `App::run()` 종료 직후 `mcp_clients.values().shutdown().await` 호출 연동 완료. 모든 종료 경로(Quit/quit/Ctrl-C/SIGTERM)에서 프로세스 누수 완전 방지.
+  - **[v2.5.3]** stderr drain task: 별도 `tokio::spawn`으로 stderr 소비하여 OS 파이프 버퍼 블로킹 방지
+- [x] **Task M-2: 동적 도구 등록**
+  - `app/mod.rs` 초기화 시 `settings.mcp_servers` 순회 → `tokio::spawn` 비동기 로드
+  - `McpClient::spawn(name, cmd, args)` → `initialize()` → `list_tools()` → OpenAI tools JSON Schema 변환
+  - **[v2.5.3]** MCP `{name, description, inputSchema}` → OpenAI `{type: "function", function: {...}}` 형식 래핑 적용
+  - 네임스페이스 접두사: `mcp_{server_name}_{tool_name}` (OpenAI 도구명 규칙 호환)
+  - `Action::McpToolsLoaded(server_name, schemas, client)` 이벤트로 이벤트 루프에 전달
+  - **[v3.3.1]** 감사 MEDIUM-1: `Action::McpLoadFailed(name, error)` 액션 추가. spawn/list_tools 실패 시 타임라인에 에러 Notice 블록 표시. 기존 `if let Ok && let Ok` 침묵 처리 제거.
+  - **[v3.3.1]** 감사 MEDIUM-2: `sanitize_tool_name_part()` 정규화 함수 도입. OpenAI tool name 규격(^[a-zA-Z0-9_-]+$) 위반 문자를 '_'로 치환.
+  - **[v3.3.2]** 감사 HIGH-3: `mcp_tool_name_map: HashMap<sanitized_full_name, (sanitized_server, original_tool_name)>` 역매핑 테이블 도입. `mcp_clients` key를 정규화 서버명으로 저장하여 라우팅 일관성 확보. 이전 longest prefix match 방식 제거.
+  - **[v3.3.3]** 감사 MEDIUM-2: `/mcp add` 시 정규화 서버명 충돌 검사 추가. `foo.bar`/`foo_bar` 같은 충돌 시 등록 거부.
+  - **[v3.3.5]** 감사 HIGH-1: `build_mcp_full_name()` 도입. 서버/도구 파트를 각 최대 27자로 truncate하여 OpenAI 64자 제한 준수. `MAX_TOOL_NAME_LEN = 64`, 접두사 5자 + 접미사 예비 4자.
+  - **[v3.3.6]** 감사 HIGH-1: `McpToolsLoaded` 핸들러에서 `extend()` → 전역 충돌 검사 + suffix 부여로 교체. 서버 간 truncation 충돌(앞 27자 동일) 방지. suffix 포함 64자 초과 시 base truncation 적용.
+  - **[v3.3.7]** 감사 HIGH-1: 전역 충돌 해소 시 `mcp_tools_cache`의 schema `function.name`도 변경된 key와 동기화. schemas를 충돌 해소 완료 후 cache에 push. suffix 한계(9999) 초과 시 skip + 경고. `filter_map`으로 서버 내 skip도 동일 적용.
+  - **[v3.3.8]** 감사 MEDIUM-1: skip 시 `schemas.retain()`으로 해당 schema 즉시 제거. cache에 라우팅 불가 도구 잔류 방지. skip 경고를 타임라인 Notice로도 표시.
+  - **[v3.3.9]** 감사 MEDIUM-1: `McpClient::dummy()` 테스트 전용 생성자 도입. `handle_action(McpToolsLoaded)` 관통 테스트 2건 추가: 정상 로드 동기화 + 서버 간 충돌 suffix·schema·map 일관성 검증.
+  - `RuntimeState.mcp_clients: HashMap<String, McpClient>` + `mcp_tools_cache: Vec<Value>` + `mcp_tool_name_map` 캐싱
+  - `chat_runtime.rs`에서 `build_streaming_chat_request()` 시 `mcp_tools_cache`를 기존 도구에 합류
+- [x] **Task M-3: Permission 통합 + `/mcp` 명령어**
+  - `domain/permissions.rs`: `call.name.starts_with("mcp_")` → `PermissionResult::Ask` 강제 반환
+  - `app/tool_runtime.rs`: `mcp_` 접두사 판별 → `mcp_tool_name_map` 직접 조회 → `(sanitized_server, original_tool_name)` 획득 → `call_tool(original_name)` JSON-RPC 위임 → `ToolResult`/`ToolError` 래핑
+  - **[v3.3.3]** 감사 HIGH-1: `call_tool()` 응답에서 `isError`를 `content`보다 먼저 검사. MCP 공식 스키마(CallToolResult) 준수.
+  - `app/command_router.rs`: `/mcp list` (서버 목록 표시), `/mcp add <name> <command> [args...]` (upsert + 정규화 충돌 검사 + 비동기 save_config), `/mcp remove <name>` (제거 + 비동기 save_config)
+  - **⚠️ `/mcp add`/`remove`는 설정 저장 후 앱 재시작이 필요합니다. 런타임 즉시 반영은 미지원.**
+  - `/help` 도움말 메뉴에 `/mcp` 항목 등록
+- [x] **Task M-4: MCP E2E 테스트** ✅ (v3.7.0)
+  - `scripts/mock_mcp_server.py`: JSON-RPC 2.0 mock 서버 (initialize/tools/list/tools/call)
+  - `test_mcp_e2e_initialize_and_list_tools`: 실제 프로세스 spawn → initialize + list_tools 왕복 (2도구 반환 검증)
+  - `test_mcp_e2e_call_tool`: get_weather/read_file tools/call 왕복 (응답 내용 검증)
+  - `test_mcp_permission_engine_always_ask`: PermissionEngine mcp_ 접두사 → Ask 강제 반환
+  - `test_mcp_namespace_strip_roundtrip`: sanitize → mcp_{server}_{tool} → 역매핑 복원 왕복
+  - `test_mcp_config_add_remove_persistence`: Vec<McpServerConfig> push/upsert/retain 영속화
+  - `test_ask_clarification_tool_registered`: GLOBAL_REGISTRY 등록 + 스키마 + Allow 검증
+  - `test_questionnaire_state_submit_and_build`: 3문항 순차 답변 → build_result 조립 검증
+  - `test_questionnaire_total_options`: allow_custom에 따른 옵션 수 계산 검증
+
+### Phase 44: DeleteFile 및 TECH-DEBT 정리 (v3.4.0)
+- [x] **Task D-1: DeleteFileTool 구현** ✅ (v3.4.0)
+  - `tools/file_ops.rs`에 `Tool` trait 구현 + `GLOBAL_REGISTRY` 등록 완료
+  - `domain/permissions.rs` PermissionEngine에 DeleteFile 쓰기 도구 검사 추가 (Workspace Trust Gate + 경로 횡단)
+  - `app/tool_runtime.rs` format_tool_name에 DeleteFile 표시 포맷 추가
+  - `tests/audit_regression.rs`의 `known_unregistered`에서 `DeleteFile` 제거 완료
+  - guard 테스트가 자동으로 sandbox 검증 포함 (path_write_count ≥ 3)
+- [x] **Task D-2: TECH-DEBT 일괄 정리** ✅ (v3.4.0)
+  - `tui/mod.rs`, `tools/mod.rs`, `domain/mod.rs`, `app/mod.rs`, `infra/mod.rs` 모듈 레벨 `#[allow(dead_code)]` 전수 제거 (7건)
+  - `infra/git_engine.rs`, `infra/mcp_client.rs` 파일 레벨 `#![allow(dead_code)]` 제거 (2건)
+  - `providers/registry.rs`의 `ProviderRegistry` 1건만 cfg(test) 구조적 사유로 유지 (사유 주석 갱신)
+  - `tools/shell.rs`의 `[ROADMAP/v3.0]` 주석을 실제 구현 상태 반영으로 갱신
+  - 빌드 경고 0건, 94개 테스트 전부 통과 확인
+  - (v2.5.0 감사 LOW-1) `FUTURE`/`ROADMAP` 주석을 코드에서 제거하고 `spec.md` Future Work 또는 이슈 트래커로 이관
+
+### Phase 45: 빌드 & 배포 파이프라인 (v3.5.0) ✅
+- [x] **Task CI-1: GitHub Actions CI 워크플로** ✅ (v3.5.0)
+  - `.github/workflows/ci.yml`: fmt/clippy/test 게이트 + cargo cache 최적화
+  - `version-sync` job: 버전 동기화 스크립트 CI 연동
+- [x] **Task CI-2: Release 워크플로** ✅ (v3.5.0)
+  - `.github/workflows/release.yml`: 태그(v*) push → quality-gate → Linux musl / Windows msvc 크로스 빌드 → GitHub Releases 자동 업로드
+  - `softprops/action-gh-release@v2` 사용, release notes 자동 생성
+  - musl-tools 자동 설치 포함 (정적 링크 바이너리)
+- [x] **Task CI-3: 버전 동기화 검증** ✅ (v3.5.0)
+  - `scripts/check-version-sync.sh`: Cargo.toml ↔ CHANGELOG.md ↔ Git Tag 버전 일치 검증
+  - 로컬 실행 검증 완료 (v3.4.0 동기화 통과 확인)
+
+### Phase 46: Workspace-scoped Session Management (v3.6.0) ✅
+- [x] **Task S-1: Session Metadata & Workspace 격리** ✅ (v3.6.0)
+  - `domain/session.rs`에 `SessionMetadata` 구조체 추가 (session_id, workspace_root, title, timestamps, log_filename)
+  - `SessionAction` 열거형 추가 (NewSession, ResumeSession, ListSessions)
+  - `infra/session_log.rs`에 `SessionIndex` 구조체 추가 (sessions_index.json CRUD)
+  - `SessionLogger::new_workspace_session()`: 워크스페이스 연동 세션 생성 + 인덱스 등록
+  - `DomainState.current_session_metadata` 필드 추가하여 활성 세션 추적
+- [x] **Task S-2: Auto-Titling 파이프라인** ✅ (v3.6.0)
+  - `chat_runtime.rs::submit_chat_request()`에서 첫 UserMessage 감지 시 프롬프트 앞 50자를 임시 제목으로 설정
+  - 기존 세션의 경우 `updated_at` 타임스탬프만 갱신 (`SessionIndex::touch()`)
+- [x] **Task S-3: TUI Session Picker (`/resume`, `/session`)** ✅ (v3.6.0)
+  - `command_router.rs`에 `/resume`, `/session` 명령어 라우팅 추가
+  - 현재 워크스페이스의 세션 목록을 KeyValueTable로 렌더링 (현재 세션 마커, 상대 시간 표시)
+  - `/resume <번호>` 형태로 세션 전환: 메시지 복원, 로거 교체, 인덱스 touch
+- [x] **Task S-4: `/new` 명령어 연동** ✅ (v3.6.0)
+  - `/new` 명령어: 타임라인/세션 상태/스트림 어큐뮬레이터 초기화 후 새 세션 할당
+  - SlashMenuState, CommandPaletteState, /help 도움말에 세션 관리 명령어 3건 추가
+
+### Phase 47: Interactive Planning Questionnaire (v3.7.0) ✅
+- [x] **Task Q-1: AskClarification 도구 스키마 정의 및 하네싱** ✅ (v3.7.0)
+  - `domain/questionnaire.rs` 생성: `ClarificationQuestion`, `AskClarificationArgs`, `AskClarificationResult`, `QuestionnaireState` 도메인 타입
+  - `tools/questionnaire.rs` 생성: `AskClarificationTool` (Tool trait 구현, OpenAI Function Calling 스키마)
+  - `GLOBAL_REGISTRY`에 AskClarification 도구 정식 등록
+  - PLAN 모드 시스템 프롬프트에 AskClarification 강제 사용 지침 주입 (하네싱)
+- [x] **Task Q-2: Questionnaire TUI 렌더러 구현** ✅ (v3.7.0)
+  - `tui/widgets/questionnaire.rs` 생성: 화면 중앙 모달 오버레이 위젯
+  - 객관식 옵션 커서 렌더링 (▸ 마커, Cyan 하이라이트)
+  - 주관식 텍스트 입력 필드 (▏ 커서 표시)
+  - allow_custom: "✏ 직접 입력..." 옵션 렌더링
+  - 진행률 표시 ("질문 N/M"), 하단 키보드 힌트
+  - `layout.rs::draw()`에서 help_overlay 뒤에 questionnaire 오버레이 렌더링
+- [x] **Task Q-3: State Machine 연동** ✅ (v3.7.0)
+  - `action.rs`에 `ShowQuestionnaire` / `QuestionnaireCompleted` Action 추가
+  - `UiState.questionnaire: Option<QuestionnaireState>` 필드 추가
+  - `tool_runtime.rs`: AskClarification 도구명 감지 시 비동기 실행 대신 ShowQuestionnaire Action 발행
+  - `mod.rs::handle_action()`: ShowQuestionnaire(QuestionnaireState 생성 + Approval 블록) / QuestionnaireCompleted(ToolResult 조립 + ToolFinished 전달)
+  - `mod.rs::handle_questionnaire_key()`: ↑↓ 옵션 탐색, Enter 선택/제출, Esc 취소, 문자 입력/Backspace
+### Phase 48: 1st & 2nd Audit Remediation (v3.7.1) ✅
+- [x] **[Finding 1] GrepSearch 샌드박스 우회 차단**
+  - 원시 경로 직접 검색을 `file_ops::validate_sandbox()`를 거치도록 수정.
+  - `/etc`, `../` 등 외부 탐색 원천 차단.
+  - `audit_regression.rs`에 `test_grep_search_sandbox_bypass` 회귀 테스트 추가.
+- [x] **[Finding 2] Approval 타임아웃 큐 고립 방지**
+  - 대기 중인 승인 요청이 만료되었을 때, 큐(`queued_approvals`)에 대기 중인 다음 요청을 정상적으로 팝업하도록 승격 로직 적용.
+  - `audit_regression.rs`에 `test_approval_timeout_promotes_queue` 회귀 테스트 추가.
+- [x] **[Finding 3] MCP pending 요청 타임아웃/EOF 메모리 누적 방지**
+  - `McpClient`의 `pending_requests` 맵을 구조체 멤버로 승격.
+  - 10초 타임아웃 시 펜딩 맵에서 명시적으로 엔트리 제거.
+  - EOF(서버 종료) 시 펜딩 중인 모든 요청에 즉시 통지하여 무한 대기 블로킹 방지.
+- [x] **[Finding 4] TUI 테마 색상 정책 통일**
+  - `questionnaire.rs` 및 `help_overlay.rs` 내 직접 선언된 `Color::Cyan`, `Color::Rgb` 하드코딩 제거.
+  - `state.palette()`에서 가져오는 테마 색상(`accent`, `bg_panel`, `text_primary`)으로 전면 교체하여 `/theme` 반영.
+- [x] **[Finding 5] 직접 셸 실행(!) 에러 재전송 방지**
+  - `! command` 등으로 발생한 실패 시 `ToolError`에서 `tool_call_id`가 없는 경우, LLM으로 불필요한 오류 피드백이 전송되지 않도록 방어 로직 추가.
+- [x] **[Finding 6] 미연결 데드 코드 제거**
+  - `providers/sanitize.rs` 모듈 삭제 및 관련 불필요 임포트 제거.
+- [x] **[Finding 7] 파일 포맷 공백 및 EOF 정비**
+  - MD 파일들의 trailing whitespace 및 EOF newline 처리 완료 (`git diff --check` 통과).

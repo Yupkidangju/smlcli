@@ -10,6 +10,7 @@
 // 이전 상태: 773줄의 God Object
 // 현재 상태: ~250줄의 이벤트 루프 오케스트레이터 + 입력 핸들러
 
+// [v3.4.0] Phase 44 Task D-2: TECH-DEBT 정리 완료. 모든 서브모듈 활성화됨.
 pub mod action;
 pub mod chat_runtime;
 pub mod command_router;
@@ -19,7 +20,6 @@ pub mod tool_runtime;
 pub mod wizard_controller;
 
 use crate::tui::layout::draw;
-use crate::tui::terminal::TuiTerminal;
 use anyhow::Result;
 use event_loop::{Event, EventLoop};
 use state::AppState;
@@ -43,14 +43,260 @@ impl App {
     const AUTO_VERIFY_NOTICE_CHARS: usize = 240;
     const APPROVAL_TTL_MS: u64 = 5 * 60 * 1000;
 
+    /// OpenAI function tool name 최대 길이 (64자).
+    /// https://platform.openai.com/docs/api-reference/chat/create
+    pub(crate) const MAX_TOOL_NAME_LEN: usize = 64;
+
+    /// [v3.3.1] 감사 MEDIUM-2: MCP 서버명/도구명을 OpenAI tool name 규격에 맞게 정규화.
+    /// OpenAI API는 ^[a-zA-Z0-9_-]+$ 만 허용하므로, 비허용 문자를 '_'로 치환.
+    /// 빈 문자열이면 "unnamed"으로 대체.
+    /// [v3.3.3] pub(crate)로 변경: command_router.rs의 /mcp add 정규화 충돌 검사에서도 사용.
+    /// [v3.3.5] 감사 HIGH-1: 길이 제한 없이 정규화만 수행. 길이 제한은 full_name 조립 시
+    /// truncate_tool_full_name()에서 적용.
+    pub(crate) fn sanitize_tool_name_part(raw: &str) -> String {
+        let sanitized: String = raw
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if sanitized.is_empty() {
+            "unnamed".to_string()
+        } else {
+            sanitized
+        }
+    }
+
+    /// [v3.3.5] 감사 HIGH-1: MCP full_name을 OpenAI 64자 제한에 맞게 truncate.
+    /// full_name = "mcp_{sanitized_server}_{sanitized_tool}" 형식.
+    /// 접두사 "mcp_"(4자) + "_"(1자) = 5자 고정.
+    /// 충돌 접미사("_NN") 최대 4자를 예비하여, 실제 파트에 55자를 할당.
+    /// server 파트를 27자, tool 파트를 나머지(최대 27자)로 제한.
+    pub(crate) fn build_mcp_full_name(sanitized_server: &str, sanitized_tool: &str) -> String {
+        // 접두사 "mcp_" + "_" = 5자, 접미사 예비 4자 → 파트 할당 55자
+        const PREFIX_LEN: usize = 5; // "mcp_" + "_"
+        const SUFFIX_RESERVE: usize = 4; // "_99" 등
+        let max_parts = Self::MAX_TOOL_NAME_LEN - PREFIX_LEN - SUFFIX_RESERVE;
+        let half = max_parts / 2;
+
+        // 서버 파트: 최대 half 자
+        let srv = if sanitized_server.len() > half {
+            &sanitized_server[..half]
+        } else {
+            sanitized_server
+        };
+        // 도구 파트: 나머지 할당량
+        let tool_max = max_parts - srv.len();
+        let tool = if sanitized_tool.len() > tool_max {
+            &sanitized_tool[..tool_max]
+        } else {
+            sanitized_tool
+        };
+        format!("mcp_{}_{}", srv, tool)
+    }
+
     pub async fn new(tx: tokio::sync::mpsc::Sender<event_loop::Event>) -> Self {
         Self::normalize_workspace_dir();
         let mut app = Self {
             state: AppState::new_async().await,
-            action_tx: tx,
+            action_tx: tx.clone(),
         };
         app.check_trust_gate();
         app.refresh_repo_map_if_needed(true);
+
+        // [v2.4.0] Phase 32: 백그라운드 무소음 자가 진단(Silent Health Check)
+        let tx_clone = tx.clone();
+        tokio::spawn(async move {
+            let report = crate::infra::doctor::DoctorReport::run_diagnostics().await;
+            if report.has_issues() {
+                let _ = tx_clone
+                    .send(crate::app::event_loop::Event::Action(
+                        crate::app::action::Action::SilentHealthCheckFailed,
+                    ))
+                    .await;
+            }
+        });
+        // [v3.3.0] Phase 43: MCP 클라이언트 비동기 로드
+        if let Some(settings) = &app.state.domain.settings {
+            // [v3.3.4] 감사 MEDIUM-2 수정: 앱 시작 시 config.toml에서 로드된 MCP 서버들의
+            // 정규화명 충돌 검증. config.toml에 'foo.bar'와 'foo_bar'가 동시에 있으면
+            // 런타임에서 mcp_clients가 overwrite되어 도구가 잘못된 서버로 라우팅될 수 있음.
+            //
+            // [v3.3.5] 감사 MEDIUM-2 수정: 동일 서버명 중복 시 첫 번째는 로드, 후순위만 skip.
+            // 이전: skipped_servers에 원본명 저장 → 동일명 두 번이면 둘 다 skip됨.
+            // 수정: index 기반 skip set으로 교체하여 "최소 하나는 로드" 보장.
+            // [v3.3.5] 감사 LOW-1: 충돌 경고를 logs_buffer뿐 아니라 타임라인 Notice로도 표시.
+            let mut seen_sanitized: std::collections::HashMap<String, (usize, String)> =
+                std::collections::HashMap::new();
+            let mut skipped_indices: std::collections::HashSet<usize> =
+                std::collections::HashSet::new();
+            for (idx, mcp_cfg) in settings.mcp_servers.iter().enumerate() {
+                let sanitized = Self::sanitize_tool_name_part(&mcp_cfg.name);
+                if let Some((_, existing_name)) = seen_sanitized.get(&sanitized) {
+                    // 충돌 감지: 이미 같은 정규화명을 가진 서버가 있음
+                    // 후순위(현재 idx)만 skip
+                    let warn_msg = format!(
+                        "[MCP] 경고: 서버 '{}'과 '{}'이 정규화명 '{}'으로 충돌합니다. '{}' 로드를 건너뜁니다.",
+                        existing_name, mcp_cfg.name, sanitized, mcp_cfg.name
+                    );
+                    app.state.runtime.logs_buffer.push(warn_msg.clone());
+                    // [v3.3.5] 감사 LOW-1: 타임라인 Notice로도 표시하여 사용자 가시성 확보.
+                    let mut block = crate::app::state::TimelineBlock::new(
+                        crate::app::state::TimelineBlockKind::Notice,
+                        format!("MCP 서버 '{}' 충돌 건너뜀", mcp_cfg.name),
+                    );
+                    block.status = crate::app::state::BlockStatus::Error;
+                    block
+                        .body
+                        .push(crate::app::state::BlockSection::Markdown(warn_msg));
+                    app.state.ui.timeline.push(block);
+                    skipped_indices.insert(idx);
+                } else {
+                    seen_sanitized.insert(sanitized, (idx, mcp_cfg.name.clone()));
+                }
+            }
+
+            for (idx, mcp_cfg) in settings.mcp_servers.iter().enumerate() {
+                // [v3.3.5] index 기반 skip: 정규화 충돌 후순위만 건너뜀
+                if skipped_indices.contains(&idx) {
+                    continue;
+                }
+                let mcp_name = mcp_cfg.name.clone();
+                let mcp_cmd = mcp_cfg.command.clone();
+                let mcp_args = mcp_cfg.args.clone();
+                let tx_mcp = tx.clone();
+
+                tokio::spawn(async move {
+                    // [v3.3.1] 감사 MEDIUM-1 수정: spawn/list_tools 실패 시 침묵하지 않고
+                    // McpLoadFailed 이벤트를 전송하여 사용자에게 피드백 제공.
+                    // 기존에는 if let Ok && let Ok 패턴으로 실패를 완전히 삼켰음.
+                    let client = match crate::infra::mcp_client::McpClient::spawn(
+                        &mcp_name, &mcp_cmd, &mcp_args,
+                    )
+                    .await
+                    {
+                        Ok(c) => c,
+                        Err(e) => {
+                            let _ = tx_mcp
+                                .send(crate::app::event_loop::Event::Action(
+                                    crate::app::action::Action::McpLoadFailed(
+                                        mcp_name.clone(),
+                                        format!("spawn 실패: {}", e),
+                                    ),
+                                ))
+                                .await;
+                            return;
+                        }
+                    };
+
+                    let tools = match client.list_tools().await {
+                        Ok(t) => t,
+                        Err(e) => {
+                            // [v3.3.2] 감사 HIGH-2 수정: list_tools 실패 시에도
+                            // spawn된 child process를 명시적으로 kill하여 프로세스 누수 방지.
+                            client.shutdown().await;
+                            let _ = tx_mcp
+                                .send(crate::app::event_loop::Event::Action(
+                                    crate::app::action::Action::McpLoadFailed(
+                                        mcp_name.clone(),
+                                        format!("list_tools 실패: {}", e),
+                                    ),
+                                ))
+                                .await;
+                            return;
+                        }
+                    };
+
+                    // [v2.5.3] 감사 HIGH-1: MCP 스키마를 OpenAI 호환 형식으로 래핑.
+                    // MCP 서버는 {name, description, inputSchema} 반환.
+                    // OpenAI API는 {type: "function", function: {name, description, parameters}} 필요.
+                    // 이 래핑이 없으면 apply_dialect()도 정상 동작하지 않음.
+                    //
+                    // [v3.3.1] 감사 MEDIUM-2 수정: OpenAI tool name은 ^[a-zA-Z0-9_-]+$ 만 허용.
+                    // 서버명/도구명에 비허용 문자(공백, 점, 슬래시 등)가 포함되면
+                    // Provider가 거절하므로 정규화 함수를 적용.
+                    let sanitized_server = Self::sanitize_tool_name_part(&mcp_name);
+                    // [v3.3.2] 감사 HIGH-3 수정: 정규화 도구명→원본 MCP 도구명 역매핑 테이블 구성.
+                    // LLM이 보내는 "mcp_{sanitized_server}_{sanitized_tool}" 형식의 이름에서
+                    // 원본 MCP 도구명을 정확히 복원하기 위한 핵심 인프라.
+                    let mut tool_name_map: std::collections::HashMap<String, (String, String)> =
+                        std::collections::HashMap::new();
+                    let schemas: Vec<serde_json::Value> = tools
+                        .into_iter()
+                        .filter_map(|t| {
+                            let sanitized_tool = Self::sanitize_tool_name_part(&t.name);
+                            // [v3.3.5] 감사 HIGH-1: OpenAI 64자 제한 준수.
+                            // 서버명/도구명이 길면 truncate하여 Provider 거절 방지.
+                            let mut full_name =
+                                Self::build_mcp_full_name(&sanitized_server, &sanitized_tool);
+                            // [v3.3.4] 감사 HIGH-1 수정: 같은 서버 내 도구명 정규화 충돌 방지.
+                            // [v3.3.6] 감사 MEDIUM-2: suffix 포함 64자 초과 방어.
+                            // [v3.3.7] 감사 MEDIUM-2: suffix 한계 초과 시 None 반환 (skip).
+                            if tool_name_map.contains_key(&full_name) {
+                                let base = full_name.clone();
+                                let mut suffix = 2u32;
+                                let mut resolved = false;
+                                loop {
+                                    let candidate = format!("{}_{}", base, suffix);
+                                    if candidate.len() > Self::MAX_TOOL_NAME_LEN {
+                                        let overflow = candidate.len() - Self::MAX_TOOL_NAME_LEN;
+                                        let trimmed = &base[..base.len().saturating_sub(overflow)];
+                                        let tc = format!("{}_{}", trimmed, suffix);
+                                        if !tool_name_map.contains_key(&tc) {
+                                            full_name = tc;
+                                            resolved = true;
+                                            break;
+                                        }
+                                    } else if !tool_name_map.contains_key(&candidate) {
+                                        full_name = candidate;
+                                        resolved = true;
+                                        break;
+                                    }
+                                    suffix += 1;
+                                    if suffix > 9999 {
+                                        break;
+                                    }
+                                }
+                                if !resolved {
+                                    // suffix 한계 초과: 이 도구를 건너뜀
+                                    return None;
+                                }
+                            }
+                            // 역매핑: full_name → (sanitized_server, 원본 도구명)
+                            tool_name_map.insert(
+                                full_name.clone(),
+                                (sanitized_server.clone(), t.name.clone()),
+                            );
+                            Some(serde_json::json!({
+                                "type": "function",
+                                "function": {
+                                    "name": full_name,
+                                    "description": format!("[MCP] {}", t.description),
+                                    "parameters": t.input_schema
+                                }
+                            }))
+                        })
+                        .collect();
+                    // [v3.3.2] 감사 HIGH-3: 정규화 서버명을 key로 전달하여
+                    // mcp_clients 저장 시에도 정규화명 사용. 라우팅 일관성 보장.
+                    let _ = tx_mcp
+                        .send(crate::app::event_loop::Event::Action(
+                            crate::app::action::Action::McpToolsLoaded(
+                                sanitized_server,
+                                schemas,
+                                client,
+                                tool_name_map,
+                            ),
+                        ))
+                        .await;
+                });
+            }
+        }
+
         app
     }
 
@@ -58,14 +304,18 @@ impl App {
         if self.state.ui.is_wizard_open {
             return;
         }
-        let Ok(cwd) = std::env::current_dir() else { return };
+        let Ok(cwd) = std::env::current_dir() else {
+            return;
+        };
         let root = cwd.to_string_lossy().to_string();
 
         if let Some(settings) = &self.state.domain.settings {
             if settings.denied_roots.contains(&root) {
                 return;
             }
-            if let crate::domain::settings::WorkspaceTrustState::Unknown = settings.get_workspace_trust(&root) {
+            if let crate::domain::settings::WorkspaceTrustState::Unknown =
+                settings.get_workspace_trust(&root)
+            {
                 self.state.ui.trust_gate.popup = crate::app::state::TrustGatePopup::Open { root };
                 self.state.ui.trust_gate.cursor_index = 0;
             }
@@ -99,10 +349,15 @@ impl App {
     /// Input 이벤트는 handle_input으로, Action 이벤트는 handle_action으로 라우팅.
     pub async fn run(
         &mut self,
-        terminal: &mut TuiTerminal,
+        terminal: &mut crate::tui::terminal::TerminalGuard,
         mut event_loop: EventLoop,
     ) -> Result<()> {
         loop {
+            if self.state.ui.force_clear {
+                let _ = terminal.clear_and_reset();
+                self.state.ui.force_clear = false;
+            }
+
             // UI 그리기
             terminal.draw(|f| {
                 draw(f, &self.state);
@@ -112,10 +367,11 @@ impl App {
             if let Ok(event) = event_loop.next().await {
                 match event {
                     Event::Quit => {
-                        // [v1.4.0] Graceful Shutdown: 활성 도구 실행 취소
-                        if let Some(token) = &self.state.runtime.active_tool_cancel_token {
+                        // [v2.5.0] Graceful Shutdown: 모든 활성 도구 실행 취소
+                        for token in self.state.runtime.active_tool_cancel_tokens.values() {
                             token.cancel();
                         }
+                        self.state.runtime.active_tool_cancel_tokens.clear();
                         self.state.should_quit = true;
                     }
                     Event::Resize(_, _) => {
@@ -135,6 +391,13 @@ impl App {
                         self.state.ui.tick_count = self.state.ui.tick_count.wrapping_add(1);
                         self.sync_toolbar();
                         self.expire_pending_approval_if_needed(Self::unix_time_ms());
+
+                        // [v2.3.0] Phase 31: 토스트 알림 만료 체크
+                        if let Some(toast) = &self.state.ui.toast
+                            && std::time::Instant::now() >= toast.expires_at
+                        {
+                            self.state.ui.toast = None;
+                        }
 
                         // [Phase 15-E] follow_tail일 때 커서를 최신 블록으로 동기화
                         if self.state.ui.timeline_follow_tail && !self.state.ui.timeline.is_empty()
@@ -158,6 +421,14 @@ impl App {
                 break;
             }
         }
+
+        // [v3.3.1] 감사 HIGH-1 수정: 앱 종료 시 MCP 서버 자식 프로세스 명시적 kill.
+        // Event::Quit, /quit, Ctrl-C, SIGTERM 모든 종료 경로가 이 지점을 통과하므로
+        // 여기서 한 번만 shutdown()을 호출하면 프로세스 누수를 완전히 방지할 수 있다.
+        for client in self.state.runtime.mcp_clients.values() {
+            client.shutdown().await;
+        }
+        self.state.runtime.mcp_clients.clear();
 
         Ok(())
     }
@@ -217,8 +488,25 @@ impl App {
             return false;
         }
 
-        self.state.runtime.approval.pending_tool = None;
-        self.state.runtime.approval.pending_tool_call_id = None;
+        let tool = self
+            .state
+            .runtime
+            .approval
+            .pending_tool
+            .take()
+            .unwrap_or_else(|| crate::domain::tool_result::ToolCall {
+                name: String::new(),
+                args: serde_json::json!({}),
+            });
+        let tool_call_id = self.state.runtime.approval.pending_tool_call_id.take();
+        let tool_index = self
+            .state
+            .runtime
+            .approval
+            .pending_tool_index
+            .take()
+            .unwrap_or(0);
+
         self.state.runtime.approval.diff_preview = None;
         self.state.runtime.approval.pending_since_ms = None;
 
@@ -234,29 +522,61 @@ impl App {
             }
         }
 
+        let res = crate::domain::tool_result::ToolResult {
+            tool_name: tool.name.clone(),
+            stdout: String::new(),
+            stderr: "승인 응답 시간 초과로 도구 실행이 취소되었습니다.".to_string(),
+            exit_code: 1,
+            is_error: true,
+            tool_call_id: tool_call_id.clone(),
+            is_truncated: false,
+            original_size_bytes: None,
+            affected_paths: vec![],
+        };
         let mut block = crate::app::state::TimelineBlock::new(
             crate::app::state::TimelineBlockKind::Notice,
             "승인 요청 시간 초과",
-        )
-        .with_depth(1);
+        );
         block.status = crate::app::state::BlockStatus::Error;
         block.body.push(crate::app::state::BlockSection::Markdown(
-            "5분 동안 승인 응답이 없어 도구 요청을 자동으로 거부했습니다.".to_string(),
+            "승인 대기 시간이 초과되어 자동 취소되었습니다.".to_string(),
         ));
         self.state.ui.timeline.push(block);
-        self.state
-            .domain
-            .session
-            .add_message(crate::providers::types::ChatMessage {
-                role: crate::providers::types::Role::System,
-                content: Some(
-                    "[Approval Timeout] The pending tool request expired after 5 minutes and was automatically rejected."
-                        .to_string(),
-                ),
-                tool_calls: None,
-                tool_call_id: None,
-                pinned: false,
-            });
+
+        let _ = self
+            .action_tx
+            .try_send(crate::app::event_loop::Event::Action(
+                crate::app::action::Action::ToolFinished(Box::new(res), tool_index),
+            ));
+
+        // Pop next queued approval if any
+        if let Some((next_tool, next_id, next_idx)) =
+            self.state.runtime.approval.queued_approvals.pop_front()
+        {
+            self.state.runtime.approval.pending_tool = Some(next_tool.clone());
+            self.state.runtime.approval.pending_tool_call_id = next_id.clone();
+            self.state.runtime.approval.pending_tool_index = Some(next_idx);
+            self.state.runtime.approval.pending_since_ms = Some(now_ms);
+            if let Some(registry_tool) =
+                crate::tools::registry::GLOBAL_REGISTRY.get_tool(&next_tool.name)
+            {
+                self.state.runtime.approval.diff_preview =
+                    registry_tool.generate_diff_preview(&next_tool.args);
+            }
+            let mut approval_block = crate::app::state::TimelineBlock::new(
+                crate::app::state::TimelineBlockKind::Approval,
+                Self::format_tool_name(&next_tool),
+            );
+            approval_block.status = crate::app::state::BlockStatus::NeedsApproval;
+            approval_block.tool_call_id = next_id;
+            approval_block
+                .body
+                .push(crate::app::state::BlockSection::Markdown(
+                    Self::format_tool_detail(&next_tool),
+                ));
+            self.state.ui.timeline.push(approval_block);
+        }
+
         true
     }
 
@@ -349,10 +669,13 @@ impl App {
         let next_retry = match self.state.runtime.auto_verify {
             crate::app::state::AutoVerifyState::Idle => 1,
             crate::app::state::AutoVerifyState::Healing { retries } => retries + 1,
+            // [v2.5.0] 이미 Aborted 상태에서 다른 병렬 도구가 실패해도 즉시 차단 유지
+            crate::app::state::AutoVerifyState::Aborted => return false,
         };
 
         if next_retry >= Self::MAX_AUTO_VERIFY_RETRIES {
-            self.state.runtime.auto_verify = crate::app::state::AutoVerifyState::Idle;
+            // [v2.5.0] Aborted 상태로 전환: 병렬 도구의 최종 flush 시점까지 LLM 재전송 차단
+            self.state.runtime.auto_verify = crate::app::state::AutoVerifyState::Aborted;
             let abort_message = format!(
                 "자동 복구가 {}/{} 실패하여 중단되었습니다. 수동 개입이 필요합니다.\n마지막 오류: {}",
                 next_retry,
@@ -411,7 +734,7 @@ impl App {
         true
     }
 
-    fn reset_auto_verify_after_success(&mut self) {
+    pub(crate) fn reset_auto_verify_after_success(&mut self) {
         if matches!(
             self.state.runtime.auto_verify,
             crate::app::state::AutoVerifyState::Healing { .. }
@@ -430,11 +753,24 @@ impl App {
     }
 
     fn flush_stream_accumulator(&mut self) {
+        let mut trailing = std::mem::take(&mut self.state.runtime.streaming_masker.trailing_buffer);
+        if !trailing.is_empty() {
+            if let Some(re) = &self.state.runtime.secret_mask_regex {
+                let masked = re.replace_all(&trailing, "[REDACTED]").to_string();
+                trailing = masked;
+            }
+            self.state.runtime.stream_accumulator.push_str(&trailing);
+        }
+
         let mut rest = String::new();
         std::mem::swap(&mut self.state.runtime.stream_accumulator, &mut rest);
         if !rest.is_empty() {
-            if rest.ends_with('\n') { rest.pop(); }
-            if rest.ends_with('\r') { rest.pop(); }
+            if rest.ends_with('\n') {
+                rest.pop();
+            }
+            if rest.ends_with('\r') {
+                rest.pop();
+            }
             self.state.runtime.logs_buffer.push(rest);
         }
     }
@@ -504,7 +840,9 @@ impl App {
                     block.status = crate::app::state::BlockStatus::Running;
                     // [v0.1.0-beta.26] send_chat_message에서 이미 빈 Markdown을 넣었으므로 여기서 중복으로 넣지 않음.
                     if block.body.is_empty() {
-                        block.body.push(crate::app::state::BlockSection::Markdown(String::new()));
+                        block
+                            .body
+                            .push(crate::app::state::BlockSection::Markdown(String::new()));
                     }
                 }
             }
@@ -514,7 +852,8 @@ impl App {
                 // [v0.1.0-beta.26] ChatDelta에서 is_thinking을 false로 만들면 중간에 새 채팅 요청이 들어올 수 있으므로 제거함.
                 if let Some(idx) = self.state.runtime.active_chat_block_idx
                     && let Some(block) = self.state.ui.timeline.get_mut(idx)
-                    && let Some(crate::app::state::BlockSection::Markdown(buf)) = block.body.last_mut()
+                    && let Some(crate::app::state::BlockSection::Markdown(buf)) =
+                        block.body.last_mut()
                 {
                     buf.push_str(&token);
                 }
@@ -590,7 +929,7 @@ impl App {
                         .body
                         .push(crate::app::state::BlockSection::Markdown(format!(
                             "\n\nProvider Error: {}",
-                            e
+                            e.to_actionable()
                         )));
                 } else {
                     let mut block = crate::app::state::TimelineBlock::new(
@@ -598,9 +937,9 @@ impl App {
                         "Provider Error",
                     );
                     block.status = crate::app::state::BlockStatus::Error;
-                    block
-                        .body
-                        .push(crate::app::state::BlockSection::Markdown(e.to_string()));
+                    block.body.push(crate::app::state::BlockSection::Markdown(
+                        e.to_actionable().to_string(),
+                    ));
                     self.state.ui.timeline.push(block);
                 }
 
@@ -609,7 +948,7 @@ impl App {
                     .session
                     .add_message(crate::providers::types::ChatMessage {
                         role: crate::providers::types::Role::System,
-                        content: Some(format!("Provider Error: {}", e)),
+                        content: Some(format!("Provider Error: {}", e.to_actionable())),
                         tool_calls: None,
                         tool_call_id: None,
                         pinned: false,
@@ -648,18 +987,23 @@ impl App {
                 }
             }
 
-            action::Action::ToolOutputChunk(chunk) => {
+            action::Action::ToolOutputChunk(mut chunk) => {
+                self.mask_secrets(&mut chunk);
                 self.state.runtime.stream_accumulator.push_str(&chunk);
                 let mut new_lines: i32 = 0;
-                
+
                 while let Some(idx) = self.state.runtime.stream_accumulator.find('\n') {
                     let mut rest = self.state.runtime.stream_accumulator.split_off(idx + 1);
                     std::mem::swap(&mut self.state.runtime.stream_accumulator, &mut rest);
-                    
+
                     let mut line = rest;
-                    if line.ends_with('\n') { line.pop(); }
-                    if line.ends_with('\r') { line.pop(); }
-                    
+                    if line.ends_with('\n') {
+                        line.pop();
+                    }
+                    if line.ends_with('\r') {
+                        line.pop();
+                    }
+
                     self.state.runtime.logs_buffer.push(line);
                     new_lines += 1;
                 }
@@ -677,49 +1021,70 @@ impl App {
                 }
 
                 if !self.state.ui.timeline_follow_tail {
-                    let mut current_scroll = self.state.ui.inspector_scroll as i32;
+                    let mut current_scroll = self.state.ui.inspector_scroll.get() as i32;
                     // 새 라인이 new_lines개 추가되었으므로 offset +new_lines.
                     // 상단이 trimmed개 지워졌으므로 offset -trimmed.
                     current_scroll += new_lines - (trimmed as i32);
-                    
+
                     if current_scroll < 0 {
                         // 보고 있던 라인이 삭제된 경우, 새로운 상단(가장 큰 값)에 위치시킴
-                        self.state.ui.inspector_scroll = u16::MAX; 
+                        self.state.ui.inspector_scroll.set(u16::MAX);
                     } else {
-                        self.state.ui.inspector_scroll = current_scroll as u16;
+                        self.state.ui.inspector_scroll.set(current_scroll as u16);
                     }
                 } else {
-                    self.state.ui.inspector_scroll = 0;
+                    self.state.ui.inspector_scroll.set(0);
                 }
             }
 
-            action::Action::ToolFinished(res) => {
+            action::Action::ToolFinished(mut res, tool_index) => {
                 self.flush_stream_accumulator();
-                self.state.runtime.active_tool_cancel_token = None;
-                // LLM 컨텍스트에 도구 결과 추가
-                let content = format!(
-                    "[Tool Result] {}\nExit Code: {}\nSTDOUT: {}\nSTDERR: {}",
-                    res.tool_name, res.exit_code, res.stdout, res.stderr
-                );
+                // [v2.5.0] 완료된 도구의 취소 토큰을 맵에서 제거
+                let token_key = res
+                    .tool_call_id
+                    .clone()
+                    .unwrap_or_else(|| format!("tool_{}", tool_index));
                 self.state
-                    .domain
-                    .session
-                    .add_message(crate::providers::types::ChatMessage {
-                        role: crate::providers::types::Role::Tool,
-                        content: Some(content),
-                        tool_calls: None,
-                        tool_call_id: res.tool_call_id.clone(),
-                        pinned: false,
-                    });
+                    .runtime
+                    .active_tool_cancel_tokens
+                    .remove(&token_key);
 
-                // 원문은 logs_buffer에 보존
-                self.state.runtime.logs_buffer.push(format!(
-                    "[{}] exit={} stdout={} stderr={}",
-                    res.tool_name,
-                    res.exit_code,
-                    res.stdout.chars().take(500).collect::<String>(),
-                    res.stderr.chars().take(500).collect::<String>(),
+                // [v1.9.0] Phase 27: 터미널 타이틀 & 작업표시줄 진행률 복구 (OSC)
+                {
+                    use std::io::Write;
+                    let title_reset = "\x1b]0;smlcli\x07";
+                    let progress_reset = "\x1b]9;4;0;0\x07";
+                    print!("{}{}", title_reset, progress_reset);
+                    let _ = std::io::stdout().flush();
+                }
+
+                // [v1.6.0] RepoMap Dirty Flag 갱신
+                // [v2.5.0] is_write_tool()과 대상이 다름: GitCheckpoint는 스냅샷 보존(git stash/commit)
+                // 도구로 파일 내용을 변경하지 않으므로 RepoMap 갱신 대상에서 의도적으로 제외.
+                if matches!(
+                    res.tool_name.as_str(),
+                    "WriteFile" | "ReplaceFileContent" | "DeleteFile" | "ExecShell"
+                ) && !res.is_error
+                {
+                    self.state.runtime.repo_map_dirty = true;
+                }
+
+                // [v1.6.0] 마스킹
+                self.mask_secrets(&mut res.stdout);
+                self.mask_secrets(&mut res.stderr);
+
+                // 결과를 보류 목록에 저장
+                self.state.runtime.pending_tool_outcomes.push((
+                    tool_index,
+                    crate::app::state::ToolOutcome::Success(res.clone()),
                 ));
+
+                // 타임라인 업데이트 (보류 없이 즉시 반영)
+
+                // [UX] ExecShell 프로세스 복귀 후 터미널 잔상(Ghosting) 제거
+                if res.tool_name == "ExecShell" {
+                    self.state.ui.force_clear = true;
+                }
 
                 // 타임라인 ToolRun 상태를 Done/Error로 갱신
                 let final_status = if res.is_error {
@@ -733,8 +1098,16 @@ impl App {
                 let mut diff_summary = None;
                 let mut display_mode = crate::app::state::BlockDisplayMode::Expanded;
                 if res.tool_name == "ReplaceFileContent" || res.tool_name == "WriteFile" {
-                    let additions = res.stdout.lines().filter(|l| l.starts_with("+ ") && !l.starts_with("+++")).count();
-                    let deletions = res.stdout.lines().filter(|l| l.starts_with("- ") && !l.starts_with("---")).count();
+                    let additions = res
+                        .stdout
+                        .lines()
+                        .filter(|l| l.starts_with("+ ") && !l.starts_with("+++"))
+                        .count();
+                    let deletions = res
+                        .stdout
+                        .lines()
+                        .filter(|l| l.starts_with("- ") && !l.starts_with("---"))
+                        .count();
                     if additions + deletions > 10 {
                         display_mode = crate::app::state::BlockDisplayMode::Collapsed;
                     }
@@ -745,6 +1118,7 @@ impl App {
 
                 for block in self.state.ui.timeline.iter_mut().rev() {
                     if block.kind == crate::app::state::TimelineBlockKind::ToolRun
+                        && block.tool_call_id == res.tool_call_id
                         && (block.status == crate::app::state::BlockStatus::Running
                             || block.status == crate::app::state::BlockStatus::Idle)
                     {
@@ -767,18 +1141,134 @@ impl App {
                     let failure_context = Self::build_auto_verify_failure_context(&res);
                     self.mark_repo_map_stale();
                     self.refresh_repo_map_if_needed(false);
-                    if self.advance_auto_verify_after_failure(&failure_context) {
-                        self.send_chat_message_internal();
-                    }
+                    // abort 시 Aborted 상태가 runtime에 지속 저장됨
+                    let _ = self.advance_auto_verify_after_failure(&failure_context);
                 } else {
                     if Self::tool_requires_repo_map_refresh(&res.tool_name) {
                         self.mark_repo_map_stale();
                         self.refresh_repo_map_if_needed(false);
                     }
                     self.reset_auto_verify_after_success();
-                    // [v0.1.0-beta.18] Phase 10: 도구 결과를 LLM에 자동 재전송 (Structured Tool Loop).
-                    // 도구 실행 결과를 LLM이 해석하여 후속 응답/추가 도구 호출을 자동으로 수행.
-                    self.send_chat_message_internal();
+
+                    // [v3.0.0] Phase 40: Git-Native Integration 자동 커밋
+                    if let Some(settings) = &self.state.domain.settings {
+                        let should_commit = settings.git_integration.auto_commit
+                            && settings
+                                .git_integration
+                                .commit_tools
+                                .contains(&res.tool_name);
+
+                        // [v2.5.1] 감사 HIGH-1 수정: affected_paths가 비어있으면 commit skip.
+                        // 실제 변경된 파일만 stage하여 사용자 WIP를 보호.
+                        if should_commit && !res.affected_paths.is_empty() {
+                            let cwd = std::env::current_dir()
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or_else(|_| ".".to_string());
+
+                            let file_refs: Vec<&str> =
+                                res.affected_paths.iter().map(|s| s.as_str()).collect();
+                            match crate::infra::git_engine::GitEngine::auto_commit(
+                                &cwd,
+                                &res.tool_name,
+                                &file_refs,
+                                &settings.git_integration.commit_prefix,
+                            ) {
+                                Ok(msg) => {
+                                    if msg != "No changes to commit" {
+                                        self.state.ui.timeline.push(
+                                            crate::app::state::TimelineBlock {
+                                                id: uuid::Uuid::new_v4().to_string(),
+                                                kind:
+                                                    crate::app::state::TimelineBlockKind::GitCommit,
+                                                status: crate::app::state::BlockStatus::Done,
+                                                role: None,
+                                                title: msg.clone(),
+                                                subtitle: None,
+                                                body: vec![
+                                                    crate::app::state::BlockSection::Markdown(
+                                                        "Auto-commit successful.".to_string(),
+                                                    ),
+                                                ],
+                                                tool_call_id: None,
+                                                depth: 0,
+                                                display_mode:
+                                                    crate::app::state::BlockDisplayMode::Expanded,
+                                                diff_summary: None,
+                                                created_at_ms: std::time::SystemTime::now()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .unwrap_or_default()
+                                                    .as_millis()
+                                                    as u64,
+                                                pinned: false,
+                                            },
+                                        );
+                                        self.state.ui.timeline_scroll = 0;
+                                        self.state.ui.timeline_follow_tail = true;
+                                    }
+                                }
+                                Err(e) => {
+                                    self.state
+                                        .ui
+                                        .timeline
+                                        .push(crate::app::state::TimelineBlock {
+                                            id: uuid::Uuid::new_v4().to_string(),
+                                            kind: crate::app::state::TimelineBlockKind::Notice,
+                                            status: crate::app::state::BlockStatus::Error,
+                                            role: None,
+                                            title: "Auto Commit Failed".to_string(),
+                                            subtitle: None,
+                                            body: vec![crate::app::state::BlockSection::Markdown(
+                                                format!("Git 자동 커밋 중 오류 발생:\n{}", e),
+                                            )],
+                                            tool_call_id: None,
+                                            depth: 0,
+                                            display_mode:
+                                                crate::app::state::BlockDisplayMode::Expanded,
+                                            diff_summary: None,
+                                            created_at_ms: std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .unwrap_or_default()
+                                                .as_millis()
+                                                as u64,
+                                            pinned: false,
+                                        });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if Self::is_write_tool(&res.tool_name) {
+                    self.state.runtime.is_write_tool_running = false;
+                    if let Some((next_tool, next_id, next_idx)) =
+                        self.state.runtime.write_tool_queue.pop_front()
+                    {
+                        self.state.runtime.is_write_tool_running = true;
+                        self.execute_tool_async(next_tool, next_id, next_idx);
+                    }
+                }
+
+                self.state.runtime.pending_tool_executions =
+                    self.state.runtime.pending_tool_executions.saturating_sub(1);
+
+                if self.state.runtime.pending_tool_executions == 0 {
+                    self.flush_pending_tool_outcomes();
+                    // [v2.5.0] Aborted 상태가 runtime에 지속되므로, 어떤 도구가 마지막이든
+                    // abort 결정이 일관되게 반영됨
+                    if self.state.runtime.auto_verify != crate::app::state::AutoVerifyState::Aborted
+                        && self.state.runtime.approval.pending_tool.is_none()
+                        && self.state.runtime.approval.queued_approvals.is_empty()
+                    {
+                        // [v3.7.1] 직접 실행(!)된 도구는 LLM 자동 전송을 건너뜀
+                        if res.tool_call_id.is_some() {
+                            self.send_chat_message_internal();
+                        }
+                    }
+                    // Aborted 상태를 Idle로 리셋 (다음 사용자 입력 대기)
+                    if self.state.runtime.auto_verify == crate::app::state::AutoVerifyState::Aborted
+                    {
+                        self.state.runtime.auto_verify = crate::app::state::AutoVerifyState::Idle;
+                    }
                 }
             }
 
@@ -796,26 +1286,41 @@ impl App {
                 }
             }
 
-            action::Action::ToolError(e) => {
+            action::Action::ToolError(e, tool_call_id, tool_index) => {
                 self.flush_stream_accumulator();
-                self.state.runtime.active_tool_cancel_token = None;
-                let failure_detail = e.to_string();
+                // [v2.5.0] 오류 발생한 도구의 취소 토큰을 맵에서 제거
+                let token_key = tool_call_id
+                    .clone()
+                    .unwrap_or_else(|| format!("tool_{}", tool_index));
+                self.state
+                    .runtime
+                    .active_tool_cancel_tokens
+                    .remove(&token_key);
+
+                // [v1.9.0] Phase 27: 터미널 타이틀 & 작업표시줄 진행률 복구 (OSC)
+                {
+                    use std::io::Write;
+                    let title_reset = "\x1b]0;smlcli\x07";
+                    let progress_reset = "\x1b]9;4;0;0\x07";
+                    print!("{}{}", title_reset, progress_reset);
+                    let _ = std::io::stdout().flush();
+                }
+                let mut failure_detail = e.to_actionable().to_string();
+                self.mask_secrets(&mut failure_detail);
+
+                // 결과를 보류 목록에 저장
+                self.state.runtime.pending_tool_outcomes.push((
+                    tool_index,
+                    crate::app::state::ToolOutcome::Error(e, tool_call_id.clone()),
+                ));
+
                 self.mark_repo_map_stale();
                 self.refresh_repo_map_if_needed(false);
-                self.state
-                    .domain
-                    .session
-                    .add_message(crate::providers::types::ChatMessage {
-                        role: crate::providers::types::Role::Tool,
-                        content: Some(format!("[Tool Execution Failed] {}", failure_detail)),
-                        tool_calls: None,
-                        tool_call_id: None,
-                        pinned: false,
-                    });
 
                 // 타임라인 ToolRun 상태를 Error로 갱신
                 for block in self.state.ui.timeline.iter_mut().rev() {
                     if block.kind == crate::app::state::TimelineBlockKind::ToolRun
+                        && block.tool_call_id == tool_call_id
                         && (block.status == crate::app::state::BlockStatus::Running
                             || block.status == crate::app::state::BlockStatus::Idle)
                     {
@@ -829,8 +1334,28 @@ impl App {
                         break;
                     }
                 }
-                if self.advance_auto_verify_after_failure(&failure_detail) {
-                    self.send_chat_message_internal();
+
+                // abort 시 Aborted 상태가 runtime에 지속 저장됨
+                let _ = self.advance_auto_verify_after_failure(&failure_detail);
+
+                self.state.runtime.pending_tool_executions =
+                    self.state.runtime.pending_tool_executions.saturating_sub(1);
+
+                if self.state.runtime.pending_tool_executions == 0 {
+                    self.flush_pending_tool_outcomes();
+                    // [v2.5.0] Aborted 상태가 runtime에 지속되므로 병렬 도구 간 일관성 보장
+                    if self.state.runtime.auto_verify != crate::app::state::AutoVerifyState::Aborted
+                        && self.state.runtime.approval.pending_tool.is_none()
+                        && self.state.runtime.approval.queued_approvals.is_empty()
+                        && tool_call_id.is_some()
+                    {
+                        self.send_chat_message_internal();
+                    }
+                    // Aborted 상태를 Idle로 리셋 (다음 사용자 입력 대기)
+                    if self.state.runtime.auto_verify == crate::app::state::AutoVerifyState::Aborted
+                    {
+                        self.state.runtime.auto_verify = crate::app::state::AutoVerifyState::Idle;
+                    }
                 }
             }
 
@@ -840,6 +1365,33 @@ impl App {
             }
             action::Action::CredentialValidated(res) => {
                 self.handle_credential_validated(res);
+            }
+            action::Action::WizardSaveFinished(res) => {
+                self.state.ui.wizard.is_loading_models = false;
+                match res {
+                    Ok(_) => {
+                        crate::providers::registry::reload_providers();
+                        self.state.ui.is_wizard_open = false;
+                    }
+                    Err(e) => {
+                        self.state.ui.wizard.step = crate::app::state::WizardStep::Saving;
+                        self.state.ui.wizard.err_msg = Some(format!("설정 저장 실패: {}", e));
+                    }
+                }
+            }
+            action::Action::ConfigSaveFinished(res) => {
+                if let Err(e) = res {
+                    let mut block = crate::app::state::TimelineBlock::new(
+                        crate::app::state::TimelineBlockKind::Notice,
+                        "설정 저장 실패",
+                    );
+                    block.status = crate::app::state::BlockStatus::Error;
+                    block.body.push(crate::app::state::BlockSection::Markdown(format!(
+                        "디스크 용량 부족 또는 권한 문제로 설정을 저장하지 못했습니다.\n\n상세 오류:\n{}",
+                        e
+                    )));
+                    self.state.ui.timeline.push(block);
+                }
             }
             action::Action::RepoMapReady(repo_map) => {
                 self.state.runtime.repo_map.finish_success(repo_map);
@@ -867,6 +1419,337 @@ impl App {
                     .domain
                     .session
                     .apply_summary(&format!("Fallback due to error: {}", e));
+            }
+            action::Action::SilentHealthCheckFailed => {
+                self.state.ui.toast = Some(crate::app::state::ToastNotification {
+                    message: "⚠ smlcli doctor를 실행하여 시스템 환경을 확인하세요.".to_string(),
+                    is_error: true,
+                    expires_at: std::time::Instant::now() + std::time::Duration::from_secs(5),
+                });
+            }
+            action::Action::McpToolsLoaded(name, mut schemas, client, tool_name_map) => {
+                // [v3.3.2] 감사 HIGH-3 수정: 정규화된 서버명을 key로 저장.
+                // 스키마에서 사용하는 정규화명과 일치하여 라우팅 정합성 보장.
+                self.state.runtime.mcp_clients.insert(name.clone(), client);
+                // [v3.3.7] 감사 HIGH-1 수정: schemas를 먼저 push하지 않고,
+                // 전역 충돌 해소 후 schema.function.name까지 수정한 뒤 push.
+                // 이전: schemas 먼저 push → map key만 suffix 변경 → schema name ≠ map key.
+                // 수정: tool_name_map 순회 시 충돌이면 schema의 name도 함께 변경.
+                // [v3.3.7] 감사 MEDIUM-2: suffix > 9999 시 해당 도구를 skip + 경고 로그.
+                for (mut key, value) in tool_name_map {
+                    let original_key = key.clone();
+                    let mut skipped = false;
+                    if self.state.runtime.mcp_tool_name_map.contains_key(&key) {
+                        // 전역 충돌 발생: suffix 부여
+                        let base = key.clone();
+                        let mut suffix = 2u32;
+                        let mut resolved = false;
+                        loop {
+                            let candidate = format!("{}_{}", base, suffix);
+                            if candidate.len() > App::MAX_TOOL_NAME_LEN {
+                                let overflow = candidate.len() - App::MAX_TOOL_NAME_LEN;
+                                let trimmed_base = &base[..base.len().saturating_sub(overflow)];
+                                let trimmed_candidate = format!("{}_{}", trimmed_base, suffix);
+                                if !self
+                                    .state
+                                    .runtime
+                                    .mcp_tool_name_map
+                                    .contains_key(&trimmed_candidate)
+                                {
+                                    key = trimmed_candidate;
+                                    resolved = true;
+                                    break;
+                                }
+                            } else if !self
+                                .state
+                                .runtime
+                                .mcp_tool_name_map
+                                .contains_key(&candidate)
+                            {
+                                key = candidate;
+                                resolved = true;
+                                break;
+                            }
+                            suffix += 1;
+                            if suffix > 9999 {
+                                break;
+                            }
+                        }
+                        if !resolved {
+                            // [v3.3.8] 감사 MEDIUM-1: skip 시 schemas에서도 해당 항목 제거.
+                            // 이전: map insert만 건너뛰고 schema는 그대로 cache에 push됨.
+                            // 수정: schemas에서 original_key를 가진 항목을 제거하여
+                            // LLM에 노출되지만 라우팅 불가능한 도구가 생기지 않도록 방지.
+                            schemas.retain(|s| {
+                                s.get("function")
+                                    .and_then(|f| f.get("name"))
+                                    .and_then(|n| n.as_str())
+                                    != Some(original_key.as_str())
+                            });
+                            let warn_msg = format!(
+                                "[MCP] 경고: 도구 '{}' 전역 충돌 해소 실패 (suffix 한계 초과). 건너뜁니다.",
+                                original_key
+                            );
+                            self.state.runtime.logs_buffer.push(warn_msg.clone());
+                            // [v3.3.8] 감사 LOW-1: 타임라인 Notice로도 표시하여 UX 일관성 확보.
+                            let mut block = crate::app::state::TimelineBlock::new(
+                                crate::app::state::TimelineBlockKind::Notice,
+                                format!("MCP 도구 '{}' 충돌 건너뜀", original_key),
+                            );
+                            block.status = crate::app::state::BlockStatus::Error;
+                            block
+                                .body
+                                .push(crate::app::state::BlockSection::Markdown(warn_msg));
+                            self.state.ui.timeline.push(block);
+                            skipped = true;
+                        }
+                    }
+                    if skipped {
+                        continue;
+                    }
+                    // [v3.3.7] key가 변경되었으면 대응하는 schema의 function.name도 동기화.
+                    // LLM에 노출되는 tool schema name과 mcp_tool_name_map key가 일치해야
+                    // LLM이 호출한 도구명으로 라우팅이 가능함.
+                    if key != original_key {
+                        for schema in &mut schemas {
+                            if let Some(func) = schema.get_mut("function").filter(|f| {
+                                f.get("name").and_then(|n| n.as_str())
+                                    == Some(original_key.as_str())
+                            }) {
+                                func["name"] = serde_json::Value::String(key.clone());
+                                break;
+                            }
+                        }
+                    }
+                    self.state.runtime.mcp_tool_name_map.insert(key, value);
+                }
+                // [v3.3.7] 충돌 해소가 완료된 schemas를 cache에 push
+                // [v3.3.8] skip된 도구는 이미 schemas에서 retain으로 제거됨
+                for schema in schemas {
+                    self.state.runtime.mcp_tools_cache.push(schema);
+                }
+                self.state
+                    .runtime
+                    .logs_buffer
+                    .push(format!("[MCP] 서버 '{}' 로드 완료", name));
+            }
+            // [v3.3.1] 감사 MEDIUM-1 수정: MCP 서버 로드 실패 시 사용자에게 피드백 제공.
+            // 기존에는 spawn/list_tools 실패가 완전히 침묵 처리되어
+            // 사용자는 "도구가 안 보임"만 경험했음. 이제 타임라인 + 로그에 에러를 표시.
+            action::Action::McpLoadFailed(name, error) => {
+                self.state
+                    .runtime
+                    .logs_buffer
+                    .push(format!("[MCP] 서버 '{}' 로드 실패: {}", name, error));
+                let mut block = crate::app::state::TimelineBlock::new(
+                    crate::app::state::TimelineBlockKind::Notice,
+                    format!("MCP 서버 '{}' 로드 실패", name),
+                );
+                block.status = crate::app::state::BlockStatus::Error;
+                block
+                    .body
+                    .push(crate::app::state::BlockSection::Markdown(format!(
+                        "MCP 서버 '{}' 연결에 실패했습니다.\n사유: {}\n\n설정을 확인하세요: `/mcp list`",
+                        name, error
+                    )));
+                self.state.ui.timeline.push(block);
+            }
+
+            // ======================================================================
+            // [v3.7.0] Phase 47 Task Q-3: Interactive Planning Questionnaire
+            // ======================================================================
+            action::Action::ShowQuestionnaire(questions, tool_call_id, tool_index) => {
+                // QuestionnaireState 생성 및 UI 모달 활성화
+                self.state.ui.questionnaire =
+                    Some(crate::domain::questionnaire::QuestionnaireState::new(
+                        questions.clone(),
+                        tool_call_id,
+                        tool_index,
+                    ));
+
+                // 타임라인에 알림 블록 추가
+                let question_count = questions.len();
+                let mut block = crate::app::state::TimelineBlock::new(
+                    crate::app::state::TimelineBlockKind::Approval,
+                    format!("📋 명확화 질문 ({}건)", question_count),
+                );
+                block.status = crate::app::state::BlockStatus::NeedsApproval;
+                block.body.push(crate::app::state::BlockSection::Markdown(
+                    "AI가 요구사항을 명확히 하기 위해 질문을 보냈습니다.\n화살표 키(↑↓)로 선택하고 Enter로 답변하세요.".to_string(),
+                ));
+                self.state.ui.timeline.push(block);
+                self.state.ui.timeline_follow_tail = true;
+            }
+
+            action::Action::QuestionnaireCompleted => {
+                // QuestionnaireState에서 답변을 수집하여 ToolResult로 조립
+                if let Some(qs) = self.state.ui.questionnaire.take() {
+                    let result = qs.build_result();
+                    let result_json =
+                        serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_string());
+
+                    let tool_result = crate::domain::tool_result::ToolResult {
+                        tool_name: "AskClarification".to_string(),
+                        tool_call_id: qs.tool_call_id,
+                        stdout: result_json,
+                        stderr: String::new(),
+                        exit_code: 0,
+                        is_error: false,
+                        is_truncated: false,
+                        original_size_bytes: None,
+                        affected_paths: Vec::new(),
+                    };
+
+                    // ToolFinished Action으로 이벤트 루프에 태워 LLM에 피드백 전송
+                    self.handle_action(action::Action::ToolFinished(
+                        Box::new(tool_result),
+                        qs.tool_index,
+                    ));
+
+                    // 타임라인의 Approval 블록 상태를 Done으로 갱신
+                    for block in self.state.ui.timeline.iter_mut().rev() {
+                        if block.kind == crate::app::state::TimelineBlockKind::Approval
+                            && block.status == crate::app::state::BlockStatus::NeedsApproval
+                            && block.title.contains("명확화")
+                        {
+                            block.status = crate::app::state::BlockStatus::Done;
+                            // 답변 요약을 블록에 추가
+                            let mut summary = "**답변 요약:**\n".to_string();
+                            for (id, answer) in &result.answers {
+                                summary.push_str(&format!("- {}: {}\n", id, answer));
+                            }
+                            block
+                                .body
+                                .push(crate::app::state::BlockSection::Markdown(summary));
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// [v2.5.0] Phase 33: Ordered Aggregation for parallel tool executions
+    pub(crate) fn flush_pending_tool_outcomes(&mut self) {
+        let mut outcomes = std::mem::take(&mut self.state.runtime.pending_tool_outcomes);
+        outcomes.sort_by_key(|k| k.0);
+
+        for (_, outcome) in outcomes {
+            match outcome {
+                crate::app::state::ToolOutcome::Success(res) => {
+                    // 원문은 logs_buffer에 보존
+                    self.state.runtime.logs_buffer.push(format!(
+                        "[{}] exit={} stdout={} stderr={}",
+                        res.tool_name,
+                        res.exit_code,
+                        res.stdout.chars().take(500).collect::<String>(),
+                        res.stderr.chars().take(500).collect::<String>(),
+                    ));
+
+                    let mut content = format!(
+                        "[Tool Result] {}\nExit Code: {}\nSTDOUT: {}\nSTDERR: {}",
+                        res.tool_name, res.exit_code, res.stdout, res.stderr
+                    );
+
+                    if res.is_truncated {
+                        let size_info = res
+                            .original_size_bytes
+                            .map(|s| format!("{}", s))
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        let metadata = format!(
+                            "\n\n[SYSTEM: 이 결과는 너무 길어서 일부가 절단되었습니다. 원래 크기: {} bytes]",
+                            size_info
+                        );
+                        content.push_str(&metadata);
+                    }
+
+                    self.state
+                        .domain
+                        .session
+                        .add_message(crate::providers::types::ChatMessage {
+                            role: crate::providers::types::Role::Tool,
+                            content: Some(content),
+                            tool_calls: None,
+                            tool_call_id: res.tool_call_id.clone(),
+                            pinned: false,
+                        });
+                }
+                crate::app::state::ToolOutcome::Error(e, tool_call_id) => {
+                    let mut failure_detail = e.to_actionable().to_string();
+                    self.mask_secrets(&mut failure_detail);
+                    self.state
+                        .domain
+                        .session
+                        .add_message(crate::providers::types::ChatMessage {
+                            role: crate::providers::types::Role::Tool,
+                            content: Some(format!("[Tool Execution Failed] {}", failure_detail)),
+                            tool_calls: None,
+                            tool_call_id,
+                            pinned: false,
+                        });
+                }
+            }
+        }
+    }
+
+    // [v1.8.0] Phase 26: 슬라이딩 윈도우 기반 스트리밍 API 키 마스킹
+    fn mask_secrets(&mut self, text: &mut String) {
+        if self.state.runtime.secret_mask_regex.is_none()
+            && let Some(settings) = &self.state.domain.settings
+        {
+            let mut keys = Vec::new();
+            let mut max_len = 0;
+            for k in settings.encrypted_keys.keys() {
+                if let Ok(val) = crate::infra::secret_store::get_api_key(settings, k) {
+                    let val_str = secrecy::ExposeSecret::expose_secret(&val);
+                    if val_str.len() > 5 {
+                        keys.push(regex::escape(val_str));
+                        max_len = max_len.max(val_str.len());
+                    }
+                }
+            }
+            if !keys.is_empty() {
+                let pattern = format!("(?:{})", keys.join("|"));
+                if let Ok(re) = regex::Regex::new(&pattern) {
+                    self.state.runtime.secret_mask_regex = Some(re);
+                    self.state.runtime.streaming_masker.max_match_len = max_len;
+                }
+            } else {
+                // 빈 정규식을 피하기 위해 특수한 매치되지 않는 정규식 넣기
+                self.state.runtime.secret_mask_regex = regex::Regex::new(r"a^").ok();
+            }
+        }
+
+        if let Some(re) = &self.state.runtime.secret_mask_regex {
+            let max_match_len = self.state.runtime.streaming_masker.max_match_len;
+            if max_match_len > 0 {
+                let mut window =
+                    std::mem::take(&mut self.state.runtime.streaming_masker.trailing_buffer);
+                window.push_str(text);
+
+                let masked_window = re.replace_all(&window, "[REDACTED]").to_string();
+
+                // 만약 마스킹 처리된 내용이 있으면, text를 갱신
+                // 주의: REDACTED 처리로 인해 문자열 길이가 달라졌을 수 있음
+                if masked_window != window {
+                    *text = masked_window;
+                }
+
+                // 새로운 trailing buffer 저장 (최대 max_match_len 바이트)
+                let len = text.len();
+                let trailing_len = max_match_len.min(len);
+                if trailing_len > 0 {
+                    // 유효한 UTF-8 경계를 찾아서 저장
+                    let mut start_idx = len - trailing_len;
+                    while !text.is_char_boundary(start_idx) && start_idx > 0 {
+                        start_idx -= 1;
+                    }
+                    self.state.runtime.streaming_masker.trailing_buffer =
+                        text[start_idx..].to_string();
+                }
+            } else if re.is_match(text) {
+                let masked = re.replace_all(text, "[REDACTED]").to_string();
+                *text = masked;
             }
         }
     }
@@ -1029,15 +1912,47 @@ impl App {
                 }
                 _ => {} // 다른 모든 입력 무시
             }
+            return; // [v2.5.0] Trust Gate 활성 시 나머지 키 핸들러로의 폴스루 차단
+        }
+
+        // [v2.4.0] Phase 32: Help Overlay 닫기 및 토글 로직
+        if self.state.ui.show_help_overlay {
+            if key.code == KeyCode::Esc
+                || key.code == KeyCode::Enter
+                || key.code == KeyCode::Char('?')
+            {
+                self.state.ui.show_help_overlay = false;
+            }
+            return;
+        }
+
+        // [v3.7.0] Phase 47 Task Q-2: Questionnaire 모달 활성 시 키 입력 인터셉트.
+        // 다른 모든 키 핸들러보다 우선하여 질문 폼의 탐색/선택/입력을 처리.
+        if self.state.ui.questionnaire.is_some() {
+            self.handle_questionnaire_key(key);
+            return;
+        }
+
+        if key.code == KeyCode::F(1)
+            || (key.code == KeyCode::Char('?')
+                && self.state.ui.focused_pane != crate::app::state::FocusedPane::Composer)
+        {
+            self.state.ui.show_help_overlay = true;
             return;
         }
 
         match key.code {
             // 전역 단축키: Ctrl+C 종료 또는 실행 취소
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(token) = self.state.runtime.active_tool_cancel_token.take() {
-                    token.cancel();
-                    self.state.runtime.logs_buffer.push("[App] 사용자 취소 요청 (Ctrl+C): 도구 실행 중단".to_string());
+                if !self.state.runtime.active_tool_cancel_tokens.is_empty() {
+                    for token in self.state.runtime.active_tool_cancel_tokens.values() {
+                        token.cancel();
+                    }
+                    self.state.runtime.active_tool_cancel_tokens.clear();
+                    self.state
+                        .runtime
+                        .logs_buffer
+                        .push("[App] 사용자 취소 요청 (Ctrl+C): 모든 도구 실행 중단".to_string());
                 } else {
                     self.state.should_quit = true;
                 }
@@ -1070,6 +1985,11 @@ impl App {
                     if self.state.ui.focused_pane == crate::app::state::FocusedPane::Palette {
                         self.state.ui.focused_pane = crate::app::state::FocusedPane::Composer;
                     }
+                } else if self.state.ui.show_inspector
+                    && self.state.ui.focused_pane == crate::app::state::FocusedPane::Inspector
+                {
+                    self.state.ui.show_inspector = false;
+                    self.state.ui.focused_pane = crate::app::state::FocusedPane::Composer;
                 } else if self.state.ui.slash_menu.is_open {
                     // [v0.1.0-beta.16] 슬래시 메뉴 닫기
                     self.state.ui.slash_menu.is_open = false;
@@ -1101,9 +2021,15 @@ impl App {
                     self.state.ui.wizard.err_msg = None;
                     self.state.ui.wizard.api_key_input.clear();
                     self.state.ui.wizard.cursor_index = 0;
-                } else if let Some(token) = self.state.runtime.active_tool_cancel_token.take() {
-                    token.cancel();
-                    self.state.runtime.logs_buffer.push("[App] 사용자 취소 요청 (ESC): 도구 실행 중단".to_string());
+                } else if !self.state.runtime.active_tool_cancel_tokens.is_empty() {
+                    for token in self.state.runtime.active_tool_cancel_tokens.values() {
+                        token.cancel();
+                    }
+                    self.state.runtime.active_tool_cancel_tokens.clear();
+                    self.state
+                        .runtime
+                        .logs_buffer
+                        .push("[App] 사용자 취소 요청 (ESC): 모든 도구 실행 중단".to_string());
                 } else {
                     self.state.should_quit = true;
                 }
@@ -1139,19 +2065,36 @@ impl App {
                 if self.state.ui.is_wizard_open {
                     // [v1.0.0] 위저드 탭 포커스 순환 강제 (순서 꼬임 해결)
                     // Provider -> ApiKey -> Model -> SaveButton
-                    let reverse = key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
+                    let reverse =
+                        key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
                     self.state.ui.wizard.step = match self.state.ui.wizard.step {
                         state::WizardStep::ProviderSelection => {
-                            if reverse { state::WizardStep::Saving } else { state::WizardStep::ApiKeyInput }
+                            if reverse {
+                                state::WizardStep::Saving
+                            } else {
+                                state::WizardStep::ApiKeyInput
+                            }
                         }
                         state::WizardStep::ApiKeyInput => {
-                            if reverse { state::WizardStep::ProviderSelection } else { state::WizardStep::ModelSelection }
+                            if reverse {
+                                state::WizardStep::ProviderSelection
+                            } else {
+                                state::WizardStep::ModelSelection
+                            }
                         }
                         state::WizardStep::ModelSelection => {
-                            if reverse { state::WizardStep::ApiKeyInput } else { state::WizardStep::Saving }
+                            if reverse {
+                                state::WizardStep::ApiKeyInput
+                            } else {
+                                state::WizardStep::Saving
+                            }
                         }
                         state::WizardStep::Saving => {
-                            if reverse { state::WizardStep::ModelSelection } else { state::WizardStep::ProviderSelection }
+                            if reverse {
+                                state::WizardStep::ModelSelection
+                            } else {
+                                state::WizardStep::ProviderSelection
+                            }
                         }
                     };
                 } else {
@@ -1171,8 +2114,10 @@ impl App {
                 {
                     match self.state.ui.focused_pane {
                         crate::app::state::FocusedPane::Inspector => {
-                            self.state.ui.inspector_scroll =
-                                self.state.ui.inspector_scroll.saturating_add(5);
+                            self.state
+                                .ui
+                                .inspector_scroll
+                                .set(self.state.ui.inspector_scroll.get().saturating_add(5));
                         }
                         _ => self.scroll_timeline_up(5),
                     }
@@ -1185,8 +2130,10 @@ impl App {
                 {
                     match self.state.ui.focused_pane {
                         crate::app::state::FocusedPane::Inspector => {
-                            self.state.ui.inspector_scroll =
-                                self.state.ui.inspector_scroll.saturating_sub(5);
+                            self.state
+                                .ui
+                                .inspector_scroll
+                                .set(self.state.ui.inspector_scroll.get().saturating_sub(5));
                         }
                         _ => self.scroll_timeline_down(5),
                     }
@@ -1245,8 +2192,67 @@ impl App {
                 self.state.ui.fuzzy.matches.clear();
                 self.state.ui.fuzzy.cursor = 0;
                 self.update_fuzzy_matches();
+            } else if c == 'y'
+                && self.state.ui.focused_pane != crate::app::state::FocusedPane::Composer
+            {
+                // [v2.2.0] Phase 30: TUI Clipboard Integration
+                self.copy_focused_content_to_clipboard();
             } else {
+                if self.state.ui.focused_pane != crate::app::state::FocusedPane::Composer {
+                    self.state.ui.focused_pane = crate::app::state::FocusedPane::Composer;
+                }
                 self.state.ui.composer.input_buffer.push(c);
+            }
+        }
+    }
+
+    /// [v2.2.0] Phase 30: arboard 연동 클립보드 복사
+    fn copy_focused_content_to_clipboard(&mut self) {
+        let content = match self.state.ui.focused_pane {
+            crate::app::state::FocusedPane::Inspector => self.state.runtime.logs_buffer.join("\n"),
+            crate::app::state::FocusedPane::Timeline => {
+                // 타임라인 포커싱 시 최근 어시스턴트 메시지를 복사
+                let msgs = &self.state.domain.session.messages;
+                if let Some(msg) = msgs
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == crate::providers::types::Role::Assistant)
+                {
+                    msg.content.clone().unwrap_or_default()
+                } else {
+                    String::new()
+                }
+            }
+            _ => String::new(),
+        };
+
+        if !content.is_empty() {
+            let now = std::time::Instant::now();
+            let expires_at = now + std::time::Duration::from_secs(2);
+
+            match arboard::Clipboard::new().and_then(|mut c| c.set_text(&content)) {
+                Ok(_) => {
+                    self.state
+                        .runtime
+                        .logs_buffer
+                        .push(format!("[Clipboard] {} bytes 복사 성공", content.len()));
+                    self.state.ui.toast = Some(crate::app::state::ToastNotification {
+                        message: "복사 완료!".into(),
+                        expires_at,
+                        is_error: false,
+                    });
+                }
+                Err(e) => {
+                    self.state
+                        .runtime
+                        .logs_buffer
+                        .push(format!("[Clipboard] 복사 실패: {}", e));
+                    self.state.ui.toast = Some(crate::app::state::ToastNotification {
+                        message: "복사 실패!".into(),
+                        expires_at,
+                        is_error: true,
+                    });
+                }
             }
         }
     }
@@ -1280,7 +2286,10 @@ impl App {
                 self.state.ui.timeline_cursor -= 1;
             }
         } else if self.state.ui.focused_pane == crate::app::state::FocusedPane::Inspector {
-            self.state.ui.inspector_scroll = self.state.ui.inspector_scroll.saturating_add(1);
+            self.state
+                .ui
+                .inspector_scroll
+                .set(self.state.ui.inspector_scroll.get().saturating_add(1));
         } else if !self.state.ui.composer.history.is_empty()
             && self.state.ui.focused_pane == crate::app::state::FocusedPane::Composer
         {
@@ -1317,8 +2326,16 @@ impl App {
             }
         } else if self.state.ui.config.is_open {
             let max = match self.state.ui.config.active_popup {
-                state::ConfigPopup::Dashboard => 2,
-                state::ConfigPopup::ProviderList => 4,
+                state::ConfigPopup::Dashboard => 4,
+                state::ConfigPopup::ProviderList => {
+                    4 + self
+                        .state
+                        .domain
+                        .settings
+                        .as_ref()
+                        .map(|s| s.custom_providers.len())
+                        .unwrap_or(0)
+                }
                 state::ConfigPopup::ModelList => self
                     .state
                     .ui
@@ -1350,7 +2367,10 @@ impl App {
                 self.state.ui.timeline_cursor += 1;
             }
         } else if self.state.ui.focused_pane == crate::app::state::FocusedPane::Inspector {
-            self.state.ui.inspector_scroll = self.state.ui.inspector_scroll.saturating_sub(1);
+            self.state
+                .ui
+                .inspector_scroll
+                .set(self.state.ui.inspector_scroll.get().saturating_sub(1));
         } else if let Some(idx) = self.state.ui.composer.history_idx
             && self.state.ui.focused_pane == crate::app::state::FocusedPane::Composer
         {
@@ -1417,16 +2437,20 @@ impl App {
         match mouse.kind {
             MouseEventKind::ScrollUp => match target {
                 MousePaneTarget::Inspector => {
-                    self.state.ui.inspector_scroll =
-                        self.state.ui.inspector_scroll.saturating_add(3);
+                    self.state
+                        .ui
+                        .inspector_scroll
+                        .set(self.state.ui.inspector_scroll.get().saturating_add(3));
                 }
                 MousePaneTarget::Timeline => self.scroll_timeline_up(3),
                 _ => {}
             },
             MouseEventKind::ScrollDown => match target {
                 MousePaneTarget::Inspector => {
-                    self.state.ui.inspector_scroll =
-                        self.state.ui.inspector_scroll.saturating_sub(3);
+                    self.state
+                        .ui
+                        .inspector_scroll
+                        .set(self.state.ui.inspector_scroll.get().saturating_sub(3));
                 }
                 MousePaneTarget::Timeline => self.scroll_timeline_down(3),
                 _ => {}
@@ -1452,7 +2476,9 @@ impl App {
 
     /// Enter 키 처리: Slash Menu 선택 → Fuzzy Finder 선택 → Config 팝업 → Wizard → Composer 제출 순으로 라우팅.
     pub(crate) fn handle_enter_key(&mut self) {
-        if let crate::app::state::TrustGatePopup::Open { root } = self.state.ui.trust_gate.popup.clone() {
+        if let crate::app::state::TrustGatePopup::Open { root } =
+            self.state.ui.trust_gate.popup.clone()
+        {
             let trust_state = match self.state.ui.trust_gate.cursor_index {
                 0 => crate::domain::settings::WorkspaceTrustState::Trusted, // Trust & Remember
                 1 => crate::domain::settings::WorkspaceTrustState::Trusted, // Trust Once
@@ -1460,24 +2486,43 @@ impl App {
                 _ => crate::domain::settings::WorkspaceTrustState::Unknown,
             };
 
-            if self.state.ui.trust_gate.cursor_index == 0 { // Trust & Remember
+            if self.state.ui.trust_gate.cursor_index == 0 {
+                // Trust & Remember
                 if let Some(settings) = &mut self.state.domain.settings {
                     settings.set_workspace_trust(&root, trust_state.clone(), true);
                     let settings_clone = settings.clone();
+                    let tx = self.action_tx.clone();
                     tokio::spawn(async move {
-                        let _ = crate::infra::config_store::save_config(&settings_clone).await;
+                        let res = crate::infra::config_store::save_config(&settings_clone)
+                            .await
+                            .map_err(|e| e.to_string());
+                        let _ = tx
+                            .send(crate::app::event_loop::Event::Action(
+                                crate::app::action::Action::ConfigSaveFinished(res),
+                            ))
+                            .await;
                     });
                 }
-            } else if self.state.ui.trust_gate.cursor_index == 2 { // Restricted
+            } else if self.state.ui.trust_gate.cursor_index == 2 {
+                // Restricted
                 if let Some(settings) = &mut self.state.domain.settings {
                     settings.set_workspace_trust(&root, trust_state.clone(), true);
                     settings.denied_roots.push(root.clone());
                     let settings_clone = settings.clone();
+                    let tx = self.action_tx.clone();
                     tokio::spawn(async move {
-                        let _ = crate::infra::config_store::save_config(&settings_clone).await;
+                        let res = crate::infra::config_store::save_config(&settings_clone)
+                            .await
+                            .map_err(|e| e.to_string());
+                        let _ = tx
+                            .send(crate::app::event_loop::Event::Action(
+                                crate::app::action::Action::ConfigSaveFinished(res),
+                            ))
+                            .await;
                     });
                 }
-            } else { // Trust Once
+            } else {
+                // Trust Once
                 if let Some(settings) = &mut self.state.domain.settings {
                     settings.set_workspace_trust(&root, trust_state.clone(), false);
                 }
@@ -1552,7 +2597,8 @@ impl App {
         } else if self.state.ui.focused_pane == crate::app::state::FocusedPane::Timeline {
             let cursor = self.state.ui.timeline_cursor;
             if cursor < self.state.ui.timeline.len()
-                && self.state.ui.timeline[cursor].kind == crate::app::state::TimelineBlockKind::ToolRun
+                && self.state.ui.timeline[cursor].kind
+                    == crate::app::state::TimelineBlockKind::ToolRun
             {
                 self.state.ui.timeline[cursor].toggle_collapse();
             }
@@ -1562,7 +2608,9 @@ impl App {
             if !text.is_empty() {
                 // [v0.1.0-beta.26] 진행 중(is_thinking)일 때 자연어 채팅 요청 및 명령어 실행 차단 (Race condition 방지)
                 if self.state.runtime.is_thinking {
-                    self.state.runtime.logs_buffer.push("[Warning] 이전 요청이 진행 중입니다. 완료 후 입력해주세요.".to_string());
+                    self.state.runtime.logs_buffer.push(
+                        "[Warning] 이전 요청이 진행 중입니다. 완료 후 입력해주세요.".to_string(),
+                    );
                     return;
                 }
 
@@ -1593,11 +2641,17 @@ impl App {
             if input.is_empty() {
                 results.push(cmd.clone());
             } else {
-                let target = format!("{} {}", cmd.title.to_lowercase(), cmd.category.to_string().to_lowercase());
+                let target = format!(
+                    "{} {}",
+                    cmd.title.to_lowercase(),
+                    cmd.category.to_string().to_lowercase()
+                );
                 let mut target_chars = target.chars();
                 let mut is_match = true;
                 for ch in input.chars() {
-                    if ch.is_whitespace() { continue; }
+                    if ch.is_whitespace() {
+                        continue;
+                    }
                     let mut found = false;
                     for tc in target_chars.by_ref() {
                         if tc == ch {
@@ -1615,7 +2669,7 @@ impl App {
                 }
             }
         }
-        
+
         results.truncate(50); // 최대 50개 제한
         self.state.ui.palette.results = results;
         self.state.ui.palette.cursor = 0;
@@ -1762,5 +2816,108 @@ impl App {
 
         self.state.ui.toolbar.chips = chips;
         self.state.ui.toolbar.multiline = self.state.ui.composer.input_buffer.contains('\n');
+    }
+
+    // ======================================================================
+    // [v3.7.0] Phase 47 Task Q-2: Questionnaire 키 입력 핸들러.
+    // Questionnaire 모달이 활성화되어 있을 때의 전체 키 입력을 관리.
+    // - 객관식: ↑↓으로 옵션 탐색, Enter로 선택
+    // - 주관식: 텍스트 입력 후 Enter로 제출
+    // - allow_custom: 마지막 옵션("직접 입력")에서 Enter 시 입력 모드 전환
+    // - Esc: Questionnaire 취소 (빈 ToolResult 반환)
+    // ======================================================================
+    fn handle_questionnaire_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::KeyCode;
+
+        let Some(ref mut qs) = self.state.ui.questionnaire else {
+            return;
+        };
+
+        match key.code {
+            // Esc: Questionnaire 취소
+            KeyCode::Esc => {
+                let tool_call_id = qs.tool_call_id.clone();
+                let tool_index = qs.tool_index;
+                self.state.ui.questionnaire = None;
+
+                // 빈 결과를 ToolResult로 반환하여 LLM에 취소를 알림
+                let tool_result = crate::domain::tool_result::ToolResult {
+                    tool_name: "AskClarification".to_string(),
+                    tool_call_id,
+                    stdout: "{\"answers\":{},\"cancelled\":true}".to_string(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    is_error: false,
+                    is_truncated: false,
+                    original_size_bytes: None,
+                    affected_paths: Vec::new(),
+                };
+                self.handle_action(action::Action::ToolFinished(
+                    Box::new(tool_result),
+                    tool_index,
+                ));
+            }
+
+            // 위쪽 화살표: 옵션 커서 이동
+            KeyCode::Up => {
+                if !qs.is_custom_input_mode && qs.option_cursor > 0 {
+                    qs.option_cursor -= 1;
+                }
+            }
+
+            // 아래쪽 화살표: 옵션 커서 이동
+            KeyCode::Down => {
+                if !qs.is_custom_input_mode {
+                    let max = qs.total_options().saturating_sub(1);
+                    if qs.option_cursor < max {
+                        qs.option_cursor += 1;
+                    }
+                }
+            }
+
+            // Enter: 선택 확정 또는 텍스트 제출
+            KeyCode::Enter => {
+                if qs.is_current_freeform() || qs.is_custom_input_mode {
+                    // 주관식 또는 직접 입력 모드: 텍스트 버퍼 내용으로 답변
+                    let answer = qs.custom_input.clone();
+                    if !answer.is_empty() {
+                        let completed = qs.submit_answer(answer);
+                        if completed {
+                            self.handle_action(action::Action::QuestionnaireCompleted);
+                        }
+                    }
+                } else if let Some(q) = qs.current_question() {
+                    let cursor = qs.option_cursor;
+                    if q.allow_custom && cursor == q.options.len() {
+                        // "직접 입력" 선택: 입력 모드 전환
+                        qs.is_custom_input_mode = true;
+                        qs.custom_input.clear();
+                    } else if cursor < q.options.len() {
+                        // 객관식 옵션 선택
+                        let answer = q.options[cursor].clone();
+                        let completed = qs.submit_answer(answer);
+                        if completed {
+                            self.handle_action(action::Action::QuestionnaireCompleted);
+                        }
+                    }
+                }
+            }
+
+            // 문자 입력: 주관식/직접 입력 모드에서 텍스트 버퍼에 추가
+            KeyCode::Char(c) => {
+                if qs.is_current_freeform() || qs.is_custom_input_mode {
+                    qs.custom_input.push(c);
+                }
+            }
+
+            // Backspace: 주관식/직접 입력 모드에서 문자 삭제
+            KeyCode::Backspace => {
+                if qs.is_current_freeform() || qs.is_custom_input_mode {
+                    qs.custom_input.pop();
+                }
+            }
+
+            _ => {} // 기타 키는 무시
+        }
     }
 }

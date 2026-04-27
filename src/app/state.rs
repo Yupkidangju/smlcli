@@ -1,13 +1,16 @@
 // [v0.1.0-beta.18] Phase 9-A: AppState 모듈.
 // [v0.1.0-beta.19] AppState를 Domain, Ui, Runtime으로 분리하고 비동기 초기화 지원.
 
+// [v3.7.0] 인스펙터 탭 variant는 TUI 인스펙터 고도화 시 활성화 예정.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum InspectorTab {
     Preview,
     Diff,
     Search,
     Logs,
     Recent,
+    Git,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -17,9 +20,12 @@ pub enum TimelineBlockKind {
     Approval,
     Help,
     Notice,
+    GitCommit,
 }
 
+// [v3.7.0] CodeFence variant는 코드 블록 렌더링 전환 시 활성화 예정.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)]
 pub enum BlockSection {
     Markdown(String),
     CodeFence {
@@ -48,7 +54,10 @@ pub enum BlockDisplayMode {
     Expanded,
 }
 
+// [v3.7.0] TimelineBlock의 id, subtitle, pinned, created_at_ms 필드는
+// 블록 북마크/타임스탬프 표시 기능 구현 시 활성화 예정.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TimelineBlock {
     pub id: String,
     pub kind: TimelineBlockKind,
@@ -62,6 +71,7 @@ pub struct TimelineBlock {
     pub display_mode: BlockDisplayMode,
     pub role: Option<crate::providers::types::Role>,
     pub diff_summary: Option<(usize, usize)>,
+    pub tool_call_id: Option<String>,
     pub pinned: bool,
     pub created_at_ms: u64,
 }
@@ -79,6 +89,7 @@ impl TimelineBlock {
             display_mode: BlockDisplayMode::Expanded,
             role: None,
             diff_summary: None,
+            tool_call_id: None,
             pinned: false,
             created_at_ms: std::time::UNIX_EPOCH.elapsed().unwrap().as_millis() as u64,
         }
@@ -92,6 +103,11 @@ impl TimelineBlock {
 
     pub fn with_role(mut self, role: crate::providers::types::Role) -> Self {
         self.role = Some(role);
+        self
+    }
+
+    pub fn with_tool_call_id(mut self, id: Option<String>) -> Self {
+        self.tool_call_id = id;
         self
     }
 
@@ -109,6 +125,9 @@ pub struct DomainState {
     pub settings: Option<crate::domain::settings::PersistedSettings>,
     pub session_logger: Option<crate::infra::session_log::SessionLogger>,
     pub config_load_error: Option<String>,
+    // [v3.6.0] Phase 46 Task S-1: 현재 활성 세션의 메타데이터.
+    // 세션 전환(/resume, /new) 시 이 필드가 교체됨.
+    pub current_session_metadata: Option<crate::domain::session::SessionMetadata>,
 }
 
 impl DomainState {
@@ -130,13 +149,31 @@ impl DomainState {
                 )
             }
         };
-        let session_logger = crate::infra::session_log::SessionLogger::new_session().ok();
+
+        if let Some(settings) = &loaded_settings {
+            crate::providers::registry::update_custom_providers(&settings.custom_providers);
+        }
+
+        // [v3.6.0] Phase 46: 워크스페이스 기반 세션 생성
+        let workspace_root = std::env::current_dir()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| ".".to_string());
+        let (session_logger, session_metadata) =
+            match crate::infra::session_log::SessionLogger::new_workspace_session(&workspace_root) {
+                Ok((logger, meta)) => (Some(logger), Some(meta)),
+                Err(_) => {
+                    // 폴백: 기존 방식으로 로거만 생성
+                    let logger = crate::infra::session_log::SessionLogger::new_session().ok();
+                    (logger, None)
+                }
+            };
 
         Self {
             session: crate::domain::session::SessionState::new(),
             settings: loaded_settings,
             session_logger,
             config_load_error,
+            current_session_metadata: session_metadata,
         }
     }
 }
@@ -149,6 +186,14 @@ pub enum FocusedPane {
     Palette,
 }
 
+/// [v2.3.0] Phase 31: 클립보드 등 UI 알림을 위한 상태 구조체
+#[derive(Debug, Clone)]
+pub struct ToastNotification {
+    pub message: String,
+    pub expires_at: std::time::Instant,
+    pub is_error: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputChipKind {
     Mode,
@@ -158,7 +203,9 @@ pub enum InputChipKind {
     Hint,
 }
 
+// [v3.7.0] emphasized 필드는 Composer Toolbar 강조 칩 렌더링 시 활성화 예정.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct InputChip {
     pub kind: InputChipKind,
     pub label: String,
@@ -171,7 +218,9 @@ pub struct ComposerToolbarState {
     pub multiline: bool,
 }
 
+// [v3.7.0] tick_ms 필드는 모션 프레임 제어 최적화 시 활성화 예정.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct MotionProfile {
     pub tick_ms: u64,
     pub spinner_frames: &'static [&'static str],
@@ -189,6 +238,8 @@ impl Default for MotionProfile {
 }
 
 pub struct UiState {
+    /// [v2.3.0] Phase 31: 클립보드 피드백용 토스트 알림
+    pub toast: Option<ToastNotification>,
     pub is_wizard_open: bool,
     pub trust_gate: TrustGateState,
     pub show_inspector: bool,
@@ -202,6 +253,7 @@ pub struct UiState {
     pub timeline: Vec<TimelineBlock>,
     pub tick_count: u64,
     pub motion: MotionProfile,
+    #[allow(dead_code)] // [v3.7.0] 블록 기반 스크롤 전환 시 활성화 예정
     pub timeline_scroll_offset: usize,
     /// [Phase 15-E] 타임라인 내 선택된 블록 커서.
     pub timeline_cursor: usize,
@@ -209,18 +261,28 @@ pub struct UiState {
     /// 렌더링 시 layout.rs에서 top-based offset으로 변환됨.
     pub timeline_scroll: u16,
     /// [v0.1.0-beta.24] Phase 14-B: 인스펙터 전용 스크롤 오프셋
-    pub inspector_scroll: u16,
+    pub inspector_scroll: std::cell::Cell<u16>,
+    /// [v2.1.0] Phase 29: 스크롤 앵커 상태 관리
+    pub inspector_anchor: std::cell::Cell<crate::tui::widgets::inspector_tabs::ScrollAnchor>,
+    pub last_inspector_height: std::cell::Cell<usize>,
     /// [v0.1.0-beta.24] Phase 14-B: 타임라인 자동 추적 플래그.
     /// true이면 새 콘텐츠 추가 시 스크롤을 맨 아래로 이동.
     /// 사용자가 위로 스크롤하면 false, End 키 또는 맨 아래 도달 시 다시 true.
     pub timeline_follow_tail: bool,
     pub focused_pane: FocusedPane,
     pub palette: CommandPaletteState,
+    pub force_clear: bool,
+    // [v2.4.0] Phase 32: Help Overlay
+    pub show_help_overlay: bool,
+    // [v3.7.0] Phase 47: Interactive Planning Questionnaire UI 상태.
+    // Some이면 Questionnaire 모달이 활성화된 상태.
+    pub questionnaire: Option<crate::domain::questionnaire::QuestionnaireState>,
 }
 
 impl UiState {
     pub fn new(is_wizard_open: bool) -> Self {
         Self {
+            toast: None,
             is_wizard_open,
             trust_gate: TrustGateState::new(),
             show_inspector: false,
@@ -237,15 +299,24 @@ impl UiState {
             timeline_scroll_offset: 0,
             timeline_cursor: 0,
             timeline_scroll: 0,
-            inspector_scroll: 0,
+            inspector_scroll: std::cell::Cell::new(0),
+            inspector_anchor: std::cell::Cell::new(
+                crate::tui::widgets::inspector_tabs::ScrollAnchor::default(),
+            ),
+            last_inspector_height: std::cell::Cell::new(0),
             timeline_follow_tail: true,
             focused_pane: FocusedPane::Composer,
             palette: CommandPaletteState::new(),
+            force_clear: false,
+            show_help_overlay: false,
+            questionnaire: None,
         }
     }
 }
 
+// [v3.7.0] Tools, Settings, Context variant는 Command Palette 카테고리 확장 시 활성화 예정.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum PaletteCategory {
     Navigation,
     Session,
@@ -377,6 +448,25 @@ impl CommandPaletteState {
                 category: PaletteCategory::Navigation,
                 shortcut_hint: Some("F2"),
             },
+            // [v3.6.0] Phase 46: 세션 관리 명령어
+            PaletteCommand {
+                id: "/new",
+                title: "New Session",
+                category: PaletteCategory::Session,
+                shortcut_hint: None,
+            },
+            PaletteCommand {
+                id: "/resume",
+                title: "Resume Session",
+                category: PaletteCategory::Session,
+                shortcut_hint: None,
+            },
+            PaletteCommand {
+                id: "/session",
+                title: "Session List",
+                category: PaletteCategory::Session,
+                shortcut_hint: None,
+            },
         ];
 
         Self {
@@ -393,8 +483,14 @@ impl CommandPaletteState {
 pub enum AutoVerifyState {
     Idle,
     Healing { retries: usize },
+    // [v2.5.0] 3회 초과 실패 시 Aborted 상태로 전환.
+    // 이 상태에서는 pending_tool_executions == 0 시점에서도 LLM 재전송을 차단한다.
+    // 병렬 도구 간 abort 결정이 일관되게 유지됨.
+    Aborted,
 }
 
+// [v3.7.0] root_path, trust_state 등은 Workspace Trust Gate UI 연동 시 활성화 예정.
+#[allow(dead_code)]
 pub struct RuntimeWorkspaceState {
     pub root_path: String,
     pub host_shell: String,
@@ -413,7 +509,9 @@ impl RuntimeWorkspaceState {
         };
 
         let exec_shell = if cfg!(target_os = "windows") {
-            if crate::tools::shell::command_in_path("pwsh.exe").is_some() || crate::tools::shell::command_in_path("pwsh").is_some() {
+            if crate::tools::shell::command_in_path("pwsh.exe").is_some()
+                || crate::tools::shell::command_in_path("pwsh").is_some()
+            {
                 "pwsh".to_string()
             } else if crate::tools::shell::command_in_path("powershell.exe").is_some() {
                 "powershell.exe".to_string()
@@ -449,8 +547,48 @@ pub struct RuntimeState {
     pub auto_verify: AutoVerifyState,
     pub workspace: RuntimeWorkspaceState,
     pub active_chat_block_idx: Option<usize>,
-    pub active_tool_cancel_token: Option<tokio_util::sync::CancellationToken>,
+    // [v2.5.0] Phase 35: 병렬 도구 실행을 위한 per-tool CancellationToken 맵.
+    // 키: tool_call_id (없으면 인덱스 기반 문자열), 값: CancellationToken.
+    pub active_tool_cancel_tokens:
+        std::collections::HashMap<String, tokio_util::sync::CancellationToken>,
     pub stream_accumulator: String,
+    // [v1.6.0] RepoMap의 동적 갱신을 위한 Dirty Flag
+    pub repo_map_dirty: bool,
+    // [v1.6.0] API 키 노출 방지 마스킹용 정규식 캐시
+    pub secret_mask_regex: Option<regex::Regex>,
+    // [v1.8.0] Phase 26: 스트리밍 마스킹 윈도우
+    pub streaming_masker: StreamingMasker,
+
+    // [v2.4.0] Phase 32: Parallel Tool Execution
+    pub pending_tool_executions: usize,
+    pub write_tool_queue:
+        std::collections::VecDeque<(crate::domain::tool_result::ToolCall, Option<String>, usize)>,
+    pub is_write_tool_running: bool,
+    #[allow(dead_code)] // [v3.7.0] 병렬 도구 순서 보장 최적화 시 활성화 예정
+    pub pending_tool_outcomes: Vec<(usize, ToolOutcome)>,
+
+    // [v3.3.0] Phase 43: MCP 클라이언트
+    // [v3.3.2] 감사 HIGH-3 수정: mcp_clients key를 정규화된 서버명으로 저장.
+    // 스키마 노출 시 정규화된 이름을 사용하므로, 런타임 라우팅도 정규화명으로 매칭해야 함.
+    pub mcp_clients: std::collections::HashMap<String, crate::infra::mcp_client::McpClient>,
+    pub mcp_tools_cache: Vec<serde_json::Value>,
+    // [v3.3.2] 감사 HIGH-3 수정: 정규화 도구명 → MCP 원본 도구명 역매핑 테이블.
+    // key: "mcp_{sanitized_server}_{sanitized_tool}", value: (sanitized_server, original_tool_name)
+    // tool_runtime에서 strip_prefix 후 원본 도구명으로 MCP call_tool() 호출.
+    pub mcp_tool_name_map: std::collections::HashMap<String, (String, String)>,
+}
+
+pub enum ToolOutcome {
+    Success(Box<crate::domain::tool_result::ToolResult>),
+    Error(crate::domain::error::ToolError, Option<String>),
+}
+
+// 스트리밍 마스킹용 윈도우 상태
+#[derive(Debug, Clone, Default)]
+pub struct StreamingMasker {
+    // 이전 청크의 마지막 N 바이트를 보관하여 스트림 경계 단어 보존
+    pub trailing_buffer: String,
+    pub max_match_len: usize,
 }
 
 impl RuntimeState {
@@ -464,8 +602,18 @@ impl RuntimeState {
             auto_verify: AutoVerifyState::Idle,
             workspace: RuntimeWorkspaceState::new(),
             active_chat_block_idx: None,
-            active_tool_cancel_token: None,
+            active_tool_cancel_tokens: std::collections::HashMap::new(),
             stream_accumulator: String::new(),
+            repo_map_dirty: true,
+            secret_mask_regex: None,
+            streaming_masker: StreamingMasker::default(),
+            pending_tool_executions: 0,
+            write_tool_queue: std::collections::VecDeque::new(),
+            is_write_tool_running: false,
+            pending_tool_outcomes: Vec::new(),
+            mcp_clients: std::collections::HashMap::new(),
+            mcp_tools_cache: Vec::new(),
+            mcp_tool_name_map: std::collections::HashMap::new(),
         }
     }
 }
@@ -507,6 +655,7 @@ impl AppState {
             settings: None,
             session_logger: None,
             config_load_error: None,
+            current_session_metadata: None,
         };
         let ui = UiState::new(false);
         let runtime = RuntimeState::new();
@@ -673,21 +822,23 @@ impl ComposerState {
     }
 }
 
+#[derive(Debug, Clone, Default)]
 pub struct ApprovalState {
     pub pending_tool: Option<crate::domain::tool_result::ToolCall>,
     pub pending_tool_call_id: Option<String>,
-    pub diff_preview: Option<String>,
+    pub pending_tool_index: Option<usize>,
     pub pending_since_ms: Option<u64>,
+    pub diff_preview: Option<String>,
+    pub queued_approvals:
+        std::collections::VecDeque<(crate::domain::tool_result::ToolCall, Option<String>, usize)>,
+    #[allow(dead_code)] // [v3.7.0] 병렬 도구 결과 순서 보장 시 활성화 예정
+    pub pending_tool_outcomes:
+        std::collections::HashMap<usize, crate::domain::tool_result::ToolResult>,
 }
 
 impl ApprovalState {
     pub fn new() -> Self {
-        Self {
-            pending_tool: None,
-            pending_tool_call_id: None,
-            diff_preview: None,
-            pending_since_ms: None,
-        }
+        Self::default()
     }
 }
 
@@ -699,7 +850,7 @@ pub struct SlashMenuState {
 }
 
 impl SlashMenuState {
-    const ALL_COMMANDS: [(&'static str, &'static str); 13] = [
+    const ALL_COMMANDS: [(&'static str, &'static str); 16] = [
         ("/config", "Settings Dashboard"),
         ("/setting", "Setup Wizard"),
         ("/provider", "Switch Provider"),
@@ -710,6 +861,9 @@ impl SlashMenuState {
         ("/compact", "Compress Context"),
         ("/theme", "Toggle Theme"),
         ("/workspace", "Manage Workspace Trust"),
+        ("/new", "New Session"),
+        ("/resume", "Resume Session"),
+        ("/session", "Session List"),
         ("/clear", "Clear Chat"),
         ("/help", "Show Help"),
         ("/quit", "Exit"),

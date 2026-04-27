@@ -18,9 +18,9 @@
 
 ## 3단계: 아키텍처 결함 감지 (Architecture Audit)
 애플리케이션의 모듈 분리가 `spec.md`를 잘 따르고 있는지 평가합니다.
-- 도메인 레이어: `permissions`, `session`, `settings`가 UI 로직에 얽혀 있지 않은지 점검. 
-- 터미널 렌더러 분리: `tui/` 폴더 밖에서 터미널 제어 코드가 불리지 않는지 확인. 
-- Provider Layer: 상호 연결 인터페이스(trait)를 제대로 사용하여 하드 코딩 방지 여부 점검. 
+- 도메인 레이어: `permissions`, `session`, `settings`가 UI 로직에 얽혀 있지 않은지 점검.
+- 터미널 렌더러 분리: `tui/` 폴더 밖에서 터미널 제어 코드가 불리지 않는지 확인.
+- Provider Layer: 상호 연결 인터페이스(trait)를 제대로 사용하여 하드 코딩 방지 여부 점검.
 
 ## 4단계: 액션 로드맵 (Remediation Roadmap)
 감사 이후 수정이 필요한 항목들을 즉시 도출하고 실행 가능한 계획으로 변경합니다.
@@ -54,7 +54,7 @@
 
 | 항목 | 검증 방법 | 합격 기준 |
 |------|-----------|-----------|
-| CLI Entry Modes | `main.rs`에 clap 파싱 | `run`, `doctor`, `export-log` 서브커맨드 동작 |
+| CLI Entry Modes | `main.rs`에 clap 파싱 | `run`, `doctor`, `sessions` 서브커맨드 동작 |
 | 세션 영속성 | `session_log.rs` 존재 | JSONL 저장/복원 round-trip |
 | SafeOnly 화이트리스트 | `permissions.rs` 검사 | safe_commands 미매칭 시 Deny |
 | Blocked Command | `permissions.rs` 검사 | sudo/rm -rf 등 무조건 차단 |
@@ -69,7 +69,7 @@
 |------|-----------|-----------|
 | Shell 스트리밍 | `shell.rs` 검사 | spawn + BufReader + ToolOutputChunk |
 | 테스트 확장 | `cargo test` | 22건+ (secret round-trip, cancel/rollback, tool lifecycle, layout snapshot 포함) |
-| 전역 allow 제거 | `main.rs` 검사 | #[allow(dead_code)] 등 0건 |
+| 전역 allow 제거 | `main.rs` 검사 | `#![allow(dead_code)]` 등 **crate-level 전역** allow 0건. 모듈 단위 국소 `#[allow(dead_code)]`는 예약 코드 사유 주석과 함께 허용 |
 
 ---
 
@@ -78,7 +78,7 @@
 ### 13-A 도구 및 실행 아키텍처 감사
 
 | 항목 | 검증 방법 | 합격 기준 |
-|------|-----------|-----------| 
+|------|-----------|-----------|
 | Tool Registry | `src/tools/registry.rs` 코드 확인 | `Tool` 트레이트를 구현하는 개별 도구 구조체(`ReadFile`, `WriteFile` 등)가 존재하며 다형성 호출 보장 |
 | Automated Git Checkpoints | `git_checkpoint.rs` 소스 검사 + `test_git_checkpoint_source_has_no_git_clean` 테스트 | `create_checkpoint()`는 강제 커밋 없이 워킹 트리 clean 여부만 반환(`Result<bool>`). `rollback_checkpoint()`에 `git clean -fd` 없음. `git reset --hard` 종료 코드 검사 필수. WIP 존재 시 롤백 건너뜀 |
 | ExecShell 파괴 판정 | `shell.rs` 코드 확인 + `test_exec_shell_is_not_destructive` 테스트 | `ExecShell`의 `is_destructive()`는 기본값(`false`)을 반환하며, 쉘 명령 실패가 Git 롤백을 트리거하지 않음 |
@@ -249,7 +249,7 @@
 
 ---
 
-## Phase 19: v1.0.0 Audit Remediation 감사 기준 (진행 중)
+## Phase 19: v1.0.0 Audit Remediation 감사 기준 (완료)
 
 ### 19-A Core Error & Resource 감사
 | 항목 | 검증 방법 | 합격 기준 |
@@ -320,3 +320,204 @@
 |------|-----------|-----------|
 | 서브 프로세스 타임아웃 | `sleep 100` 도구 실행 시도 | 기본 타임아웃(30초) 도달 시 프로세스에 SIGKILL이 전송되고 런타임이 블로킹에서 벗어남 |
 | 세션 로그 로테이션 | 10MB 이상의 세션 로그 파일을 반복 기록 시도 | 기존 로그 파일이 `.1` 등의 백업으로 롤오버되며, 최대 5개까지만 유지됨 |
+
+---
+
+## Phase 24: v1.6.0 Final Integrity Hardening (시스템 무결성 확정 및 최종 고도화)
+
+### 24-A Security & Consistency 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| 인터렉티브 쉘 블로킹 방지 | `git commit` 등 사용자 입력을 대기하는 명령어 실행 | 터미널이 응답 없이 멈추지 않고, 입력 대기 없이 즉시 에러 상태로 프로세스가 종료됨 |
+| 민감 정보 마스킹 | 도구로 `echo $GEMINI_API_KEY` 등을 실행하여 API 키 출력 시도 | 화면 및 파일 로그에 실제 키 대신 `[REDACTED]`로 치환되어 저장/표출됨 |
+| RepoMap 동적 갱신 | `WriteFile` 도구로 새 파일 생성 직후 `RepoMap` 관련 도구 없이 바로 채팅 질의 | 파일 시스템 변경 시 `dirty` 플래그가 켜져 다음 턴에 자동으로 `RepoMap`이 최신화되고 LLM이 이를 인지함 |
+
+### 24-B Intelligence & Architecture 감사
+| 항목 | 검증 정법 | 합격 기준 |
+|------|-----------|-----------|
+| 스마트 컨텍스트 요약 | 메시지가 토큰 한계를 초과하여 컨텍스트 압축이 발생하도록 긴 대화 진행 | 시스템 가이드와 초기 목표는 삭제되지 않고 유지되며, 삭제된 구간의 요약본이 삽입됨 |
+| Provider Mocking 구조 | `cargo test` 명령어를 오프라인 상태에서 실행 | API 서버 연결 없이도 `MockProvider`를 통해 ChatRuntime과 ToolRuntime 로직이 성공적으로 테스트됨 |
+
+---
+
+## Phase 32: v2.4.0 Final Release Candidate 감사 기준 (진행 완료)
+
+### 32-A Performance & Tools 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| 다중 도구 비동기 실행 | LLM이 여러 개의 읽기 전용 도구를 제안 시 | 병렬 큐 시스템(`VecDeque`)을 통해 비동기적으로 도구가 동시 실행되며, Timeline이 개별 업데이트됨 |
+| 쓰기 작업 순차 제어 (Write Lock) | 쓰기 관련 도구(WriteFile 등) 포함 여러 도구 제안 | 쓰기 도구는 `write_tool_queue`에 들어가며 이전 작업이 끝나기 전까지 블로킹됨 |
+| CLI 자동 완성 | `smlcli completions bash` 실행 | `clap_complete`가 정상적으로 셸 스크립트를 stdout으로 출력함 |
+
+### 32-B UX & Reliability 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| TUI Help Overlay | `F1` 키 입력 | 현재 포커스된 창(Composer, Timeline 등)에 따라 적절한 컨텍스트 단축키 모달이 오버레이됨 |
+| Silent Health Check | 설정 파일의 API 키나 모델을 고의로 훼손한 후 실행 | 앱 기동 시 백그라운드로 `Doctor`가 돌며, 실패 시 우측 상단이나 하단에 Toast로 경고가 노출됨 |
+| 취약점 점검 패치 | `cargo audit` 결과 확인 | rand 및 의존성 업데이트가 완료되어 취약점 경고 0건 |
+
+---
+
+## Phase 35: v2.5.0 System Hardening & Metadata 감사 기준 (진행 완료)
+
+### 35-A Process & Log Reliability 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| 고아 프로세스 정리 | `ExecShell` 로 긴 sleep을 주고 강제 종료(`kill -9 smlcli`) 후 재실행 시도 | 부모를 잃은 이전 `sleep` 프로세스가 자동으로 `reap_orphans`에 의해 색출되어 종료됨 |
+| 세션 복원 OOM 방어 | 50MB 이상의 거대한 세션 `logs/` 파일을 생성하고 TUI 재실행 | `BufReader::lines`를 통해 OOM 발생 없이 안정적으로 파싱 및 불러오기가 성공함 |
+| 동시성 정렬 무결성 | 병렬 도구를 동시에 3개 실행시키고, 고의로 실행 지연 시간에 차이를 둠 | 먼저 끝난 순서가 아니라 원래 요청된 도구 인덱스 순서대로 타임라인에 블록이 렌더링됨 |
+
+### 35-B UX Locale & Build DevOps 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| 어댑티브 ASCII Fallback | `LANG=C smlcli` 실행 혹은 `use_ascii_borders=true` 적용 후 TUI 진입 | 유니코드 테두리 대신 `+`, `-`, `|` 기반의 안전한 ASCII 박스가 모든 레이아웃에 깨짐 없이 그려짐 |
+| 빌드 메타데이터 증명 | `smlcli doctor` 커맨드 실행 | 보고서 상단에 `v2.5.0 (커밋해시 - 빌드날짜)`가 정상적으로 노출됨 |
+
+---
+
+## Phase 40: v3.0.0 Git-Native Integration 감사 기준 (완료)
+
+### 40-A Git 자동 커밋 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| GitEngine 워킹트리 감지 | `git init` 있는/없는 폴더에서 실행 | Git 리포 없는 경우 Noop, 있는 경우 자동 커밋 가능 |
+| Auto-Commit 트리거 | WriteFile/DeleteFile 도구 성공 후 상태 확인 | `git_integration.auto_commit=true` 설정 시 affected_paths만 stage + 커밋 |
+| `/undo` 되돌리기 | 자동 커밋 후 `/undo` 입력 | `git reset --hard HEAD~1`으로 마지막 커밋 취소, 타임라인에 롤백 알림 |
+| Inspector Git 탭 | F2 인스펙터 열기 후 Git 탭 확인 | 현재 브랜치, 최근 커밋 목록, diff 요약이 표시됨 |
+
+---
+
+## Phase 41: v3.1.0 Custom Provider 확장 감사 기준 (완료)
+
+### 41-A 커스텀 Provider 등록 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| ProviderKind::Custom | `domain/provider.rs` 확인 | `Custom` 변형이 존재하며 base_url, auth_strategy 포함 |
+| `/provider add/remove/list` | 각 명령어 실행 | 설정 파일에 영속화되며 재시작 없이 목록 반영 |
+| Auth Strategy | 커스텀 Provider로 요청 전송 | Bearer/X-API-Key/Custom 헤더가 정확히 적용됨 |
+
+---
+
+## Phase 42: v3.2.0 OS-Level Sandbox 감사 기준 (완료)
+
+### 42-A Sandbox 격리 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| bubblewrap 래퍼 | `sandbox.enabled=true` 후 ExecShell 실행 | `bwrap` 프로세스 내부에서 명령 실행, 워크스페이스 외부 접근 차단 |
+| `/config` Sandbox 섹션 | 설정 UI에서 Sandbox 토글 | enabled/allow_network/extra_binds 3개 필드 노출 |
+| 비-Linux 폴백 | macOS/Windows에서 sandbox 활성화 | 경고 메시지 출력 후 일반 모드로 폴백 |
+
+---
+
+## Phase 43: v3.3.0 MCP 클라이언트 인프라 감사 기준 (인프라 완료)
+
+### 43-A MCP JSON-RPC 2.0 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| McpClient::spawn | mock_mcp_server.py로 E2E 테스트 | initialize → tools/list → tools/call 왕복 성공 |
+| 네임스페이스 정규화 | 특수문자 포함 서버명/도구명 | `mcp_{sanitized_server}_{sanitized_tool}` 64자 제한 준수 |
+| isError 우선 검사 | CallToolResult에 isError:true+content 동시 존재 | isError를 먼저 검사하여 Err 반환 |
+| PermissionEngine mcp_ Ask | mcp_ 접두사 도구 실행 시도 | 신뢰 설정과 무관하게 항상 Ask 반환 |
+| Child 프로세스 정리 | shutdown() 호출 후 프로세스 목록 확인 | kill()로 자식 프로세스 즉시 종료 |
+| 충돌 해소 (Dedup) | 동일 정규화 결과 도구 2개 등록 | 두 번째 도구에 `_2` suffix 자동 부여 |
+| 스키마 동기화 가드 | mcp_tools_cache와 mcp_tool_name_map 키 수 | 양쪽의 mcp_ 항목 수가 정확히 일치 |
+
+---
+
+## Phase 44: v3.4.0 DeleteFile 및 TECH-DEBT 정리 감사 기준 (완료)
+
+### 44-A DeleteFile 도구 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| GLOBAL_REGISTRY 등록 | `get_tool("DeleteFile")` 호출 | Tool trait 구현체 반환, 스키마 유효 |
+| 샌드박스 검증 | 워크스페이스 외부 경로 삭제 시도 | validate_sandbox()에서 Deny 반환 |
+| 디렉토리 삭제 방지 | 디렉토리 경로 전달 | "디렉토리는 삭제 불가" 에러 반환 |
+| is_destructive() | DeleteFile의 is_destructive() 호출 | true 반환, Git 체크포인트 트리거 |
+
+### 44-B TECH-DEBT 정리 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| 전역 allow(dead_code) | `grep -r "allow(dead_code)" src/` | ProviderRegistry 1건(cfg(test) 사유)만 잔존, 나머지 0건 |
+| 빌드 경고 | `cargo build` | dead_code 관련 경고 0건 |
+
+---
+
+## Phase 45: v3.5.0 CI/CD 파이프라인 감사 기준 (완료)
+
+### 45-A CI 워크플로 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| ci.yml 품질 게이트 | GitHub Actions 로그 확인 | fmt → clippy → test 순서 실행, 하나라도 실패 시 전체 실패 |
+| version-sync job | Cargo.toml ↔ CHANGELOG 불일치 push | CI에서 실패 감지 |
+| cargo cache | 두 번째 실행 시간 비교 | 캐시 적중으로 의존성 다운로드 스킵 |
+
+### 45-B Release 워크플로 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| release.yml 태그 트리거 | `v3.5.0` 태그 push | quality-gate → 크로스 빌드 → Releases 업로드 |
+| Linux musl 바이너리 | 릴리스 자산 확인 | `smlcli-x86_64-unknown-linux-musl` 존재 |
+| Windows msvc 바이너리 | 릴리스 자산 확인 | `smlcli-x86_64-pc-windows-msvc.exe` 존재 |
+
+---
+
+## Phase 46: v3.6.0 Workspace-scoped Session Management 감사 기준 (완료)
+
+### 46-A 세션 영속화 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| SessionMetadata | `domain/session.rs` 확인 | id, title, workspace_root, created_at, updated_at 필드 존재 |
+| SessionIndex CRUD | `infra/session_log.rs` 확인 | sessions_index.json 파일 생성/읽기/갱신/삭제 API 존재 |
+| 워크스페이스 격리 | 다른 폴더에서 `/session` 실행 | 해당 폴더의 세션만 목록에 노출 |
+
+### 46-B 세션 명령어 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| Auto-Titling | 첫 메시지 전송 후 `/session` 확인 | 메시지 앞 50자가 세션 제목으로 자동 설정 |
+| `/resume <번호>` | 이전 세션 번호로 resume | 메시지 복원 + 로거 교체 + 인덱스 touch |
+| `/new` | 세션 진행 중 `/new` 입력 | 타임라인·세션 상태·스트림 초기화 후 새 세션 할당 |
+| `/session` | 명령어 실행 | 현재 워크스페이스의 세션 목록이 KeyValueTable로 렌더링 |
+| SlashMenu 등록 | `/` 입력 후 메뉴 확인 | `/session`, `/resume`, `/new` 3건이 메뉴에 노출 |
+
+---
+
+## Phase 47: v3.7.0 Interactive Planning Questionnaire 감사 기준 (완료)
+
+### 47-A AskClarification 도구 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| GLOBAL_REGISTRY 등록 | `get_tool("AskClarification")` 호출 | Tool trait 구현체 반환, 스키마의 function.name이 "AskClarification" |
+| 스키마 구조 | schema() JSON 확인 | questions 배열 (id/title/options/allow_custom), summary 문자열 파라미터 존재 |
+| check_permission | 임의 인자로 호출 | 항상 PermissionResult::Allow (읽기 전용 도구) |
+| PLAN 모드 하네싱 | chat_runtime.rs 시스템 프롬프트 확인 | PLAN 모드에서 AskClarification 강제 사용 지침 존재 |
+
+### 47-B Questionnaire TUI 위젯 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| 모달 오버레이 | layout.rs draw() 확인 | help_overlay 뒤에 questionnaire 오버레이 렌더링 |
+| 객관식 커서 | ↑↓ 키 입력 후 확인 | ▸ 마커가 현재 옵션에 표시, Cyan 하이라이트 |
+| 주관식 입력 | 빈 옵션 질문에서 문자 입력 | ▏ 커서 표시, Backspace 삭제 동작 |
+| allow_custom | allow_custom=true 옵션 선택 | "✏ 직접 입력..." 옵션이 목록 끝에 노출, 선택 시 텍스트 입력 모드 전환 |
+| 진행률 표시 | 다중 질문 폼 진행 | "질문 N/M" 형식으로 현재 진행 상태 표시 |
+| Esc 취소 | Esc 입력 | 설문 취소, questionnaire 상태 None으로 복원, 취소 ToolResult 전달 |
+
+### 47-C State Machine 연동 감사
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| ShowQuestionnaire Action | tool_runtime.rs 인터셉트 확인 | AskClarification 도구명 감지 시 비동기 실행 대신 Action 발행 |
+| QuestionnaireCompleted Action | 모든 답변 완료 후 확인 | ToolResult 조립 (JSON answers) → ToolFinished로 LLM 피드백 |
+| UiState.questionnaire | state.rs 확인 | Option<QuestionnaireState> 필드 존재, None 초기화 |
+| handle_questionnaire_key | mod.rs 키 입력 핸들러 확인 | is_some() 일 때 최우선 인터셉트, ↑↓/Enter/Esc/문자입력 라우팅 |
+
+### 47-D MCP E2E 테스트 완성도 감사 (Task M-4)
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| Mock MCP 서버 | scripts/mock_mcp_server.py 존재 | JSON-RPC 2.0 initialize/tools/list/tools/call 응답 |
+| E2E initialize+list | `cargo test test_mcp_e2e_initialize_and_list_tools` | 2도구 반환, 스키마 검증 통과 |
+| E2E call_tool | `cargo test test_mcp_e2e_call_tool` | get_weather/read_file 응답 내용 일치 |
+| Permission Ask 강제 | `cargo test test_mcp_permission_engine_always_ask` | mcp_ 접두사 도구 2건 모두 Ask |
+| 네임스페이스 왕복 | `cargo test test_mcp_namespace_strip_roundtrip` | sanitize → 합성 → 역매핑 복원 일치 |
+| 설정 CRUD | `cargo test test_mcp_config_add_remove_persistence` | Vec push/upsert/retain 동작 |
+| AskClarification 등록 | `cargo test test_ask_clarification_tool_registered` | GLOBAL_REGISTRY + 스키마 + Allow |
+| Questionnaire 로직 | `cargo test test_questionnaire_state_submit_and_build` | 3문항 순차 답변 → build_result 조립 |
+| total_options 계산 | `cargo test test_questionnaire_total_options` | allow_custom 포함/미포함 옵션 수 정확 |
+| 전체 테스트 수 | `cargo test` | 102건 이상 통과 |

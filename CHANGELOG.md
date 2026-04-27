@@ -3,6 +3,264 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [3.7.1] - 2026-04-25 (Security & Stability Hotfix)
+
+### Fixed
+- **[Finding 5] ReadFile 도구 인덱스 OOB 패닉 수정**: `file_ops.rs:read_file`에서 `start_line` 및 `end_line`이 `total_lines`를 초과하여 지정될 경우 패닉이 발생하던 취약점(Out-of-Bounds)을 `min/max` 경계값 교정 로직을 통해 안전하게 수정.
+- **[Finding 6] Gemini Provider 도구 파싱 로직 구현**: `OpenRouter`/`OpenAI`와 동일하게 Gemini의 OpenAI 호환 엔드포인트 응답에서도 `tool_calls` 스트리밍(SSE) 및 동기 응답을 정밀 파싱하도록 구조체 수정 및 로직 이식.
+- **[Finding 7] 설정 마법사 에러 은닉 수정**: `WizardSaveFinished` 이벤트를 도입하여 `save_config` 비동기 저장 중 디스크 꽉 참 또는 권한 오류 발생 시 마법사를 조용히 종료하지 않고 UI 에러 렌더링하도록 개선.
+- **[Re-Audit Finding 1] GrepSearch 샌드박스 우회 방지**: `tools/grep.rs`에서 원시 경로를 그대로 검색하던 로직을 `file_ops::validate_sandbox()`를 거치도록 수정하여 `/etc` 등 외부 탐색 원천 차단.
+- **[Re-Audit Finding 2] Approval 타임아웃 큐 고립 방지**: 대기 중인 승인 요청이 만료되었을 때, 큐(`queued_approvals`)에 남은 다음 요청을 정상적으로 팝업하도록 승격 로직 적용.
+- **[Re-Audit Finding 3] CI 품질 게이트 통과**: `Cargo.toml` 버전을 3.7.1로 통일하고, `tests/audit_regression.rs`의 `collapsible_if` Clippy 경고를 수정하여 CI 실패 해결.
+- **[Re-Audit Finding 4] 문서 최신화 (명세 동기화)**: `spec.md`, `audit_roadmap.md`, `designs.md` 내 버전과 존재하지 않는 `export-log` 서브커맨드 표기를 `sessions`로 정정.
+- **[Re-Audit Finding 5] 세션 로그 파일명 충돌 방지**: `session_{timestamp}.jsonl` 이름 생성 시 UUID 6자리를 추가하여 동시성 상황에서 동일 파일에 덮어쓰거나 덧붙이는 현상 방지.
+- **[Re-Audit Finding 6] 직접 셸 실행(!) 에러 재전송 방지**: 직접 셸 호출로 인한 오류 발생 시 `ToolError` 로직에서 `tool_call_id`가 없는 경우 LLM으로 불필요한 오류 피드백이 전송되지 않도록 방어.
+- **[2차 Re-Audit] MCP pending 타임아웃 정리**: `McpClient`의 `pending_requests` 맵을 구조체 레벨로 승격하여, 타임아웃(10초) 시 해당 엔트리를 즉시 제거하고, EOF 시 잔존 요청 전체에 에러를 통지하여 메모리 누적 방지.
+- **[2차 Re-Audit] GrepSearch·승인 큐 회귀 테스트 보강**: `test_grep_search_sandbox_bypass` (워크스페이스 외부 경로 차단 검증) 및 `test_approval_timeout_promotes_queue` (큐 승격 검증) 추가로 보안 수정 회귀 커버리지 확보.
+- **[2차 Re-Audit] TUI 색상 정책 통합**: `questionnaire.rs`, `help_overlay.rs`에서 하드코딩된 `Color::Cyan`/`Color::Rgb` 등을 `state.palette()` 기반 테마 색상으로 교체하여 `/theme` 전환 즉시 반영.
+- **[2차 Re-Audit] sanitize.rs 데드 코드 제거**: `providers/sanitize.rs`가 `mod.rs`에 미등록·미호출 상태로 방치되어 있어 제거. 동일 로직은 `registry.rs`에서 인라인으로 이미 구현 중.
+- **[2차 Re-Audit] 문서 공백·EOF 정비**: `AGENTS.md`, `spec.md`, `CHANGELOG.md`, `DESIGN_DECISIONS.md`, `IMPLEMENTATION_SUMMARY.md`, `audit_roadmap.md`의 trailing whitespace 및 EOF blank line 정리로 `git diff --check` 완전 통과.
+
+## [3.7.0] - 2026-04-24 (Phase 44-47: DeleteFile·TECH-DEBT·CI/CD·세션·플래닝 폼)
+
+### Added
+- **[Phase 44/D-1] DeleteFileTool 구현**: `tools/file_ops.rs`에 `Tool` trait 구현, `GLOBAL_REGISTRY` 정식 등록. validate_sandbox() 기반 워크스페이스 외부 접근 차단, FileWritePolicy 적용, is_destructive() = true (Git 체크포인트 트리거). 디렉토리 삭제 방지 및 파일 존재 여부 선행 검증 포함.
+- **[Phase 44/D-2] TECH-DEBT 일괄 정리**: 모듈 레벨 `#[allow(dead_code)]` 7건, 파일 레벨 `#![allow(dead_code)]` 2건 제거. `ProviderRegistry` 1건만 cfg(test) 구조적 사유로 유지. `[ROADMAP/v3.0]` 주석을 실제 구현 상태로 갱신.
+- **[Phase 45/CI-1] GitHub Actions CI 워크플로**: `.github/workflows/ci.yml` — fmt/clippy/test 품질 게이트 + cargo cache 최적화. `version-sync` job으로 버전 동기화 자동 검증.
+- **[Phase 45/CI-2] GitHub Actions Release 워크플로**: `.github/workflows/release.yml` — 태그(v*) push 시 quality-gate → Linux musl / Windows msvc 크로스 빌드 → GitHub Releases 자동 업로드. `softprops/action-gh-release@v2` 사용.
+- **[Phase 45/CI-3] 버전 동기화 검증 스크립트**: `scripts/check-version-sync.sh` — Cargo.toml ↔ CHANGELOG.md ↔ Git Tag 버전 일치 자동 검증.
+- **[Phase 46/S-1] SessionMetadata & Workspace 격리**: `domain/session.rs`에 `SessionMetadata` 구조체 및 `SessionAction` 열거형 추가. `infra/session_log.rs`에 `SessionIndex` (sessions_index.json CRUD) 및 `new_workspace_session()` API 추가. `DomainState`에 `current_session_metadata` 필드.
+- **[Phase 46/S-2] Auto-Titling 파이프라인**: 첫 UserMessage의 앞 50자를 세션 제목으로 자동 설정. 후속 메시지는 `updated_at` 타임스탬프만 갱신.
+- **[Phase 46/S-3] `/resume`, `/session` 명령어**: 현재 워크스페이스의 세션 목록을 KeyValueTable로 렌더링. `/resume <번호>`로 세션 전환 (메시지 복원 + 로거 교체 + 인덱스 touch).
+- **[Phase 46/S-4] `/new` 명령어**: 타임라인·세션 상태·스트림 어큐뮬레이터 초기화 후 새 워크스페이스 세션 할당. SlashMenu·CommandPalette·Help에 세션 명령어 3건 추가.
+- **[Phase 47/Q-1] AskClarification 도구 스키마 정의 및 하네싱**: `domain/questionnaire.rs`에 `ClarificationQuestion`·`AskClarificationArgs`·`AskClarificationResult`·`QuestionnaireState` 도메인 타입. `tools/questionnaire.rs`에 `AskClarificationTool` (Tool trait, GLOBAL_REGISTRY 등록). PLAN 모드 시스템 프롬프트에 강제 사용 지침 주입.
+- **[Phase 47/Q-2] Questionnaire TUI 렌더러**: `tui/widgets/questionnaire.rs` 화면 중앙 모달 오버레이. 객관식 커서(▸)·주관식 텍스트 입력·allow_custom("✏ 직접 입력")·진행률 표시·키보드 힌트.
+- **[Phase 47/Q-3] State Machine 연동**: `ShowQuestionnaire`·`QuestionnaireCompleted` Action 추가. `tool_runtime` AskClarification 인터셉트 → TUI 모달. `handle_questionnaire_key()` 키 입력 핸들러 (↑↓ 탐색, Enter 선택, Esc 취소). 답변 완료 시 ToolResult 조립 → LLM 피드백.
+- **[Phase 46] Workspace-scoped Session Management 로드맵**: `/resume`, `/new`, `/session` 명령어 및 TUI Session Picker 기획. 폴더 기반 세션 격리, Auto-Titling 파이프라인 명세 추가.
+- **[Phase 47] Interactive Planning Questionnaire 로드맵**: PLAN 모드 전용 `AskClarification` 도구 하네싱 및 TUI Questionnaire 렌더러 기획. 구조화된 객관식/주관식 폼 기반 인터랙티브 플래닝 명세 추가.
+- **[Task M-4] MCP E2E 테스트**: `scripts/mock_mcp_server.py` JSON-RPC 2.0 mock 서버. `test_mcp_e2e_initialize_and_list_tools`·`test_mcp_e2e_call_tool` 프로세스 spawn 왕복 검증. `test_mcp_permission_engine_always_ask`·`test_mcp_namespace_strip_roundtrip`·`test_mcp_config_add_remove_persistence` 설정 영속화 검증. `test_ask_clarification_tool_registered`·`test_questionnaire_state_submit_and_build`·`test_questionnaire_total_options` Phase 47 도구 등록 및 도메인 로직 검증. `PermissionResult`에 `Debug` derive 추가.
+
+### Changed
+- **PermissionEngine DeleteFile 통합**: `domain/permissions.rs`에서 `DeleteFile`을 쓰기 도구 목록에 추가. Workspace Trust Gate 및 경로 횡단 검사 적용.
+- **guard 테스트 예외 목록 비움**: `audit_regression.rs`의 `known_unregistered`에서 `DeleteFile` 제거. 모든 write 도구가 레지스트리에 정식 등록됨 (path_write_count ≥ 3 자동 충족).
+- **spec.md 의존성 그래프 확장**: Phase 46 (Session) → Phase 47 (Plan Form) 파이프라인 추가.
+- **Clippy 경고 44건 → 0건 일소**: palette.rs 레거시 상수 13건 제거, questionnaire.rs clamp 패턴 적용, collapsible if 3건 자동 수정, 나머지 28건은 사유 주석 + `#[allow(dead_code)]`로 명시적 의도 표명. `TOOL_BADGE`, `INFO`, `SUCCESS` 등 미사용 레거시 상수는 삭제 사유·삭제 버전을 주석으로 기록.
+
+## [3.3.9] - 2026-04-23 (12차 감사 대응: 핸들러 관통 테스트·문서 정합)
+
+### Added
+- **[MCP/MEDIUM-1] handle_action(McpToolsLoaded) 관통 테스트 2건** (92→94): `App::new()` + `handle_action()` 직접 호출로 실제 `mcp_tools_cache`/`mcp_tool_name_map` 상태 검증. (1) 정상 로드: cache 2건·map 2건·모든 schema name이 map에 존재. (2) 서버 간 충돌: suffix 부여 후 schema name 동기화·원본 key는 서버A·suffix key는 서버B로 라우팅.
+- **`McpClient::dummy()` 테스트 전용 생성자**: `#[cfg(test)]` 더미 McpClient 생성. 실제 프로세스 없이 McpToolsLoaded 액션 구성 가능.
+
+### Changed
+- **[Doc/LOW-1] spec.md Step 3 갱신**: v3.3.8 skip schema `retain()` 제거 정책, v3.3.9 관통 테스트·dummy 생성자를 기술.
+- **[Doc/LOW-1] IMPLEMENTATION_SUMMARY Task M-2 갱신**: v3.3.8 `retain()` + 타임라인 Notice, v3.3.9 관통 테스트·dummy 생성자를 반영.
+
+## [3.3.8] - 2026-04-23 (11차 감사 대응: skip schema 제거·schema-map 동기화 테스트·타임라인 Notice)
+
+### Fixed
+- **[MCP/MEDIUM-1] skip 시 schema cache 잔류 방지**: 전역 충돌 해소 실패(suffix 한계 초과)로 skip된 도구의 schema를 `schemas.retain()`으로 제거. 이전에는 map insert만 건너뛰고 schema는 그대로 `mcp_tools_cache`에 push되어, LLM에 노출되지만 `mcp_tool_name_map`에 없어 라우팅 불가능한 도구가 생길 수 있었음.
+- **[MCP/LOW-1] suffix skip 타임라인 Notice 추가**: MCP 도구 충돌 skip 경고를 `logs_buffer`뿐 아니라 타임라인 Notice 블록(`BlockSection::Markdown`, `BlockStatus::Error`)으로도 표시. 서버 로드 실패/서버명 충돌과 동일한 UX 일관성 확보.
+
+### Added
+- **회귀 테스트 1건 추가** (91→92): skip 시 schema가 `schemas`에서 `retain`으로 제거되고, 정상 도구만 남으며, cache의 모든 schema name이 global_map에 존재하는지 검증.
+
+## [3.3.7] - 2026-04-23 (10차 감사 대응: schema-map 동기화·suffix skip·filter_map 전환·문서)
+
+### Fixed
+- **[MCP/HIGH-1] schema function.name ↔ map key 동기화**: `McpToolsLoaded` 핸들러에서 schemas를 먼저 push하던 로직 제거. 전역 충돌 해소 시 schema의 `function.name`을 변경된 key와 동일하게 수정한 뒤, 완료된 schemas를 cache에 push. 이전에는 map key만 suffix로 변경되어 LLM에 노출되는 이름과 라우팅 key가 불일치.
+- **[MCP/MEDIUM-2] suffix 한계 초과 시 overwrite 대신 skip**: 서버 내부 suffix 루프(`filter_map` + `None` 반환)와 전역 merge 루프(`continue` + 경고 로그) 모두에서 suffix > 9999 시 해당 도구를 안전하게 건너뜀. 이전에는 break 후 기존 key로 insert되어 기존 mapping이 overwrite될 수 있었음.
+
+### Changed
+- **스키마 빌드 `map` → `filter_map` 전환**: suffix 한계 초과 도구를 `None`으로 필터하여 schemas에 포함되지 않도록 변경.
+- **[Doc/LOW-1] spec.md·IMPLEMENTATION_SUMMARY 갱신**: schema-map 동기화 설계, schemas 지연 push 정책, suffix skip 정책을 반영.
+
+### Added
+- **회귀 테스트 1건 추가** (90→91): 전역 충돌 시 schema `function.name`이 변경된 map key와 일치하는지 검증.
+
+## [3.3.6] - 2026-04-23 (9차 감사 대응: 서버 간 truncation 충돌·suffix 64자 방어·전역 merge 테스트·문서)
+
+### Fixed
+- **[MCP/HIGH-1] 서버 간 truncation 전역 충돌 방지**: `McpToolsLoaded` 핸들러에서 `extend()` → 전역 충돌 검사 + suffix 부여로 교체. 앞 27자가 동일한 서로 다른 서버가 같은 도구명을 노출할 때 `mcp_tool_name_map`이 overwrite되는 결함 수정.
+- **[MCP/MEDIUM-2] suffix 64자 초과 방어**: 같은 서버 내 및 서버 간 suffix 루프에서 `_1000` 이상 접미사(5자+)로 64자 초과 시, base를 overflow만큼 줄여서 재구성하는 방어 로직 추가. 안전 한계 9999회.
+
+### Added
+- **회귀 테스트 2건 추가** (88→90): 서버 간 truncation 충돌 → suffix 해소 + 역매핑 정합 검증, suffix 64자 초과 시 base truncation 동작 검증.
+
+### Changed
+- **[Doc/LOW-1] spec.md Step 3·4 MCP truncation 설계 문서화**: `build_mcp_full_name()` 64자 제한, 전역 merge 충돌 정책, suffix 한계를 기술.
+- **[Doc/LOW-1] IMPLEMENTATION_SUMMARY.md Task M-2 갱신**: v3.3.5 truncation + v3.3.6 전역 충돌 정책 반영.
+
+## [3.3.5] - 2026-04-23 (8차 감사 대응: 64자 제한·동일명 로드 보장·타임라인 Notice)
+
+### Fixed
+- **[MCP/HIGH-1] OpenAI function name 64자 제한 준수**: `sanitize_tool_name_part()`는 문자 정규화만 수행하고, 새로운 `build_mcp_full_name()` 함수에서 서버/도구 파트를 각각 최대 27자로 truncate. 접두사 "mcp_"(4자) + "_"(1자) + 접미사 예비(4자) = 9자를 뺀 55자를 파트에 할당하여, 충돌 접미사 포함 시에도 64자 이내 보장.
+- **[MCP/MEDIUM-2] 동일 서버명 중복 시 최소 하나 로드 보장**: 이전에는 `skipped_servers`에 원본명을 저장하여 `name = "fs"`가 두 번 있으면 **둘 다** skip됨. index 기반 `skipped_indices`로 교체하여 첫 번째는 로드하고 후순위만 skip.
+- **[MCP/LOW-1] config.toml 충돌 경고 타임라인 Notice 표시**: 충돌 경고가 `logs_buffer`에만 들어가 일반 사용자가 놓치던 문제 해소. `McpLoadFailed`와 동일하게 타임라인 Notice 블록(`BlockSection::Markdown`)으로 표시.
+
+### Added
+- **회귀 테스트 2건 추가** (86→88): `build_mcp_full_name()` 64자 truncate 검증, 동일 서버명 중복 시 첫 번째 로드·후순위 skip 검증.
+
+## [3.3.4] - 2026-04-23 (7차 감사 대응: 도구명 충돌·서버명 충돌·테스트 관통·문서 정합)
+
+### Fixed
+- **[MCP/HIGH-1] 같은 서버 내 도구명 정규화 충돌 방지**: 서버가 `foo.bar`와 `foo_bar` 같은 도구를 동시에 노출하면 둘 다 `mcp_srv_foo_bar`로 정규화되어 뒤 도구가 앞 도구를 조용히 overwrite하던 결함 수정. 충돌 시 접미사 번호(`_2`, `_3` 등)를 부여하여 모든 도구에 고유한 full_name 보장.
+- **[MCP/MEDIUM-2] config.toml 서버명 정규화 충돌 방지**: `/mcp add`만 충돌 검사하고 config.toml 직접 편집 시에는 검사하지 않던 문제 수정. 앱 시작 시 `mcp_servers` 순회하여 정규화명이 충돌하는 서버를 감지, 후순위 서버 로드를 건너뛰고 로그 경고 출력.
+
+### Changed
+- **[MCP/MEDIUM-3] isError 테스트를 `parse_call_tool_result()` 직접 호출로 교체**: `call_tool()` 내부 파싱 로직을 `pub(crate) fn parse_call_tool_result()` 함수로 추출하여 테스트에서 직접 호출. 기존 테스트는 JSON 파싱을 테스트 측에서 재현하여 내부 로직 변경 시 회귀를 놓칠 수 있었음. 추가로 isError:true + content 없음 케이스, 도구명 충돌 접미사 해소 테스트도 추가 (85→86).
+- **[Doc/LOW-1] spec.md Step 3 `/provider add` 문법**: `[auth_header_name]`까지 반영하여 성공 기준(2291행)과 구현 설명(2330행)의 인자 정합성 확보.
+
+## [3.3.3] - 2026-04-23 (6차 감사 대응: MCP isError·정규화 충돌·회귀 테스트·문서 정합성)
+
+### Fixed
+- **[MCP/HIGH-1] CallToolResult isError 우선 검사**: MCP 공식 스키마에 따라 `isError`를 `content` 파싱 전에 검사. `isError:true + content` 동시 존재 시 content를 에러 메시지로 활용하여 `Err` 반환. 기존 코드는 content가 있으면 즉시 `Ok` 반환하여 도구 에러가 성공으로 전파되는 결함이 있었음.
+- **[MCP/MEDIUM-2] 정규화 서버명 충돌 방지**: `/mcp add` 시 기존 서버 중 정규화명이 충돌하는 것(`foo.bar` vs `foo_bar` → 둘 다 `foo_bar`)이 있으면 등록 거부. `sanitize_tool_name_part`를 `pub(crate)`로 변경하여 `command_router.rs`에서도 접근 가능.
+
+### Added
+- **[MCP/MEDIUM-3] MCP 회귀 테스트 5건 추가** (80→85): `sanitize_tool_name_part` 정규화 기본 동작, 정규화 충돌 감지, 역매핑 테이블 구성 및 원본명 복원, `CallToolResult` isError+content 처리, 성공 경로 검증.
+
+### Changed
+- **[Doc/LOW-1] spec.md Phase 43 Step 4 MCP 라우팅 문서 갱신**: 이전 `starts_with` prefix match → 현재 `mcp_tool_name_map` 직접 조회 설명으로 교체.
+- **[Doc/LOW-1] IMPLEMENTATION_SUMMARY.md Task M-2/M-3 갱신**: 역매핑 테이블, isError 우선 검사, 정규화 충돌 검사 반영.
+
+## [3.3.2] - 2026-04-23 (5차 감사 대응: Sandbox·MCP Lifecycle·Routing·버전 동기화·문서 정합성)
+
+### Fixed
+- **[Sandbox/HIGH-1] ExecShell bubblewrap `bash -c` 수정**: `wrap_command_bwrap()`이 `bash <script_path>`로 실행하여 raw 명령 문자열을 파일 경로로 해석하던 결함 수정. `bash -c <cmd>` 형태로 교체하여 `touch foo && echo done` 같은 실제 셸 명령이 정상 실행됨. 변수명 섀도잉(`cmd` 파라미터 vs `cmd` 빌더)도 `bwrap_cmd`로 해소.
+- **[MCP/HIGH-2] MCP initialize/list_tools 실패 시 child process kill**: `McpClient::spawn()` 내부에서 `initialize().await` 실패 시 `child_handle`로 프로세스를 명시적 kill 후 에러 반환. `mod.rs`에서 `list_tools()` 실패 시에도 `client.shutdown().await` 호출 추가. timeout/초기화 실패 MCP 서버 좀비 프로세스 완전 차단.
+- **[MCP/HIGH-3] MCP tool name 정규화-역매핑 일관성 확보**: 스키마 노출 시 `sanitize_tool_name_part()`로 정규화한 이름을 사용하지만, `mcp_clients` 저장/라우팅은 원본명으로 하여 `Tool not found` 발생 가능했던 결함 해소. `mcp_tool_name_map: HashMap<sanitized_full_name, (sanitized_server, original_tool_name)>` 역매핑 테이블 도입. `mcp_clients` key를 정규화 서버명으로 저장. `tool_runtime.rs`의 prefix match를 직접 테이블 조회로 교체.
+- **[Version/MEDIUM-4] Cargo.toml 버전 동기화**: `Cargo.toml` 버전이 `2.5.0`으로 동결되어 CHANGELOG `3.3.x`/문서와 불일치하던 문제 해소. `3.3.2`로 갱신하여 `cargo run -- --version` 및 `doctor` 출력 정합성 확보.
+- **[Spec/MEDIUM-5] Provider 성공 기준 문법 정정**: `spec.md` Phase 41의 성공 기준이 `--name`, `--url`, `--format` 플래그 방식으로 기술되어 있었으나, 실제 구현은 positional 파서. `<id> <base_url> [dialect] [auth_type] [auth_header_name]` 형태로 수정.
+- **[Settings/LOW-1] auto_commit 기본값 주석 교정**: `settings.rs` 및 `spec.md` Phase 40의 `GitIntegrationConfig.auto_commit` 필드 주석이 "기본: true"로 명시되어 있었으나 실제 기본값은 `false`. "기본: false, 명시적 opt-in 필요"로 수정.
+
+## [3.3.1] - 2026-04-23 (4차 감사 대응: MCP 라이프사이클·UX·라우팅·Provider·Git 정합성)
+
+### Fixed
+- **[MCP/HIGH-1] 앱 종료 시 MCP 서버 자식 프로세스 명시적 kill**: `App::run()` 메인 루프 종료 직후 `mcp_clients.values().shutdown().await`를 호출. Event::Quit, /quit, Ctrl-C, SIGTERM 모든 종료 경로가 이 지점을 통과하므로 프로세스 누수를 완전 방지.
+- **[MCP/MEDIUM-1] MCP 로드 실패 사용자 피드백**: `if let Ok && let Ok` 패턴으로 완전히 삼켜지던 MCP spawn/list_tools 실패를 `match`로 분리. 실패 시 `McpLoadFailed` 액션을 전송하여 타임라인에 에러 Notice 블록을 표시하고 logs_buffer에 상세 사유 기록. "도구가 안 보임" 상황에서 원인 파악 가능.
+- **[MCP/MEDIUM-2] 네임스페이스 라우팅 접두사 충돌 방지**: 기존 `starts_with("mcp_{name}_")` 단순 매칭에서 longest prefix match(서버명 길이 내림차순 정렬)로 전환. 'fs'와 'fs_local' 같은 서버명에서 'fs'가 'fs_local_tool'에도 매칭되는 오라우팅 차단. OpenAI tool name 규격(^[a-zA-Z0-9_-]+$) 위반 문자를 `sanitize_tool_name_part()`로 정규화하여 Provider 거절 방지.
+- **[Provider/MEDIUM-3] /provider add auth_header_name 지원**: 6번째 인자로 `auth_header_name`을 지정 가능. `CustomHeader` auth_type에서 `X-API-Key` 등 비표준 헤더를 CLI로 등록 가능. 기존 `Authorization` 하드코딩 제거.
+- **[Git/MEDIUM-4] undo_last 문서-코드 정합성**: doc comment의 "해시 기반 추적"이라는 과장된 표현을 실제 구현("메시지 매칭 + 해시 consumed 추적")에 맞게 교정. 테스트명 `test_git_consecutive_undo_with_duplicate_messages` → `test_git_consecutive_undo_with_different_files`로 실제 내용과 일치하도록 변경.
+
+### Added
+- **[Domain]**: `Action::McpLoadFailed(String, String)` variant 신규 도입. MCP 로드 실패 피드백의 핵심 인프라.
+- **[App]**: `App::sanitize_tool_name_part()` 정규화 헬퍼 추가. OpenAI tool name 규격 준수 보장.
+
+### Quality
+- `cargo clippy --all-targets -- -D warnings`: 경고 0건
+- `cargo test`: 80건 전부 통과 (0 failed)
+- `cargo fmt --check`: 통과
+
+## [2.5.3] - 2026-04-23 (3차 감사 대응: MCP·Git 무결성 완성)
+
+### Fixed
+- **[MCP/HIGH-1] 스키마 OpenAI 형식 래핑**: MCP 서버가 반환하는 `{name, description, inputSchema}` 형태를 `{type: "function", function: {...}}` 형태로 래핑하여 OpenAI 호환 provider에 올바르게 전달. 기존 미래핑 스키마로 인한 LLM 도구 비인식 문제 해소. Anthropic `apply_dialect()` 변환도 정상 동작.
+- **[MCP/HIGH-2] Child Process Lifecycle 관리**: `McpClient`에 `Arc<Mutex<Option<Child>>>` 핸들 보관. stderr drain task를 별도 `tokio::spawn`으로 소비하여 OS 파이프 버퍼 블로킹 방지. `shutdown()` 메서드로 앱 종료 시 MCP 서버 자식 프로세스 명시적 kill.
+- **[Git/MEDIUM-2] auto_commit 빈 파일 목록 fallback 제거**: `auto_commit(files=[])` 호출 시 기존 `git add -u` fallback을 Err 반환으로 교체. WIP 혼입 위험 원천 차단.
+
+### Added
+- **[Testing]**: `test_git_auto_commit_empty_files_skip` (auto_commit 빈 파일 skip 검증), `test_mcp_schema_openai_format` (MCP→OpenAI 스키마 래핑 + Anthropic dialect 변환 검증). 80건 테스트 통과.
+
+## [2.5.2] - 2026-04-23 (2차 감사 대응: 테스트·인증·문서 정합)
+
+### Fixed
+- **[Git/HIGH-1] Git E2E 테스트 추가**: `tempfile + git init` 기반 5건의 실제 git repo 테스트 신규 작성. (1) auto_commit 선택적 staging, (2) WIP 보호 (unrelated 파일 미포함), (3) undo_last 직접 revert, (4) 연속 undo 동일 메시지 중복 커밋 해시 기반 구분, (5) list_history prefix 필터. 78건 테스트 통과.
+- **[Provider/HIGH-2] Custom Provider auth_type 어댑터 반영**: `OpenAICompatAdapter`에 `AuthStrategy` enum 도입 (Bearer/None/CustomHeader). `register_custom_providers()`에서 `config.auth_type`을 `AuthStrategy`로 변환하여 어댑터에 주입. Bearer 하드코딩 제거, `apply_auth()` 헬퍼로 모든 HTTP 요청에 동적 인증 적용.
+- **[MCP/HIGH-3] MCP 완료 상태 정정**: `IMPLEMENTATION_SUMMARY.md` Phase 43을 '✅ 완료' → '⚠️ 인프라 구현 완료 / E2E 테스트 미비'로 수정. MCP E2E 테스트를 Task M-4로 Phase 44에 이관. `/mcp add/remove` 재시작 필요 사항 명시.
+- **[Git/MEDIUM-1] undo 해시 기반 추적**: 메시지 문자열 대신 커밋 해시를 추적하여 동일 메시지의 중복 자동 커밋에서도 정확한 revert 대상 식별. `git log --pretty=format:%H|%P|%s`로 parent hash 활용.
+- **[Config/MEDIUM-2] auto_commit 기본값 변경**: `git_integration.auto_commit` 기본값을 `true` → `false`로 변경. 사용자 워크트리에 직접 영향을 주는 기능은 명시적 opt-in이 더 안전한 UX.
+
+### Added
+- **[Domain]**: `AuthStrategy` enum 신규 도입 (`Bearer`, `None`, `CustomHeader`). Custom Provider 인증의 핵심 인프라.
+- **[Testing]**: Git E2E 테스트 5건 추가 (78건 테스트 통과). `test_git_auto_commit_selective_staging`, `test_git_auto_commit_wip_protection`, `test_git_undo_last_direct_revert`, `test_git_consecutive_undo_with_duplicate_messages`, `test_git_list_history_prefix_filter`.
+
+## [2.5.1] - 2026-04-23 (Git 무결성 감사 대응 패치)
+
+### Fixed
+- **[Git/HIGH-1] Auto-commit WIP 보호**: `ToolResult`에 `affected_paths: Vec<String>` 필드를 도입. `WriteFile`/`ReplaceFileContent` 성공 시 실제 변경 파일 경로를 기록하고, `auto_commit()` 호출 시 해당 파일만 선택적 `git add` 수행. `affected_paths`가 비어있으면 auto-commit skip하여 사용자 WIP를 보호. 기존 `git add -u`(전체 tracked 변경 stage) 문제 해소.
+- **[Git/HIGH-2] 연속 /undo 지원**: `undo_last()`를 스택 방식으로 개선. HEAD가 `Revert "smlcli: ..."` 형태의 revert 커밋이면, `git log`에서 아직 revert되지 않은 가장 최근 smlcli 자동 커밋을 찾아 `git revert --no-edit <hash>`. 연속 `/undo` 실행 시 올바르게 여러 커밋 되돌리기 가능.
+- **[Git/MEDIUM-1] Inspector Git 탭 prefix 필터**: `list_history()`에 `prefix` 인자 추가. `git log --grep=^{prefix}`로 smlcli 생성 커밋만 필터링하여 Inspector Git 탭에 사용자 커밋이 섞이는 문제 해소.
+- **[Git/MEDIUM-2] git add 에러 전파**: 파일 목록 기반 `git add <file>` 실패 시 무시하지 않고 `Err`를 반환하여 잘못된 파일 참조를 즉시 노출.
+- **[Git/MEDIUM-3] 문서-테스트 정합성**: `IMPLEMENTATION_SUMMARY.md` Phase 44 Task D-1의 `known_unregistered` 제거 표현을 현재 테스트 상태와 일치하도록 '구현 완료 후 제거 (현재 예외 등록 유지 중)'으로 명확화.
+- **[Security/Permissions]**: (감사 MEDIUM-2) `PermissionEngine`에서 ExecShell `cwd` 인자가 절대경로일 때 workspace root 밖을 가리키면 선제적으로 `Deny` 반환. 기존 `../`/`~/` 패턴 차단에 더해 절대경로 이탈까지 이중 방어(Defense-in-Depth) 구성.
+- **[Documentation]**: (감사 LOW-3) `spec.md` 내 인라인 `ROADMAP` 코드 블록 주석을 `Future Work` 문맥의 blockquote 형식으로 변환하여 릴리스 문서 정리.
+
+### Added
+- **[Domain]**: `ToolResult.affected_paths` 필드 신규 도입. Git auto-commit 파일 선택적 stage의 핵심 인프라.
+- **[Testing]**: ExecShell cwd 절대경로 workspace 이탈 차단 회귀 테스트 추가 (`test_exec_shell_cwd_absolute_path_outside_workspace`). 73건 테스트 통과.
+- **[Documentation]**: Phase 44 Task에 v2.5.0 감사 지적 MEDIUM-1(known_unregistered 예외 제거), LOW-1(FUTURE 주석 이관), LOW-2(dead_code 모듈별 정리) 추적 항목 명시적 등록.
+
+## [2.5.0] - 2026-04-22 (Phase 35: System Hardening & Metadata)
+
+### Added
+- **[Integration/MCP]**: Phase 43 MCP(Model Context Protocol) 클라이언트 지원 통합 완료. `infra/mcp_client.rs`(232줄)에 mpsc 채널 + oneshot 기반 비동기 JSON-RPC 2.0 over stdio 클라이언트 구현. 시작 시 `config.toml`의 `[[mcp_servers]]` 설정에 따라 MCP 서버를 동적 스폰하고 `tools/list`로 스키마를 로드하여 `RuntimeState.mcp_tools_cache`에 캐싱. 네임스페이스 접두사(`mcp_{server}_{tool}`)로 내장 도구와 충돌 방지. `PermissionEngine`에서 `mcp_` 접두사 도구에 `Ask` 정책 강제 적용. `/mcp list/add/remove` 슬래시 명령어로 런타임 MCP 서버 설정 관리.
+- **[System/Process]**: 비정상 종료로 인해 잔존하는 `ExecShell` 자식 프로세스들을 방지하기 위해 `sysinfo` 기반의 고아 프로세스(Orphan Process) 정리 기능(`src/infra/process_reaper.rs`) 추가 및 시작 시/`doctor --clean-orphans` 옵션 적용.
+- **[DevOps/Build]**: `shadow-rs`를 도입하여 배포 바이너리 내부에 Git 커밋 해시 및 빌드 시간을 내장하고, `smlcli doctor` 실행 시 해당 메타데이터를 출력하도록 진단 리포트 확장.
+- **[UX/Locale]**: `LANG` 환경변수 또는 사용자 설정(`use_ascii_borders`)에 따라 TUI 테두리를 유니코드 대신 ASCII(`+`, `-`, `|`)로 자동 전환하는 어댑티브 UI 렌더링 지원 추가.
+
+### Fixed
+- **[Reliability]**: `smlcli` 실행 중 병렬 도구(Parallel Tool) 실행 완료 순서가 뒤섞이더라도 `pending_tool_outcomes`에 큐잉 후 인덱스 기반으로 정렬하여 일관된 출력 순서를 보장(Ordered Aggregation).
+- **[Performance]**: `SessionLogger` 복원 시 대용량 세션 파일 전체를 메모리에 올리지 않고 `BufReader`를 통해 행 단위(Line-by-line) 파싱을 수행하여 메모리 점유율 최적화 및 안정성 확보.
+- **[Security]**: `FetchURL` 도구의 `ProviderOnly` 정책 처리를 `Ask`에서 `Deny`로 수정. `ProviderOnly`는 "프로바이더 API만 허용"이라는 보안 의미론을 가지므로, 임의 외부 URL 호출은 SSRF 방지를 위해 차단. FetchURL을 사용하려면 `AllowAll` 정책 필요.
+- **[UX/Security]**: Trust Gate 팝업 활성 상태에서 `F2` 등 전역 단축키가 가드를 무시하고 실행되던 키 입력 폴스루(Fall-through) 버그 수정. `return` 추가로 완전 차단.
+- **[Security/Agentic]**: Auto-Verify 3회 초과 실패(Abort) 후에도 LLM에 무조건 재전송되던 무한 루프 위험 수정. `AutoVerifyState::Aborted` variant 추가로 abort 결정을 **runtime state에 지속 저장**. 병렬 도구 간 abort 일관성 보장 — 로컬 변수가 아닌 state 기반 체크로 전환.
+- **[Security/Process]**: Orphan reaper가 다른 정상 실행 중인 `smlcli` 인스턴스의 자식 프로세스를 오살하던 위험 수정. `SMLCLI_PID`에 기록된 부모 PID가 시스템에 아직 존재하는지 확인 후, 부모가 죽은 고아만 종료하도록 안전 가드 추가.
+- **[Reliability/Concurrency]**: 병렬 도구 실행 시 단일 `CancellationToken`만 저장하여 마지막 도구만 취소 가능하거나, 먼저 끝난 도구가 토큰을 `None`으로 덮어쓰던 구조적 결함 수정. `HashMap<String, CancellationToken>`으로 전환하여 도구별 독립 취소 보장.
+- **[UX/Display]**: `GrepSearch` 표시 이름이 구 스키마 `pattern` 필드를 읽어 빈 검색어를 표시하던 문제 수정. Phase 18 `query` 필드를 우선 참조하되 `pattern`도 fallback으로 지원.
+- **[UX/Security]**: Wizard 초기 저장 기본 네트워크 정책이 `ProviderOnly`로 하드코딩되어 designs.md Safe Starter(`AllowAll`)와 불일치하던 문제 수정. 문서와 구현을 `AllowAll`로 통일.
+- **[DevOps/Lint]**: 전역 `#![allow(dead_code)]` 제거 완료. 모든 dead_code 경고를 모듈 단위 `#[allow(dead_code)]`로 전환하여 감사 기준 "전역 allow 0건" 충족.
+- **[DevOps/Lint]**: `registry.rs`의 `#[allow(unused_variables)]` 제거. cfg별 분리 메서드(`_kind`)로 리팩토링.
+- **[DevOps/Format]**: `cargo fmt --check` 실패를 유발하던 `shell.rs` trailing whitespace 정리. CI fmt gate 통과 확보.
+- **[DevOps/Cleanup]**: 루트 디렉터리의 실험 파일(`scratch.rs`, `test_border.rs`, `test_shadow.rs`, `patch_registry*.rs`) 삭제. 릴리즈 워크트리 정리.
+- **[UX/Timeline]**: Queued approval이 마지막 타임라인 블록을 재사용하여 직전 Notice/ToolRun이 Approval로 변형되던 위험 수정. 새 `Approval` 블록을 명시적으로 push하는 방식으로 전환.
+- **[UX/Timeline]**: 직접 셸 실행(`!`) Ask 경로에서 Approval 타임라인 카드를 생성하여, Inspector뿐 아니라 Timeline에서도 승인 대기 맥락 표시.
+- **[Testing]**: Auto-Verify 병렬 abort 회귀 테스트 추가. "도구 A 3회 실패 abort → 도구 B 완료 → 재전송 차단" 시나리오를 직접 검증 (67건 통과).
+- **[UX/Timeline]**: 최초 approval 생성 경로도 queued/direct-shell과 통일. ToolRun 블록을 pop하고 새 Approval 블록을 명시 push하여 블록 변형(mutation) 패턴을 전면 제거.
+- **[DevOps/Lint]**: 모든 국소 `#[allow(dead_code)]`에 `TECH-DEBT` 마커 추가. v3.0 활성화 시 allow 제거 조건을 명시하여 릴리즈 전 정리 누락 방지.
+- **[Documentation]**: `IMPLEMENTATION_SUMMARY.md`의 `/workspace add` 구현 상태를 `spec.md`/`designs.md`와 일치시켜 v3.0 미구현으로 표기.
+- **[Security]**: 위험 패턴 검사를 도구별로 분리. `ExecShell`은 command에 인젝션 패턴 검사, `WriteFile`/`ReplaceFileContent`는 path에 횡단 검사만 적용. `FetchURL`/`GrepSearch` 등 읽기 전용 도구는 과차단 방지를 위해 미적용.
+- **[Security]**: `ReadFileTool::check_permission()`에서 `validate_sandbox(path)`를 두 번 호출하고 두 번째에 `unwrap()`하던 패턴을 단일 `match`로 통합. 보안 경로에서 `unwrap()` 제거.
+- **[Architecture]**: `dispatch_tool_call()`을 "permission 확인 후 블록 생성" 구조로 재구성. push-then-pop 패턴을 제거하여 Allow→ToolRun, Ask→Approval, Deny→ToolRun(Error) 각각 적절한 블록을 직접 생성.
+- **[Reliability]**: `handle_tool_approval()`의 `pending_tool.take().unwrap()`을 `let Some ... else { return }` 패턴으로 교체. 상태 경합/만료 직후 입력에서 패닉 방지.
+- **[Testing]**: Auto-Verify 병렬 abort 통합 이벤트 흐름 테스트 추가. 실제 이벤트 루프의 is_error→advance→pending 감소→flush→재전송 차단 전체 경로를 시뮬레이션.
+- **[Testing]**: `handle_action(Action::ToolFinished/ToolError)` 직접 호출 통합 테스트에 `action_tx` 채널 수신 검증 추가. Aborted 상태에서 `SubmitChatRequest` 이벤트가 채널에 없음을 직접 확인.
+- **[Testing]**: WriteFile/ReadFile workspace 밖 절대경로(`/etc/passwd`) 차단 end-to-end 테스트 추가. PermissionEngine→도구 레지스트리→validate_sandbox 위임 경로와 path 횡단(`../`) 검사를 모두 검증.
+- **[Testing]**: write 도구 sandbox guard를 `GLOBAL_REGISTRY.tool_names()` 자동 대조 구조로 리팩토링. 하드코딩 목록 제거, 새 write 도구 등록 시 자동 탐지.
+- **[Security]**: `ExecShell`의 `cwd` 인자에 경로 횡단(`../`, `~/`) 검사 추가. `resolve_shell_cwd()` 런타임 검증에 더해 권한 엔진에서도 선제 차단.
+- **[Testing]**: ExecShell cwd 경로 횡단 차단 테스트 추가. `../`, `~/` 패턴 Deny 및 정상 cwd 허용을 검증.
+- **[Documentation]**: `is_write_tool()`에 v3.0 미등록 도구(DeleteFile, GitCheckpoint) TODO 마커 추가. guard 테스트의 known_unregistered와 연동.
+- **[Documentation]**: dirty flag 대상과 `is_write_tool()` 차이를 주석으로 명시. GitCheckpoint는 스냅샷 보존 도구로 RepoMap 갱신 대상에서 의도적 제외.
+- **[Documentation]**: shell.rs의 `FUTURE` 주석을 `[ROADMAP/v3.0]`으로 변환. spec.md의 `TODO`도 동일 형식으로 정리.
+- **[Documentation]**: v3.0 로드맵(Phase 40-45) 작성. Git 통합, Provider 확장, OS 샌드박스, MCP 클라이언트, DeleteFile/TECH-DEBT 정리, 빌드 파이프라인 6개 Phase의 상세 구현 가이드를 `spec.md` 및 `IMPLEMENTATION_SUMMARY.md`에 추가 (72건 통과).
+
+## [2.3.0] - 2026-04-22 (Phase 31: The Final Polish & Resilience)
+
+### Added
+- **[Resilience]**: 설정 파일 마이그레이션 실패 시를 대비한 원자적 롤백 및 `.bak` 파일 백업 로직 추가.
+- **[UX/Notification]**: 클립보드 복사 등 주요 UI 액션에 대한 시각적 피드백 제공을 위한 Toast 기반 알림 시스템 도입 (`expires_at` 기준 자동 만료).
+- **[Doctor/Network]**: `smlcli doctor` 진단 내 API 네트워크 상태 체크 로직 추가 및 `tokio::time::timeout` 5초 래퍼 적용 (무한 대기 방지).
+- **[Security/Config]**: `smlcli run` 등에서 LLM 도구 실행 시 허용할 환경 변수를 사용자가 지정할 수 있도록 `allowed_env_vars` 화이트리스트 확장 기능 제공.
+- **[Performance]**: `RepoMap` 빌드 시 매 턴마다의 대규모 AST 파싱 비용 절감을 위해 `cheap_hash`(mtime+파일개수) 기반 `.gemini/tmp/repo_map_cache_{hash}.json` 디스크 캐싱 적용.
+
+## [2.2.0] - 2026-04-22 (Phase 30: The Ultimate Hardening)
+
+### Added
+- **[Doctor]**: `smlcli doctor` 커맨드 추가: 설정 파일 유효성, API 키 유무, Git 설치 상태, TTY 호환성 등을 자동으로 진단하여 리포트 출력.
+- **[UX]**: `arboard` 통합을 통해 TUI 내에서 `y` 단축키 입력 시 현재 포커스된 창(Inspector 또는 Timeline의 마지막 AI 응답)의 내용을 클립보드로 복사.
+- **[Config]**: `version` 필드를 추가하고, 구버전 설정 감지 시 자동으로 `migrate()`를 실행하여 포맷을 승격.
+- **[Stability]**: 시작 시 `~/.smlcli/*.tmp` 등의 이전 실행 찌꺼기 파일(Orphan files)을 자동으로 삭제하는 `cleanup_tmp_files` 로직 추가.
+- **[Compatibility]**: Windows 환경 호환성 확보: 프로세스 그룹 종료 로직에 `#[cfg(windows)]` 매크로를 분기하여 `taskkill /F /T /PID` 사용.
+
+## [1.7.0] - 2026-04-21
+
+### Fixed (Phase 25: Ultimate Polish & Security Hardening)
+- **UTF-8 안전성 보장 (UX/UI)**: TUI 렌더링 시 바이트 단위 문자열 자르기로 인해 한국어/이모지 등 멀티바이트 문자가 깨지거나 패닉이 발생하는 현상을 수정. `unicode-width` 크레이트와 시각적 너비 기반 자르기 로직 적용.
+- **심볼릭 링크 샌드박스 탈옥 방지 (Security)**: `file_ops`에서 파일 입출력 시 `std::fs::canonicalize`를 통해 최종 절대 경로를 확인하고, Workspace 루트 밖으로 나가는 경로 우회 공격(Path Traversal/Symlink)을 원천 차단.
+- **네트워크 타임아웃 및 재시도 (Robustness)**: LLM API 호출 과정에서 발생하는 무한 대기(Hanging) 현상과 429/5xx 일시적 에러를 방어하기 위해 60초 타임아웃 및 지수 백오프 기반의 재시도(Retry) 로직 추가.
+- **ENOSPC 디스크 에러 그레이스풀 폴백 (Reliability)**: 설정 파일(`config.toml`)이나 세션 로그 저장 중 `std::io::ErrorKind::StorageFull` 발생 시 패닉을 방지하고 TUI에 경고 메시지만 노출하며 기존 데이터를 보존하도록 예외 처리.
+- **터미널 프로세스 잔상 제거 (UX)**: `ExecShell` 도구를 사용해 `vim` 등의 서브 프로세스를 실행하고 TUI로 복귀할 때 화면 버퍼에 이전 프로세스 출력이 남는 고스팅(Ghosting) 방지를 위해 프로세스 종료 즉시 `terminal.clear()` 및 커서 재설정 호출.
+
 ## [1.2.0-rc.1] - 2026-04-21
 
 ### Fixed (Phase 19 & 20 Audit Remediation)
@@ -64,7 +322,7 @@
 - **스크롤/포커스 회귀 테스트 보강**: 마우스 휠의 Timeline/Inspector 라우팅, follow-tail 복구, Composer 클릭 포커스 전환을 테스트로 고정.
 
 ### Changed/Improved (Phase 15-A: TimelineBlock 마이그레이션)
-- **블록 기반 타임라인 도입**: 기존 `TimelineEntry` 기반 단일 텍스트 렌더링에서 `TimelineBlock`, `BlockSection`, `BlockStatus` 상태 머신 기반의 모듈식 아키텍처로 완전히 교체. 
+- **블록 기반 타임라인 도입**: 기존 `TimelineEntry` 기반 단일 텍스트 렌더링에서 `TimelineBlock`, `BlockSection`, `BlockStatus` 상태 머신 기반의 모듈식 아키텍처로 완전히 교체.
 - **컴파일/의존성**: 고유 식별자 할당을 위한 `uuid v4` 의존성 추가.
 - **렌더링 시스템 교체**: `src/tui/layout.rs` 및 `src/tui/widgets/inspector_tabs.rs`가 새로운 `TimelineBlock` 모델을 순회하여 렌더링하도록 재작성. (기존 `TimelineEntry` 및 `ToolStatus` 완전히 제거)
 
@@ -400,7 +658,7 @@
 
 ### Fixed (High - 5차/최종 감사)
 - **[H-1]** 동시 채팅 요청 차단: `is_thinking` 상태일 때 사용자가 Composer에서 Enter를 눌러 새 요청을 전송하지 못하도록 차단 (응답 덮어쓰기 Race condition 방지)
-- **[H-2]** 초기 사용자 턴 블록 분리: 첫 요청 시 `Assistant` 롤을 확인하고 명시적인 전용 AI 블록을 생성하여 오류가 사용자 블록에 섞이지 않도록 분리 
+- **[H-2]** 초기 사용자 턴 블록 분리: 첫 요청 시 `Assistant` 롤을 확인하고 명시적인 전용 AI 블록을 생성하여 오류가 사용자 블록에 섞이지 않도록 분리
 - **[H-3]** 도구 루프 후속 렌더링 블록 오염 방지: `send_chat_message_internal()`을 통해 도구 실행 완료 후 발생하는 LLM 재전송 요청에서도 `active_chat_block_idx`를 정확히 설정하도록 통합 헬퍼(`spawn_chat_request`)로 리팩토링. 이를 통해 이전 턴의 블록을 오염시키는 경로 차단
 
 ### Fixed (Medium)

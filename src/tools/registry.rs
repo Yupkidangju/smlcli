@@ -8,13 +8,16 @@ use crate::domain::tool_result::ToolResult;
 
 /// 도구 실행에 필요한 문맥(Context)
 pub struct ToolContext<'a> {
+    #[allow(dead_code)] // [v3.7.0] PermissionToken 검증 강화 시 활성화 예정
     pub token: &'a crate::domain::permissions::PermissionToken,
     pub cancel_token: tokio_util::sync::CancellationToken,
 }
 
 /// [v0.1.0-beta.23] Phase 13: Agentic Autonomy
 /// 다형성 기반 도구 인터페이스. 기존 match 분기를 대체합니다.
+// [v3.7.0] name(), description() 메서드는 도구 도움말/카탈로그 UI 구현 시 활성화 예정.
 #[async_trait]
+#[allow(unused)]
 pub trait Tool: Send + Sync {
     /// 도구의 이름 (예: "ReadFile")
     fn name(&self) -> &'static str;
@@ -78,10 +81,17 @@ impl ToolRegistry {
             })
             .collect()
     }
+
+    /// [v2.5.0] 레지스트리에 등록된 모든 도구 이름을 반환.
+    /// guard 테스트에서 is_write_tool() 목록과 자동 대조에 사용.
+    #[allow(dead_code)] // [v3.7.0] 도구 정합성 테스트 확장 시 활성화 예정
+    pub fn tool_names(&self) -> Vec<&'static str> {
+        self.tools.keys().copied().collect()
+    }
 }
 
 /// Provider 방언(Dialect)에 맞게 JSON 스키마를 가공한다.
-fn apply_dialect(schema: &mut Value, dialect: &crate::domain::provider::ToolDialect) {
+pub fn apply_dialect(schema: &mut Value, dialect: &crate::domain::provider::ToolDialect) {
     match dialect {
         crate::domain::provider::ToolDialect::Gemini => {
             if let Some(func) = schema.get_mut("function")
@@ -105,7 +115,10 @@ fn apply_dialect(schema: &mut Value, dialect: &crate::domain::provider::ToolDial
                 if let Some(parameters) = func.get("parameters") {
                     anthropic_schema.insert("input_schema".to_string(), parameters.clone());
                 } else {
-                    anthropic_schema.insert("input_schema".to_string(), serde_json::json!({ "type": "object", "properties": {} }));
+                    anthropic_schema.insert(
+                        "input_schema".to_string(),
+                        serde_json::json!({ "type": "object", "properties": {} }),
+                    );
                 }
                 *schema = Value::Object(anthropic_schema);
             }
@@ -125,5 +138,13 @@ pub static GLOBAL_REGISTRY: std::sync::LazyLock<ToolRegistry> = std::sync::LazyL
     registry.register(Box::new(crate::tools::grep::GrepSearchTool));
     registry.register(Box::new(crate::tools::fetch::FetchUrlTool));
     registry.register(Box::new(crate::tools::shell::ExecShellTool));
+    registry.register(Box::new(crate::tools::git_checkpoint::GitCheckpointTool));
+    // [v3.4.0] Phase 44 Task D-1: DeleteFileTool 레지스트리 등록 완료.
+    // 이전: known_unregistered = ["DeleteFile"]로 예외 처리.
+    // 수정: 정식 등록 후 guard 테스트 자동 포함.
+    registry.register(Box::new(crate::tools::file_ops::DeleteFileTool));
+    // [v3.7.0] Phase 47 Task Q-1: AskClarification 도구 등록.
+    // PLAN 모드에서 AI가 모호한 요구사항을 발견할 때 구조화된 질문 폼을 호출.
+    registry.register(Box::new(crate::tools::questionnaire::AskClarificationTool));
     registry
 });

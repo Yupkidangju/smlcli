@@ -13,9 +13,35 @@ use tokio::process::Command;
 /// [v0.1.0-beta.18] 셸 실행 타임아웃 (초).
 const SHELL_TIMEOUT_SECS: u64 = 30;
 
+/// [v2.0.0] Phase 28: Shell-Native PATH 캐싱
+static NATIVE_PATH: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+fn get_native_path() -> String {
+    NATIVE_PATH
+        .get_or_init(|| {
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
+            if let Ok(output) = std::process::Command::new(shell)
+                .arg("-lc")
+                .arg("echo $PATH")
+                .output()
+            {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() {
+                    return path;
+                }
+            }
+            std::env::var("PATH").unwrap_or_default()
+        })
+        .clone()
+}
+
 /// 셸 명령어를 실행하고 stdout/stderr를 수집하여 ToolResult로 반환.
 /// action_tx가 Some이면 각 라인을 ToolOutputChunk 이벤트로 실시간 전송.
-pub(crate) async fn execute_shell(cmd: &str, cwd: Option<&str>, cancel_token: tokio_util::sync::CancellationToken) -> Result<ToolResult> {
+pub(crate) async fn execute_shell(
+    cmd: &str,
+    cwd: Option<&str>,
+    cancel_token: tokio_util::sync::CancellationToken,
+) -> Result<ToolResult> {
     execute_shell_streaming(cmd, cwd, None, cancel_token).await
 }
 
@@ -96,7 +122,7 @@ fn build_linux_sandbox_command(cmd: &str, host_cwd: &Path) -> Result<Command> {
         .arg("--clearenv")
         .arg("--setenv")
         .arg("PATH")
-        .arg(format!("{}/bin:/usr/bin:/bin", cargo_home))
+        .arg(get_native_path())
         .arg("--setenv")
         .arg("HOME")
         .arg("/tmp")
@@ -113,20 +139,31 @@ fn build_linux_sandbox_command(cmd: &str, host_cwd: &Path) -> Result<Command> {
     Ok(command)
 }
 
-fn build_shell_command(cmd: &str, host_cwd: &Path) -> Result<Command> {
+fn build_shell_command(cmd: &str, host_cwd: &Path, sandbox_enabled: bool) -> Result<Command> {
     #[cfg(target_os = "linux")]
     {
-        build_linux_sandbox_command(cmd, host_cwd)
+        if sandbox_enabled {
+            build_linux_sandbox_command(cmd, host_cwd)
+        } else {
+            let mut c = Command::new("sh");
+            c.arg("-c").arg(cmd);
+            c.current_dir(host_cwd);
+            Ok(c)
+        }
     }
     #[cfg(not(target_os = "linux"))]
     {
         let mut command = if cfg!(target_os = "windows") {
-            let shell_bin = if command_in_path("pwsh.exe").is_some() || command_in_path("pwsh").is_some() {
+            let shell_bin = if command_in_path("pwsh.exe").is_some()
+                || command_in_path("pwsh").is_some()
+            {
                 "pwsh"
             } else if command_in_path("powershell.exe").is_some() {
                 "powershell.exe"
             } else {
-                return Err(anyhow::anyhow!("PowerShell(pwsh 또는 powershell.exe)을 찾을 수 없습니다. Windows 환경에서 ExecShell을 실행할 수 없습니다."));
+                return Err(anyhow::anyhow!(
+                    "PowerShell(pwsh 또는 powershell.exe)을 찾을 수 없습니다. Windows 환경에서 ExecShell을 실행할 수 없습니다."
+                ));
             };
             let mut c = Command::new(shell_bin);
             c.arg("-Command").arg(cmd);
@@ -151,11 +188,72 @@ pub(crate) async fn execute_shell_streaming(
     cancel_token: tokio_util::sync::CancellationToken,
 ) -> Result<ToolResult> {
     let host_cwd = resolve_shell_cwd(cwd)?;
-    let mut command = build_shell_command(cmd, &host_cwd)?;
+
+    let mut env_whitelist: Vec<String> = vec![
+        "HOME".into(),
+        "USER".into(),
+        "TERM".into(),
+        "LANG".into(),
+        "NONINTERACTIVE".into(),
+        "DEBIAN_FRONTEND".into(),
+    ];
+    let mut sandbox_enabled = false;
+    let mut extra_binds = Vec::new();
+    let mut allow_network = true;
+
+    // [v2.3.0] Phase 31: Configurable Whitelist for Environment Variables
+    if let Ok(Some(settings)) = crate::infra::config_store::load_config().await {
+        sandbox_enabled = settings.sandbox.enabled;
+        allow_network = settings.sandbox.allow_network;
+        extra_binds = settings.sandbox.extra_binds.clone();
+        for v in settings.allowed_env_vars {
+            if !env_whitelist.contains(&v) {
+                env_whitelist.push(v);
+            }
+        }
+    }
+
+    let mut command = if sandbox_enabled {
+        crate::infra::sandbox::wrap_command_bwrap(
+            host_cwd.to_str().unwrap_or("."),
+            cmd,
+            allow_network,
+            &extra_binds,
+        )
+    } else {
+        build_shell_command(cmd, &host_cwd, false)?
+    };
+
+    // [v1.9.0] Phase 27: 프로세스 그룹 분리 (Unix 환경에서 전체 프로세스 소멸을 위함)
+    #[cfg(unix)]
+    {
+        command.process_group(0);
+    }
+
+    // [v1.9.0] Phase 27: 환경 변수 격리 (Whitelist)
+    // [v2.0.0] Phase 28: Shell-Native PATH 동적 탐색
+    command.env_clear();
+
+    for key in env_whitelist {
+        if let Ok(val) = std::env::var(&key) {
+            command.env(&key, val);
+        }
+    }
+    command.env("PATH", get_native_path());
+    // [v2.5.0] Phase 34: Orphan Process Reaper (부모 추적용)
+    let current_pid = std::process::id().to_string();
+    command.env("SMLCLI_PID", current_pid);
+    // [v2.0.0] Phase 28: PTY 대안으로 ANSI Color 강제 활성화 환경변수 주입
+    command.env("FORCE_COLOR", "1");
+    command.env("CLICOLOR_FORCE", "1");
 
     // [v0.1.0-beta.18] 스트리밍을 위해 stdout/stderr를 파이프로 연결
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
+    // [v1.6.0] 인터렉티브 도구(git commit 등) 실행 시 블로킹 방지를 위해 stdin 차단 및 강제 non-interactive 설정
+    command.stdin(std::process::Stdio::null());
+    command.env("NONINTERACTIVE", "1");
+    command.env("DEBIAN_FRONTEND", "noninteractive");
     // [v1.0.0] 프로세스 좀비화 방지: kill_on_drop 설정 추가
     command.kill_on_drop(true);
 
@@ -170,14 +268,30 @@ pub(crate) async fn execute_shell_streaming(
             let tx_clone = tx.clone();
             let stdout_task = tokio::spawn(async move {
                 let mut lines = String::new();
+                let mut accumulated_bytes = 0;
+                let max_bytes = 5 * 1024 * 1024; // [v1.9.0] Phase 27: 5MB 메모리 캡핑
+
                 if let Some(stdout) = stdout_handle {
                     let mut reader = BufReader::new(stdout).lines();
                     let mut line_count = 0;
                     while let Ok(Some(mut line)) = reader.next_line().await {
+                        if accumulated_bytes > max_bytes {
+                            let msg = "\n... [TRUNCATED: Exceeded 5MB Limit] ...";
+                            lines.push_str(msg);
+                            if let Some(ref tx) = tx_clone {
+                                let _ = tx.send(crate::app::event_loop::Event::Action(
+                                    crate::app::action::Action::ToolOutputChunk(msg.to_string())
+                                )).await;
+                            }
+                            break;
+                        }
+
                         if line.len() > 1024 * 1024 {
                             line.truncate(1024 * 1024);
-                            line.push_str("... [TRUNCATED 1MB LIMIT]");
+                            line.push_str("... [TRUNCATED 1MB LINE LIMIT]");
                         }
+                        accumulated_bytes += line.len() + 1;
+
                         // ToolOutputChunk 이벤트 전송 (tx가 있는 경우)
                         if let Some(ref tx) = tx_clone {
                             let _ = tx
@@ -198,21 +312,37 @@ pub(crate) async fn execute_shell_streaming(
                         }
                     }
                 }
-                lines
+                (lines, accumulated_bytes > max_bytes, accumulated_bytes)
             });
 
             // stderr 비동기 라인 읽기
             let tx_clone2 = tx;
             let stderr_task = tokio::spawn(async move {
                 let mut lines = String::new();
+                let mut accumulated_bytes = 0;
+                let max_bytes = 5 * 1024 * 1024; // [v1.9.0] Phase 27: 5MB 메모리 캡핑
+
                 if let Some(stderr) = stderr_handle {
                     let mut reader = BufReader::new(stderr).lines();
                     let mut line_count = 0;
                     while let Ok(Some(mut line)) = reader.next_line().await {
+                        if accumulated_bytes > max_bytes {
+                            let msg = "\n... [TRUNCATED: Exceeded 5MB Limit] ...";
+                            lines.push_str(msg);
+                            if let Some(ref tx) = tx_clone2 {
+                                let _ = tx.send(crate::app::event_loop::Event::Action(
+                                    crate::app::action::Action::ToolOutputChunk(msg.to_string())
+                                )).await;
+                            }
+                            break;
+                        }
+
                         if line.len() > 1024 * 1024 {
                             line.truncate(1024 * 1024);
-                            line.push_str("... [TRUNCATED 1MB LIMIT]");
+                            line.push_str("... [TRUNCATED 1MB LINE LIMIT]");
                         }
+                        accumulated_bytes += line.len() + 1;
+
                         if let Some(ref tx) = tx_clone2 {
                             let _ = tx
                                 .send(crate::app::event_loop::Event::Action(
@@ -232,27 +362,51 @@ pub(crate) async fn execute_shell_streaming(
                         }
                     }
                 }
-                lines
+                (lines, accumulated_bytes > max_bytes, accumulated_bytes)
             });
 
             // 프로세스 완료 대기 + 출력 수집 (취소 토큰 명시적 감지 및 kill, [v1.5.0] 타임아웃 방어 포함)
+            // [v1.9.0] Phase 27: 프로세스 소멸 시 PGID 기반 그룹 전체 소멸 처리
+            async fn kill_process_group(child: &mut tokio::process::Child) {
+                #[cfg(unix)]
+                {
+                    if let Some(pid) = child.id() {
+                        unsafe {
+                            libc::kill(-(pid as i32), libc::SIGKILL);
+                        }
+                    }
+                }
+                #[cfg(windows)]
+                {
+                    if let Some(pid) = child.id() {
+                        let _ = std::process::Command::new("taskkill")
+                            .arg("/F")
+                            .arg("/T")
+                            .arg("/PID")
+                            .arg(pid.to_string())
+                            .output();
+                    }
+                }
+                let _ = child.kill().await;
+            }
+
             let status = tokio::select! {
                 res = tokio::time::timeout(std::time::Duration::from_secs(SHELL_TIMEOUT_SECS), child.wait()) => {
                     match res {
                         Ok(status_res) => status_res?,
                         Err(_) => {
-                            let _ = child.kill().await;
+                            kill_process_group(&mut child).await;
                             return Err(anyhow::anyhow!("Process timed out after {} seconds", SHELL_TIMEOUT_SECS));
                         }
                     }
                 },
                 _ = cancel_token.cancelled() => {
-                    let _ = child.kill().await;
+                    kill_process_group(&mut child).await;
                     return Err(anyhow::anyhow!("Process cancelled by CancellationToken"));
                 }
             };
-            let stdout_buf = stdout_task.await.unwrap_or_default();
-            let stderr_buf = stderr_task.await.unwrap_or_default();
+            let (stdout_buf, out_trunc, out_size) = stdout_task.await.unwrap_or_default();
+            let (stderr_buf, err_trunc, err_size) = stderr_task.await.unwrap_or_default();
 
             let exit_code = status.code().unwrap_or(1);
 
@@ -263,6 +417,9 @@ pub(crate) async fn execute_shell_streaming(
                 exit_code,
                 is_error: !status.success(),
                 tool_call_id: None,
+                is_truncated: out_trunc || err_trunc,
+                original_size_bytes: Some(out_size + err_size),
+                affected_paths: vec![],
             })
         })
         .await;
@@ -276,6 +433,9 @@ pub(crate) async fn execute_shell_streaming(
             exit_code: 1,
             is_error: true,
             tool_call_id: None,
+            is_truncated: false,
+            original_size_bytes: None,
+            affected_paths: vec![],
         }),
         Err(_) => Ok(ToolResult {
             tool_name: "ExecShell".to_string(),
@@ -284,6 +444,9 @@ pub(crate) async fn execute_shell_streaming(
             exit_code: 1,
             is_error: true,
             tool_call_id: None,
+            is_truncated: false,
+            original_size_bytes: None,
+            affected_paths: vec![],
         }),
     }
 }
@@ -423,7 +586,10 @@ impl Tool for ExecShellTool {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        // TODO: action_tx가 필요한 streaming은 execute 인자로 어떻게 넘길지 나중에 개선
+        // [v3.4.0] Phase 44 Task D-2: ROADMAP 주석 갱신.
+        // execute_shell_streaming()은 이미 구현됨(Phase 9-C).
+        // 단, Tool trait의 execute()에서 action_tx를 전달하는 경로는 미연동.
+        // Phase 46+ 세션 관리 완료 후 ToolContext에 tx 추가 예정.
         execute_shell(&command, cwd.as_deref(), ctx.cancel_token.clone())
             .await
             .map_err(|e| ToolError::ExecutionFailure(e.to_string()))

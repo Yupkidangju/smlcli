@@ -14,9 +14,12 @@
 ### 주요 기능
 - **터미널 중심 TUI**: 마우스 없이 모든 동작을 3단계 이내에 키보드로 처리.
 - **다중 공급자 지원**: OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini) 지원.
-- **강력한 보안 및 검증**: 파일 쓰기, 쉘 실행 검사, API 키의 로컬 파일 기반 암호화 보관 (`~/.smlcli/config.toml`, ChaCha20Poly1305). Linux에서는 `bwrap` 기반 실제 셸 샌드박스를 사용.
+- **강력한 보안 및 검증**: 파일 쓰기, 쉘 실행 검사, API 키의 로컬 파일 기반 암호화 보관 (`~/.smlcli/config.toml`, ChaCha20Poly1305). 심볼릭 링크를 방어하는 엄격한 샌드박스와 Linux `bwrap` 기반 실제 셸 샌드박스, 프로세스 그룹 소멸 및 환경 변수 격리 기능 제공. 스트리밍 마스킹을 통한 API 키 유출 원천 차단.
+- **극한 상황 강건성**: 설정 파일 마이그레이션 실패 시 자동 롤백 및 백업 기능. 디스크 용량 한계(`ENOSPC`) 도달 시 패닉을 방지하는 그레이스풀 폴백, API 네트워크 타임아웃 래핑 및 지수 백오프 기반 재시도, `unicode-width` 기반의 터미널 렌더링 안정성 확보. 대용량 파일/로그 출력의 OOM을 막는 메모리 캡핑(Size Capping) 및 터미널 제목/작업표시줄 진행률(OSC) 동기화 지원. `smlcli doctor` 시스템 진단.
 - **Inspect 패널과 Diff 플로우**: 작업 승인 전에 변경될 항목 가시성 확보.
-- **지능형 컨텍스트 압축**: 장기 세션 보호를 위한 백그라운드 LLM 요약기 및 토큰 한도 제어(`/tokens`).
+- **지능형 컨텍스트 압축 및 성능 최적화**: 장기 세션 보호를 위한 백그라운드 LLM 요약기 및 토큰 한도 제어(`/tokens`), 디스크 캐시 기반 AST RepoMap 생성으로 대형 레포지토리에서의 속도 확보.
+- **클립보드 연동**: `y` 키 단축키 및 시각적 토스트(Toast) 알림을 통한 즉각적인 클립보드 복사 지원.
+- **환경 변수 제어**: `allowed_env_vars` 화이트리스트를 통한 도구 실행 환경 제어.
 - **@ 로컬 데이터 참조**: `@` 퍼지 파인터를 통해 작업 파일 경로와 컨텍스트를 빠짐없이 LLM에 자동 인라인 삽입.
 - **실시간 테마 전환**: `/theme` 명령어로 Default ↔ HighContrast 테마를 즉시 전환. 설정 파일에 자동 저장.
 - **Inspector Search 탭**: 타임라인 전체를 대소문자 무시로 실시간 검색 (최대 50건 표시).
@@ -53,14 +56,17 @@
 ### Key Features
 - **Keyboard-first TUI**: Reach any primary action within 3 steps without a mouse.
 - **Multi-provider**: Supports OpenAI, Anthropic, xAI, OpenRouter, and Google (Gemini).
-- **Security-focused**: Local file-based encrypted storage for API keys (~/.smlcli/config.toml), explicit approval flows for file writing and shell execution, and a real `bwrap`-backed shell sandbox on Linux.
-- **Inspector & Diff Previews**: High visibility of what is changing before you approve it.
-- **Intelligent Compaction**: LLM-based background summarization and `/tokens` budgeting to protect long sessions.
-- **@ Context Injection**: Fuzzy search your filesystem with `@` and inline file data safely without closing Composer.
-- **Live Theme Switching**: Toggle between Default and HighContrast themes instantly with `/theme`. Persists across restarts.
-- **Inspector Search Tab**: Real-time, case-insensitive full-text search across your entire timeline (up to 50 results).
-- **SSE Streaming**: Token-by-token real-time display of AI responses (OpenRouter/Gemini).
-- **JSONL Session Logs**: Automatic conversation recording in `~/.smlcli/sessions/` with session restore support.
+- **Security-focused**: Local file-based encrypted storage for API keys (~/.smlcli/config.toml), explicit approval flows for file writing and shell execution, strict symlink sandbox protection, real `bwrap`-backed shell sandbox on Linux, process group extermination, and environment variable isolation. Ensures zero API key leakage via stateful streaming masking.
+- **Extreme Robustness**: Automatic rollback and backup on configuration migration failures. Graceful fallback on storage full (`ENOSPC`) to prevent panics, `tokio::time::timeout` wrapping and exponential backoff for API network timeouts, safe UTF-8 terminal rendering via `unicode-width`, memory size capping for massive standard outputs to prevent OOM, and terminal title/taskbar progress synchronization via OSC sequences. Includes `smlcli doctor` for system diagnostics.
+- **Inspect & Diff Flows**: Guaranteed visibility into upcoming changes before you hit "Approve".
+- **Intelligent Context Compaction & Performance Optimization**: Background LLM summarizer for long-session stability, token limit control (`/tokens`), and AST RepoMap generation with disk caching via `cheap_hash` (mtime + file count) for faster performance in large repositories.
+- **Clipboard Integration**: Instant clipboard copy support via the `y` hotkey with visual Toast notifications.
+- **Environment Variable Control**: Fine-grained execution environment control via the `allowed_env_vars` whitelist.
+- **@ Context Injection**: Type `@` to fuzzy-find workspace files and automatically inline their contents.
+- **Real-time Theme Switching**: Swap between Default and HighContrast themes using `/theme` instantly. Automatically saved to configuration.
+- **Inspector Search**: Perform case-insensitive, real-time searches across your timeline (up to 50 entries).
+- **SSE Streaming**: See AI responses token-by-token in real-time (OpenRouter/Gemini compatible).
+- **JSONL Session Logging**: Automatic session logs in `~/.smlcli/sessions/` for restoring prior conversations.
 - **Agentic Autonomy**: Guarantees safe AI code generation via automated Git checkpoints and self-healing loops before/after destructive actions. Includes advanced tools like `ListDir`, `GrepSearch`, and `FetchURL`.
 - **Tree-sitter Repo Map**: Injects AST-parsed repository summary maps into the AI context for accurate code modifications.
 - **Cross-platform**: Full support for Linux and Windows.
@@ -88,7 +94,8 @@
 ### 主な機能
 - **ターミナルファースト TUI**: 全ての操作をキーボードだけで迅速に行えます。
 - **マルチプロバイダー対応**: OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini) をサポート。
-- **堅牢なセキュリティ**: APIキーのローカル暗号化ファイル保存 (~/.smlcli/config.toml)、安全なコマンド実行ポリシー設定、Linuxでの `bwrap` 実サンドボックス実行。
+- **堅牢なセキュリティ**: APIキーのローカル暗号化ファイル保存 (~/.smlcli/config.toml)、安全なコマンド実行ポリシー設定、シンボリックリンク保護のサンドボックス、Linuxでの `bwrap` 実サンドボックス実行、プロセスグループ消滅および環境変数の隔離をサポート。ストリーミング中のAPIキー漏洩を完全に防ぐステートフルマスキング。
+- **極限環境での安定性**: ディスク容量不足 (`ENOSPC`) 時のパニック防止、LLM APIタイムアウト時の指数バックオフ再試行、`unicode-width` ベースの安全なUTF-8レンダリング、大規模出力時のメモリキャッピング (OOM防止)、およびOSCシーケンスを用いたターミナルタイトル/タスクバー進捗状況の同期。
 - **インテリジェント コンテキスト圧縮**: 長期セッション保護のためのバックグラウンド LLM 要約と `/tokens` トークン監視。
 - **@ ローカルデータ参照**: `@` ファジー検索から該当ファイルのコンテンツをAIに自動挿入。
 - **リアルタイム テーマ切替**: `/theme` コマンドで Default ↔ HighContrast テーマを即座に切り替え可能。
@@ -121,7 +128,8 @@
 ### 核心功能
 - **全鍵盤 TUI**: 告別滑鼠，快速進行所有主要指令操作。
 - **多平台模型**: 支援 OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini) 等平台。
-- **高規格安全**: 使用本地檔案加密 (~/.smlcli/config.toml) 保護 API 密鑰。提供完整變更預覽與權限驗證流程，並在 Linux 使用 `bwrap` 實體 Shell 沙箱。
+- **高規格安全**: 使用本地檔案加密 (~/.smlcli/config.toml) 保護 API 密鑰。提供完整變更預覽與權限驗證流程，支援防範符號連結 (Symlink) 沙箱機制，在 Linux 使用 `bwrap` 實體 Shell 沙箱，並具備進程組銷毀與環境變數隔離能力。透過串流遮罩技術徹底杜絕 API 密鑰外洩。
+- **極端環境穩定性**: 在磁碟空間不足 (`ENOSPC`) 時自動防護崩潰、API 網路超時的指數退避重試，基於 `unicode-width` 的安全終端渲染，防範 OOM 的大規模輸出記憶體封頂限制，以及支援 OSC 序列的終端機標題與任務欄進度同步。
 - **智能上下文壓縮**: 透過後台 LLM 摘要保護長對話串並支持動態代幣(Token)管理。
 - **@ 檔案快速參照**: 輸入 `@` 即可使用 Fuzzy Finder 將本地檔案匯入 AI 記憶。
 - **即時主題切換**: 透過 `/theme` 指令在 Default 與 HighContrast 主題間即時切換。
@@ -154,7 +162,8 @@
 ### 核心功能
 - **纯键盘 TUI**: 所有核心操作可通过键盘在3步内完成。
 - **多供应商支持**: 兼容 OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini)。
-- **安全性优先**: 在执行写入和 Shell 执行前自动生成 Diff，并要求显式权限授权；密钥存入本地加密文件 (~/.smlcli/config.toml)。Linux 下使用 `bwrap` 提供真实 Shell 沙箱。
+- **安全性优先**: 在执行写入和 Shell 执行前自动生成 Diff，并要求显式权限授权；密钥存入本地加密文件 (~/.smlcli/config.toml)。支持防止符号链接攻击的沙箱，在 Linux 下使用 `bwrap` 提供真实 Shell 沙箱，同时具备进程组销毁与环境变量隔离功能。通过流式掩码彻底防止 API 密钥泄露。
+- **极限环境稳定性**: 在磁盘空间不足 (`ENOSPC`) 时自动防护崩溃、API 网络超时提供指数退避重试，基于 `unicode-width` 的安全终端渲染，防止 OOM 的大规模输出内存封顶限制，以及基于 OSC 序列的终端标题与任务栏进度同步功能。
 - **智能上下文压缩**: 通过后台 LLM 摘要引擎保护长期会话防止记忆丢失，包含动态 Token 管理。
 - **@ 文件快速查询**: 输入 `@` 自动使用 Fuzzy Finder 将本地文件数据嵌入 AI 记忆上下文。
 - **实时主题切换**: 通过 `/theme` 命令在 Default 和 HighContrast 主题间即时切换。

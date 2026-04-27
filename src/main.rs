@@ -1,8 +1,6 @@
 // [v0.1.0-beta.18] Phase 10: CLI Entry Modes 구현.
 // [v0.1.0-beta.19] 비동기 I/O 전환에 따른 main 루프 및 서브커맨드 await 적용.
 
-#![allow(dead_code)]
-
 mod app;
 mod commands;
 mod domain;
@@ -15,9 +13,13 @@ mod types;
 #[cfg(test)]
 mod tests;
 
+pub mod shadow {
+    shadow_rs::shadow!(build);
+}
+
 use anyhow::Result;
 use app::App;
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 
 /// smlcli — 로컬 AI 런타임 CLI 에이전트
 #[derive(Parser)]
@@ -38,20 +40,40 @@ enum Commands {
     /// 인터랙티브 TUI 모드로 실행 (기본값)
     Run,
     /// 시스템 환경 진단 (API 키, 설정, 의존성 등)
-    Doctor,
+    Doctor {
+        #[arg(
+            long,
+            help = "비정상 종료된 SMLCLI_PID 자식 프로세스들을 찾아 강제 종료합니다"
+        )]
+        clean_orphans: bool,
+    },
     /// 저장된 세션 목록 조회
     Sessions,
+    /// 셸 자동완성 스크립트 출력
+    Completions {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // [v2.5.0] Phase 34: 시작 시 백그라운드 스레드로 고아 프로세스 정리
+    std::thread::spawn(|| {
+        crate::infra::process_reaper::reap_orphans();
+    });
+
     match cli.command {
         // 서브커맨드가 없거나 'run'이면 인터랙티브 TUI 진입
         None | Some(Commands::Run) => run_interactive().await,
-        Some(Commands::Doctor) => run_doctor().await,
+        Some(Commands::Doctor { clean_orphans }) => run_doctor(clean_orphans).await,
         Some(Commands::Sessions) => run_sessions().await,
+        Some(Commands::Completions { shell }) => {
+            run_completions(shell);
+            Ok(())
+        }
     }
 }
 
@@ -72,44 +94,16 @@ async fn run_interactive() -> Result<()> {
 }
 
 /// Doctor: 환경 진단
-async fn run_doctor() -> Result<()> {
-    println!("🩺 smlcli doctor — 환경 진단\n");
-
-    // 설정 파일 확인
-    match infra::config_store::load_config().await {
-        Ok(Some(settings)) => {
-            println!("✅ 설정 파일: 로드 완료");
-            println!("   공급자: {}", settings.default_provider);
-            println!("   모델: {}", settings.default_model);
-        }
-        Ok(None) => {
-            println!("⚠️  설정 파일: 없음 — 'smlcli run'으로 시작 후 설정 마법사를 완료하세요");
-        }
-        Err(e) => {
-            println!("❌ 설정 파일 로드 오류: {}", e);
-        }
+async fn run_doctor(clean_orphans: bool) -> Result<()> {
+    if clean_orphans {
+        println!("🔍 고아 프로세스 스캔 및 정리 중...");
+        crate::infra::process_reaper::reap_orphans();
+        println!("✅ 프로세스 정리가 완료되었습니다.");
+        return Ok(());
     }
 
-    // 세션 디렉토리 확인
-    match infra::session_log::SessionLogger::list_sessions().await {
-        Ok(sessions) => {
-            println!("📁 세션 파일: {}개", sessions.len());
-        }
-        Err(e) => {
-            println!("⚠️  세션 디렉토리 조회 오류: {}", e);
-        }
-    }
-
-    // 시스템 정보
-    println!("\n📊 시스템 정보:");
-    println!("   OS: {} {}", std::env::consts::OS, std::env::consts::ARCH);
-    println!("   Rust: {}", env!("CARGO_PKG_VERSION"));
-
-    let home = dirs::home_dir().unwrap_or_default();
-    let config_dir = home.join(".smlcli");
-    println!("   설정 경로: {}", config_dir.display());
-
-    println!("\n진단 완료.");
+    let report = infra::doctor::DoctorReport::run_diagnostics().await;
+    report.print_report();
     Ok(())
 }
 
@@ -136,9 +130,14 @@ async fn run_sessions() -> Result<()> {
             }
         }
         Err(e) => {
-            println!("세션 목록 조회 오류: {}", e);
+            println!("세션 목록을 읽어오는 중 오류가 발생했습니다: {}", e);
         }
     }
-
     Ok(())
+}
+
+fn run_completions(shell: clap_complete::Shell) {
+    let mut cmd = Cli::command();
+    let bin_name = cmd.get_name().to_string();
+    clap_complete::generate(shell, &mut cmd, bin_name, &mut std::io::stdout());
 }

@@ -20,13 +20,13 @@ pub async fn execute_tool(
                 crate::tools::git_checkpoint::create_checkpoint(&cwd, tool.name()).unwrap_or(false);
         }
 
-        let ctx = crate::tools::registry::ToolContext { 
+        let ctx = crate::tools::registry::ToolContext {
             token,
-            cancel_token: cancel_token.clone()
+            cancel_token: cancel_token.clone(),
         };
-        
+
         let exec_future = tool.execute(call.args, &ctx);
-        
+
         let mut result = tokio::select! {
             res = exec_future => res.map_err(|e| anyhow::anyhow!("{:?}", e)),
             _ = cancel_token.cancelled() => {

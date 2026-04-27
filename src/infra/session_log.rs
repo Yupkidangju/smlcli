@@ -43,11 +43,14 @@ impl SessionLogger {
     pub fn new_session() -> Result<Self, SmlError> {
         let log_dir = Self::get_log_dir()?;
         if !log_dir.exists() {
-            std::fs::create_dir_all(&log_dir).map_err(|e| SmlError::InfraError(format!("세션 로그 디렉토리 생성 실패: {}", e)))?;
+            std::fs::create_dir_all(&log_dir).map_err(|e| {
+                SmlError::InfraError(format!("세션 로그 디렉토리 생성 실패: {}", e))
+            })?;
         }
 
         let timestamp = Self::unix_timestamp();
-        let file_path = log_dir.join(format!("session_{}.jsonl", timestamp));
+        let short_id = &uuid::Uuid::new_v4().to_string()[..6];
+        let file_path = log_dir.join(format!("session_{}_{}.jsonl", timestamp, short_id));
 
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -71,9 +74,13 @@ impl SessionLogger {
                 .filter_map(|e| e.ok())
                 .filter(|e| e.path().is_file() && e.path().to_string_lossy().contains("session_"))
                 .collect();
-            
-            log_files.sort_by_key(|a| a.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH));
-            
+
+            log_files.sort_by_key(|a| {
+                a.metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(SystemTime::UNIX_EPOCH)
+            });
+
             let keep = 5;
             if log_files.len() > keep {
                 for file in log_files.iter().take(log_files.len() - keep) {
@@ -93,13 +100,13 @@ impl SessionLogger {
             let mut backup_path = self.file_path.clone();
             backup_path.set_extension("jsonl.1");
             let _ = std::fs::rename(&self.file_path, &backup_path);
-            
+
             let file = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&self.file_path)
                 .map_err(|e| SmlError::InfraError(format!("새 로그 열기 실패: {}", e)))?;
-            
+
             *w = BufWriter::new(file);
             let _ = self.cleanup_old_logs();
         }
@@ -110,9 +117,12 @@ impl SessionLogger {
     /// 파일이 존재하지 않으면 에러를 반환한다.
     pub fn from_file(path: PathBuf) -> Result<Self, SmlError> {
         if !path.exists() {
-            return Err(SmlError::InfraError(format!("세션 로그 파일이 존재하지 않습니다: {:?}", path)));
+            return Err(SmlError::InfraError(format!(
+                "세션 로그 파일이 존재하지 않습니다: {:?}",
+                path
+            )));
         }
-        
+
         let file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -128,25 +138,58 @@ impl SessionLogger {
     /// [v0.1.0-beta.20] 동기 메시지 추가: 테스트 및 단순 호출 경로용.
     /// JSONL 한 줄을 동기 I/O로 파일에 append 한다.
     pub fn append_message(&self, message: &ChatMessage) -> Result<(), SmlError> {
-        let json_line = serde_json::to_string(message).map_err(|e| SmlError::InfraError(format!("메시지 직렬화 실패: {}", e)))?;
-        
-        let mut w = self.writer.lock().map_err(|_| SmlError::InfraError("로거 락 획득 실패".into()))?;
+        let json_line = serde_json::to_string(message)
+            .map_err(|e| SmlError::InfraError(format!("메시지 직렬화 실패: {}", e)))?;
+
+        let mut w = self
+            .writer
+            .lock()
+            .map_err(|_| SmlError::InfraError("로거 락 획득 실패".into()))?;
         self.rotate_if_needed(&mut w)?;
-        writeln!(w, "{}", json_line).map_err(|e| SmlError::InfraError(format!("세션 로그 쓰기 실패: {}", e)))?;
+        writeln!(w, "{}", json_line).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::StorageFull {
+                SmlError::InfraError("디스크 용량이 부족하여 로그 기록을 중단합니다".into())
+            } else {
+                SmlError::InfraError(format!("세션 로그 쓰기 실패: {}", e))
+            }
+        })?;
         // [v1.0.0] BufWriter 플러시 타이밍 결함 해소 (비정상 종료 시 로그 유실 방지)
-        w.flush().map_err(|e| SmlError::InfraError(format!("세션 로그 flush 실패: {}", e)))?;
+        w.flush().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::StorageFull {
+                SmlError::InfraError("디스크 용량이 부족하여 로그 기록을 중단합니다".into())
+            } else {
+                SmlError::InfraError(format!("세션 로그 flush 실패: {}", e))
+            }
+        })?;
         Ok(())
     }
 
     /// 메시지를 JSONL 한 줄로 추가 저장. (비동기 — 런타임 호출 경로용)
+    #[allow(dead_code)] // [v3.7.0] 대용량 로그 시나리오 대비 비동기 API 예비
     pub async fn append_message_async(&self, message: &ChatMessage) -> Result<(), SmlError> {
         // [v1.0.0] BufWriter를 사용하므로 비동기 호출에서도 동기 메서드를 사용하거나 tokio의 blocking으로 처리합니다.
-        let json_line = serde_json::to_string(message).map_err(|e| SmlError::InfraError(format!("메시지 직렬화 실패: {}", e)))?;
-        
-        let mut w = self.writer.lock().map_err(|_| SmlError::InfraError("로거 락 획득 실패".into()))?;
+        let json_line = serde_json::to_string(message)
+            .map_err(|e| SmlError::InfraError(format!("메시지 직렬화 실패: {}", e)))?;
+
+        let mut w = self
+            .writer
+            .lock()
+            .map_err(|_| SmlError::InfraError("로거 락 획득 실패".into()))?;
         self.rotate_if_needed(&mut w)?;
-        writeln!(w, "{}", json_line).map_err(|e| SmlError::InfraError(format!("세션 로그 쓰기 실패: {}", e)))?;
-        w.flush().map_err(|e| SmlError::InfraError(format!("세션 로그 flush 실패: {}", e)))?;
+        writeln!(w, "{}", json_line).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::StorageFull {
+                SmlError::InfraError("디스크 용량이 부족하여 로그 기록을 중단합니다".into())
+            } else {
+                SmlError::InfraError(format!("세션 로그 쓰기 실패: {}", e))
+            }
+        })?;
+        w.flush().map_err(|e| {
+            if e.kind() == std::io::ErrorKind::StorageFull {
+                SmlError::InfraError("디스크 용량이 부족하여 로그 기록을 중단합니다".into())
+            } else {
+                SmlError::InfraError(format!("세션 로그 flush 실패: {}", e))
+            }
+        })?;
         Ok(())
     }
 
@@ -159,13 +202,22 @@ impl SessionLogger {
             let _ = w.flush();
         }
 
-        let content =
-            std::fs::read_to_string(&self.file_path).map_err(|e| SmlError::InfraError(format!("세션 로그 파일 읽기 실패: {}", e)))?;
+        let file = std::fs::File::open(&self.file_path)
+            .map_err(|e| SmlError::InfraError(format!("세션 로그 파일 열기 실패: {}", e)))?;
+        let reader = std::io::BufReader::new(file);
+        use std::io::BufRead;
 
         let mut messages = Vec::new();
         let mut errors = 0usize;
 
-        for line in content.lines() {
+        for line_result in reader.lines() {
+            let line = match line_result {
+                Ok(l) => l,
+                Err(_) => {
+                    errors += 1;
+                    continue;
+                }
+            };
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
@@ -180,7 +232,8 @@ impl SessionLogger {
     }
 
     fn get_log_dir() -> Result<PathBuf, SmlError> {
-        let home = dirs::home_dir().ok_or_else(|| SmlError::InfraError("홈 디렉토리를 찾을 수 없습니다".into()))?;
+        let home = dirs::home_dir()
+            .ok_or_else(|| SmlError::InfraError("홈 디렉토리를 찾을 수 없습니다".into()))?;
         Ok(home.join(".smlcli").join("sessions"))
     }
 
@@ -204,7 +257,11 @@ impl SessionLogger {
             .await
             .map_err(|e| SmlError::InfraError(format!("세션 디렉토리 읽기 실패: {}", e)))?;
 
-        while let Some(entry) = entries.next_entry().await.map_err(|e| SmlError::InfraError(format!("디렉토리 항목 읽기 실패: {}", e)))? {
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| SmlError::InfraError(format!("디렉토리 항목 읽기 실패: {}", e)))?
+        {
             let path = entry.path();
             if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
                 let name = path
@@ -212,7 +269,10 @@ impl SessionLogger {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_string();
-                let metadata = entry.metadata().await.map_err(|e| SmlError::InfraError(format!("메타데이터 읽기 실패: {}", e)))?;
+                let metadata = entry
+                    .metadata()
+                    .await
+                    .map_err(|e| SmlError::InfraError(format!("메타데이터 읽기 실패: {}", e)))?;
                 let size = metadata.len();
 
                 // 메시지 수(라인 수) 계산
@@ -226,5 +286,170 @@ impl SessionLogger {
         // 최신 순 정렬
         sessions.sort_by(|a, b| b.0.cmp(&a.0));
         Ok(sessions)
+    }
+
+    // ======================================================================
+    // [v3.6.0] Phase 46 Task S-1: Workspace-scoped Session Management
+    // ======================================================================
+
+    /// 현재 워크스페이스에 연결된 새 세션을 생성하고, 인덱스에 등록합니다.
+    /// Auto-Titling을 위한 임시 제목은 "새 세션"으로 설정됩니다.
+    pub fn new_workspace_session(
+        workspace_root: &str,
+    ) -> Result<(Self, crate::domain::session::SessionMetadata), SmlError> {
+        let log_dir = Self::get_log_dir()?;
+        if !log_dir.exists() {
+            std::fs::create_dir_all(&log_dir).map_err(|e| {
+                SmlError::InfraError(format!("세션 로그 디렉토리 생성 실패: {}", e))
+            })?;
+        }
+
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let timestamp = Self::unix_timestamp();
+        let now_ms = Self::unix_timestamp_ms();
+        let filename = format!("session_{}_{}.jsonl", timestamp, &session_id[..6]);
+        let file_path = log_dir.join(&filename);
+
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&file_path)
+            .map_err(|e| SmlError::InfraError(format!("세션 로그 파일 열기 실패: {}", e)))?;
+
+        let logger = Self {
+            file_path,
+            writer: Mutex::new(BufWriter::new(file)),
+        };
+        let _ = logger.cleanup_old_logs();
+
+        let metadata = crate::domain::session::SessionMetadata {
+            session_id,
+            workspace_root: workspace_root.to_string(),
+            title: "새 세션".to_string(),
+            created_at_unix_ms: now_ms,
+            updated_at_unix_ms: now_ms,
+            log_filename: filename,
+        };
+
+        // 인덱스에 메타데이터 추가
+        let _ = SessionIndex::upsert(&metadata);
+
+        Ok((logger, metadata))
+    }
+
+    /// Unix 타임스탬프 (밀리초 단위)
+    fn unix_timestamp_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+}
+
+// ======================================================================
+// [v3.6.0] Phase 46 Task S-1: 세션 인덱스 관리
+// sessions_index.json 파일을 통해 세션 목록을 빠르게 조회합니다.
+// 전체 JSONL 파일을 파싱하지 않고 메타데이터만으로 목록을 렌더링할 수 있습니다.
+// ======================================================================
+
+pub struct SessionIndex;
+
+impl SessionIndex {
+    /// 인덱스 파일 경로: ~/.smlcli/sessions/sessions_index.json
+    fn index_path() -> Result<PathBuf, SmlError> {
+        let home = dirs::home_dir()
+            .ok_or_else(|| SmlError::InfraError("홈 디렉토리를 찾을 수 없습니다".into()))?;
+        Ok(home
+            .join(".smlcli")
+            .join("sessions")
+            .join("sessions_index.json"))
+    }
+
+    /// 전체 인덱스 로드. 파일이 없으면 빈 벡터 반환.
+    pub fn load_all() -> Result<Vec<crate::domain::session::SessionMetadata>, SmlError> {
+        let path = Self::index_path()?;
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| SmlError::InfraError(format!("세션 인덱스 읽기 실패: {}", e)))?;
+        let entries: Vec<crate::domain::session::SessionMetadata> =
+            serde_json::from_str(&content).unwrap_or_default();
+        Ok(entries)
+    }
+
+    /// 특정 워크스페이스의 세션만 필터링하여 반환 (최신순 정렬).
+    pub fn list_for_workspace(
+        workspace_root: &str,
+    ) -> Result<Vec<crate::domain::session::SessionMetadata>, SmlError> {
+        let mut all = Self::load_all()?;
+        all.retain(|m| m.workspace_root == workspace_root);
+        // 최신순 정렬
+        all.sort_by(|a, b| b.updated_at_unix_ms.cmp(&a.updated_at_unix_ms));
+        Ok(all)
+    }
+
+    /// 메타데이터를 인덱스에 삽입/갱신 (session_id 기준 upsert).
+    pub fn upsert(metadata: &crate::domain::session::SessionMetadata) -> Result<(), SmlError> {
+        let mut all = Self::load_all()?;
+        if let Some(existing) = all.iter_mut().find(|m| m.session_id == metadata.session_id) {
+            existing.title = metadata.title.clone();
+            existing.updated_at_unix_ms = metadata.updated_at_unix_ms;
+        } else {
+            all.push(metadata.clone());
+        }
+        Self::save_all(&all)
+    }
+
+    /// 세션 제목 갱신 (Auto-Titling에서 사용).
+    #[allow(dead_code)] // [v3.7.0] Auto-Titling 기능 연결 시 활성화 예정
+    pub fn update_title(session_id: &str, new_title: &str) -> Result<(), SmlError> {
+        let mut all = Self::load_all()?;
+        if let Some(entry) = all.iter_mut().find(|m| m.session_id == session_id) {
+            entry.title = new_title.to_string();
+            entry.updated_at_unix_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+        }
+        Self::save_all(&all)
+    }
+
+    /// 세션의 updated_at 타임스탬프를 현재 시각으로 갱신.
+    pub fn touch(session_id: &str) -> Result<(), SmlError> {
+        let mut all = Self::load_all()?;
+        if let Some(entry) = all.iter_mut().find(|m| m.session_id == session_id) {
+            entry.updated_at_unix_ms = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+        }
+        Self::save_all(&all)
+    }
+
+    /// session_id로 특정 세션 메타데이터를 조회.
+    #[allow(dead_code)] // [v3.7.0] /resume 명령어 연결 시 활성화 예정
+    pub fn find_by_id(
+        session_id: &str,
+    ) -> Result<Option<crate::domain::session::SessionMetadata>, SmlError> {
+        let all = Self::load_all()?;
+        Ok(all.into_iter().find(|m| m.session_id == session_id))
+    }
+
+    /// 전체 인덱스를 파일에 저장.
+    fn save_all(entries: &[crate::domain::session::SessionMetadata]) -> Result<(), SmlError> {
+        let path = Self::index_path()?;
+        if let Some(parent) = path.parent()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                SmlError::InfraError(format!("세션 인덱스 디렉토리 생성 실패: {}", e))
+            })?;
+        }
+        let json = serde_json::to_string_pretty(entries)
+            .map_err(|e| SmlError::InfraError(format!("세션 인덱스 직렬화 실패: {}", e)))?;
+        std::fs::write(&path, json)
+            .map_err(|e| SmlError::InfraError(format!("세션 인덱스 쓰기 실패: {}", e)))?;
+        Ok(())
     }
 }

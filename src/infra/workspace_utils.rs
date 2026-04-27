@@ -46,30 +46,36 @@ mod tests {
     fn test_find_workspace_root_with_git() {
         let dir = tempdir().unwrap();
         let root = dir.path();
-        
+
         // Create .git dir
         fs::create_dir(root.join(".git")).unwrap();
-        
+
         let subdir = root.join("src").join("module");
         fs::create_dir_all(&subdir).unwrap();
 
         let found = find_workspace_root(&subdir);
-        assert_eq!(found.canonicalize().unwrap_or(found.clone()), root.canonicalize().unwrap_or(root.to_path_buf()));
+        assert_eq!(
+            found.canonicalize().unwrap_or(found.clone()),
+            root.canonicalize().unwrap_or(root.to_path_buf())
+        );
     }
 
     #[test]
     fn test_find_workspace_root_with_cargo_toml() {
         let dir = tempdir().unwrap();
         let root = dir.path();
-        
+
         // Create Cargo.toml
         fs::write(root.join("Cargo.toml"), "").unwrap();
-        
+
         let subdir = root.join("src");
         fs::create_dir_all(&subdir).unwrap();
 
         let found = find_workspace_root(&subdir);
-        assert_eq!(found.canonicalize().unwrap_or(found.clone()), root.canonicalize().unwrap_or(root.to_path_buf()));
+        assert_eq!(
+            found.canonicalize().unwrap_or(found.clone()),
+            root.canonicalize().unwrap_or(root.to_path_buf())
+        );
     }
 
     #[test]
@@ -79,6 +85,9 @@ mod tests {
         fs::create_dir_all(&subdir).unwrap();
 
         let found = find_workspace_root(&subdir);
-        assert_eq!(found.canonicalize().unwrap_or(found.clone()), subdir.canonicalize().unwrap_or(subdir.clone()));
+        assert_eq!(
+            found.canonicalize().unwrap_or(found.clone()),
+            subdir.canonicalize().unwrap_or(subdir.clone())
+        );
     }
 }

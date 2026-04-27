@@ -48,13 +48,14 @@
 * **MANDATORY GROUNDING:** 학습된 데이터(Training Data)는 최신 기술과 맞지 않을 가능성이 높으므로, 오류 해결에 실패할 경우 재시도 없이 '즉시' 그라운딩을 수행하여 최신 레퍼런스를 참조해야 한다.
 
 ## 6. Documentation Rules
-* **SPEC_IS_LAW:** `spec.md`는 이 프로젝트의 절대적인 **'마스터플랜(Master Plan)'**이다. 
-    * `designs.md`, `README.md`, `DESIGN_DECISIONS.md` 등 모든 하위 문서는 오직 `spec.md`에 명시된 기술 스펙과 방향성을 근간으로 파생되어야 한다. 
+* **SPEC_IS_LAW:** `spec.md`는 이 프로젝트의 절대적인 **'마스터플랜(Master Plan)'**이다.
+    * `designs.md`, `README.md`, `DESIGN_DECISIONS.md` 등 모든 하위 문서는 오직 `spec.md`에 명시된 기술 스펙과 방향성을 근간으로 파생되어야 한다.
     * 하위 문서 생성 및 수정 시 `spec.md`의 내용과 충돌하는 설정이나 임의의 기능 추가는 엄격히 금지된다.
 * **CRITICAL:** 모든 작업에서 문서 작성 및 갱신을 최우선 순위(Top Priority)로 두며, 개발 착수 전/후에 반드시 관련 문서를 먼저 점검한다.
 * **STANDARD_ENFORCEMENT (CRITICAL):** 프로젝트 내 모든 기획/스펙/설계/요약 문서 작성 시 반드시 `AI_IMPLEMENTATION_DOC_STANDARD.md`를 우선 참조해야 한다. 해당 문서에 명시된 Typed Contracts(데이터 타입 명시), Concrete Numbers(구체적 수치), Real Data Samples(실데이터), Execution & Verification Path(구현/검증 순서), Scope Closure(목표/비목표 명확화) 기준을 충족하지 못하는 문서는 통과(Accepted)되지 않은 것으로 간주하며 재작성해야 한다.
 * **UTF-8 ENFORCEMENT (CRITICAL):** 모든 파일의 읽기 및 쓰기(소스 코드, 마크다운 문서 등 포함) 작업 시 반드시 **UTF-8 인코딩**을 강제한다. 한국어 Windows 환경의 기본 인코딩(cp949 등)으로 인해 텍스트가 깨지거나 데이터가 손실되는 문제를 원천 차단하기 위해, 시스템 환경에 의존하지 말고 모든 파일 I/O 작업에 명시적으로 UTF-8을 지정해야 한다.
 * **VERIFICATION:** 개발 시 소스 코드와 문서 간의 정합성을 검증하는 루틴을 상시 가동하며, 불일치 발견 시 즉시 코드 수정을 중단하고 문서를 동기화한다.
+* **AUDIT_PROTOCOL (CRITICAL):** `implementation-auditor` 에이전트를 통한 감사는 반드시 **[1. 감사 -> 2. 리포트 및 승인(ask_user) -> 3. 문서 반영]**의 3단계 프로세스를 준수해야 한다. 승인 없이 문서를 임의로 수정하는 것은 금지되며, 반영 시 `AI_IMPLEMENTATION_DOC_STANDARD.md`의 'Reference Grade' 기준을 충족해야 한다.
 * **README Language:** README.md는 반드시 다국어로 작성하며, 언어 순서는 [한 / 영 / 일 / 중(번체) / 중(간체)]를 엄수할 것
 * **Standard Language:** README.md를 제외한 모든 문서(CHANGELOG, DESIGN_DECISIONS, IMPLEMENTATION_SUMMARY, designs.md 등)는 반드시 '한국어'로만 작성할 것
 * **Sync Policy:** 코드 변경 시 연관된 모든 문서를 즉시 동기화할 것

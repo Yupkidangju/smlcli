@@ -8,6 +8,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::task;
 
+// [v3.7.0] Resize variant의 필드는 이벤트 라우팅에서 참조되지만 clippy가 직접 읽기를 감지 못함.
+#[allow(dead_code)]
 pub enum Event {
     Tick,
     Input(KeyEvent),
@@ -72,7 +74,9 @@ impl EventLoop {
         task::spawn(async move {
             #[cfg(unix)]
             {
-                let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+                let mut sigterm =
+                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                        .unwrap();
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {}
                     _ = sigterm.recv() => {}

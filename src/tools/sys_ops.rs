@@ -8,19 +8,28 @@ use sysinfo::System;
 /// 최대 항목 수 제한으로 대규모 디렉토리 과부하 방지.
 const MAX_ENTRIES: usize = 1000;
 
-pub(crate) fn list_dir(path: &str, depth: Option<usize>) -> anyhow::Result<crate::domain::tool_result::ToolResult> {
+pub(crate) fn list_dir(
+    path: &str,
+    depth: Option<usize>,
+) -> anyhow::Result<crate::domain::tool_result::ToolResult> {
     let max_depth = depth.unwrap_or(2);
     let mut count = 0;
 
     if fs::read_dir(path).is_err() {
-        return Err(anyhow::anyhow!("Cannot read directory or it does not exist: {}", path));
+        return Err(anyhow::anyhow!(
+            "Cannot read directory or it does not exist: {}",
+            path
+        ));
     }
 
     let json_tree = list_dir_recursive_json(path, max_depth, 0, &mut count);
 
     let mut out = serde_json::to_string_pretty(&json_tree).unwrap_or_default();
     if count >= MAX_ENTRIES {
-        out.push_str(&format!("\n... ({}개 항목 제한으로 일부 생략됨)\n", MAX_ENTRIES));
+        out.push_str(&format!(
+            "\n... ({}개 항목 제한으로 일부 생략됨)\n",
+            MAX_ENTRIES
+        ));
     }
 
     Ok(crate::domain::tool_result::ToolResult {
@@ -30,6 +39,9 @@ pub(crate) fn list_dir(path: &str, depth: Option<usize>) -> anyhow::Result<crate
         exit_code: 0,
         is_error: false,
         tool_call_id: None,
+        is_truncated: false,
+        original_size_bytes: None,
+        affected_paths: vec![],
     })
 }
 
@@ -65,7 +77,7 @@ fn list_dir_recursive_json(
         }
 
         let name = entry.file_name().to_string_lossy().to_string();
-        
+
         // [v0.1.0-beta.18] Phase 18: 기본 무시 디렉터리 적용
         if name == "node_modules" || name == "target" || name == ".git" {
             continue;
@@ -81,7 +93,8 @@ fn list_dir_recursive_json(
 
         if is_dir {
             let child_path = format!("{}/{}", path, name);
-            let child_tree = list_dir_recursive_json(&child_path, max_depth, current_depth + 1, count);
+            let child_tree =
+                list_dir_recursive_json(&child_path, max_depth, current_depth + 1, count);
             node["children"] = child_tree;
         } else {
             if let Ok(meta) = entry.metadata() {
@@ -117,6 +130,9 @@ pub(crate) fn sys_info() -> Result<ToolResult> {
         exit_code: 0,
         is_error: false,
         tool_call_id: None,
+        is_truncated: false,
+        original_size_bytes: None,
+        affected_paths: vec![],
     })
 }
 
@@ -161,7 +177,11 @@ impl Tool for ListDirTool {
         })
     }
 
-    fn check_permission(&self, _args: &Value, _settings: &PersistedSettings) -> PermissionResult {
+    fn check_permission(&self, args: &Value, _settings: &PersistedSettings) -> PermissionResult {
+        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        if let Err(e) = crate::tools::file_ops::validate_sandbox(path) {
+            return PermissionResult::Deny(e);
+        }
         PermissionResult::Allow
     }
 
@@ -243,7 +263,11 @@ impl Tool for StatTool {
         })
     }
 
-    fn check_permission(&self, _args: &Value, _settings: &PersistedSettings) -> PermissionResult {
+    fn check_permission(&self, args: &Value, _settings: &PersistedSettings) -> PermissionResult {
+        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        if let Err(e) = crate::tools::file_ops::validate_sandbox(path) {
+            return PermissionResult::Deny(e);
+        }
         PermissionResult::Allow
     }
 
@@ -286,6 +310,9 @@ impl Tool for StatTool {
                     exit_code: 0,
                     is_error: false,
                     tool_call_id: None,
+                    is_truncated: false,
+                    original_size_bytes: None,
+                    affected_paths: vec![],
                 })
             }
             Err(e) => Ok(ToolResult {
@@ -295,6 +322,9 @@ impl Tool for StatTool {
                 exit_code: 1,
                 is_error: true,
                 tool_call_id: None,
+                is_truncated: false,
+                original_size_bytes: None,
+                affected_paths: vec![],
             }),
         }
     }
