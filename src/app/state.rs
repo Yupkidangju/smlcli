@@ -2,7 +2,8 @@
 // [v0.1.0-beta.19] AppState를 Domain, Ui, Runtime으로 분리하고 비동기 초기화 지원.
 
 // [v3.7.0] 인스펙터 탭 variant는 TUI 인스펙터 고도화 시 활성화 예정.
-#[derive(Debug, Clone, PartialEq)]
+// [v3.9.0] D3D Protocol 데이터 계약 사양에 맞춰 Copy, Eq, Hash 특성 파생
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[allow(dead_code)]
 pub enum InspectorTab {
     Preview,
@@ -39,19 +40,23 @@ pub enum BlockSection {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+// [v3.9.0] D3D Protocol 데이터 계약 사양에 맞춰 Copy, Eq, Hash 특성 파생 및 Reverted(롤백 완료) 상태 추가
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum BlockStatus {
-    Idle,
-    Running,
-    Done,
-    Error,
-    NeedsApproval,
+    Idle,          // 초기 대기 상태
+    Running,       // 동작 실행 중
+    Done,          // 정상 완료
+    Error,         // 실행 실패/에러 발생
+    NeedsApproval, // 유저의 승인 대기 중 (주황색 테마)
+    #[allow(dead_code)]
+    Reverted, // 변경 사항 롤백 완료
 }
 
-#[derive(Debug, Clone, PartialEq)]
+// [v3.9.0] D3D Protocol 데이터 계약 사양에 맞춰 Copy, Eq, Hash 특성 파생
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum BlockDisplayMode {
-    Collapsed,
-    Expanded,
+    Collapsed, // 요약 모드 (3줄 미리보기)
+    Expanded,  // 전체 확장 모드
 }
 
 // [v3.7.0] TimelineBlock의 id, subtitle, pinned, created_at_ms 필드는
@@ -181,12 +186,15 @@ impl DomainState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+// [v3.9.0] D3D Protocol 데이터 계약 사양에 맞춰 Copy, Eq, Hash 특성 파생 및 Questionnaire(설문 조사 모달) 활성 창 추가
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum FocusedPane {
-    Timeline,
-    Inspector,
-    Composer,
-    Palette,
+    Timeline,  // 중앙 타임라인 히스토리
+    Inspector, // 우측 상세 보기
+    Composer,  // 하단 입력 상자
+    Palette,   // Ctrl+K 액션 팔레트 (플로팅 오버레이)
+    #[allow(dead_code)]
+    Questionnaire, // 요구사항 확인 설문조사 (플로팅 오버레이)
 }
 
 /// [v2.3.0] Phase 31: 클립보드 등 UI 알림을 위한 상태 구조체
@@ -626,6 +634,8 @@ pub struct AppState {
     pub domain: DomainState,
     pub ui: UiState,
     pub runtime: RuntimeState,
+    /// [v3.9.0] Phase 1-C: 다국어(i18n) 번역 리소스 매니저
+    pub i18n: crate::tui::i18n::I18nManager,
 }
 
 impl AppState {
@@ -635,11 +645,23 @@ impl AppState {
         let ui = UiState::new(is_wizard_open);
         let runtime = RuntimeState::new();
 
+        // [v3.9.0] 1. 설정에 명시된 언어를 우선으로 하며, 없는 경우 환경변수(LANG, LC_ALL) 파싱.
+        // 환경변수도 없는 경우 기본값 "en"으로 폴백한다.
+        let lang = if let Some(settings) = &domain.settings {
+            settings.lang.clone()
+        } else {
+            std::env::var("LANG")
+                .or_else(|_| std::env::var("LC_ALL"))
+                .unwrap_or_else(|_| "en".to_string())
+        };
+        let i18n = crate::tui::i18n::I18nManager::new(&lang);
+
         let mut state = Self {
             should_quit: false,
             domain,
             ui,
             runtime,
+            i18n,
         };
         if let Some(err) = state.domain.config_load_error.clone() {
             state.apply_startup_config_error(err);
@@ -662,11 +684,13 @@ impl AppState {
         };
         let ui = UiState::new(false);
         let runtime = RuntimeState::new();
+        let i18n = crate::tui::i18n::I18nManager::new("en");
         Self {
             should_quit: false,
             domain,
             ui,
             runtime,
+            i18n,
         }
     }
 

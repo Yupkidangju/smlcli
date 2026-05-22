@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>smlcli - Undo Result</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,600;0,700;0,800;1,400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "outline-variant": "#494454",
+                        "outline": "#958ea0",
+                        "tertiary-container": "#ca801e",
+                        "on-surface": "#d4e4fa",
+                        "on-secondary-fixed": "#131b2e",
+                        "inverse-on-surface": "#233143",
+                        "on-primary": "#3c0091",
+                        "tertiary": "#ffb869",
+                        "secondary-container": "#3f465c",
+                        "on-primary-fixed": "#23005c",
+                        "error": "#ffb4ab",
+                        "surface-container-low": "#0d1c2d",
+                        "tertiary-fixed-dim": "#ffb869",
+                        "on-tertiary": "#482900",
+                        "on-background": "#d4e4fa",
+                        "surface-bright": "#2c3a4c",
+                        "primary": "#d0bcff",
+                        "error-container": "#93000a",
+                        "surface-dim": "#051424",
+                        "on-error-container": "#ffdad6",
+                        "surface-container-highest": "#273647",
+                        "on-error": "#690005",
+                        "primary-fixed-dim": "#d0bcff",
+                        "secondary-fixed-dim": "#bec6e0",
+                        "on-tertiary-container": "#3f2300",
+                        "tertiary-fixed": "#ffdcbb",
+                        "primary-container": "#a078ff",
+                        "on-primary-fixed-variant": "#5516be",
+                        "inverse-primary": "#6d3bd7",
+                        "surface-container-lowest": "#010f1f",
+                        "on-tertiary-fixed": "#2c1700",
+                        "surface-tint": "#d0bcff",
+                        "secondary": "#bec6e0",
+                        "on-secondary-container": "#adb4ce",
+                        "on-tertiary-fixed-variant": "#673d00",
+                        "primary-fixed": "#e9ddff",
+                        "inverse-surface": "#d4e4fa",
+                        "surface-container-high": "#1c2b3c",
+                        "surface-container": "#122131",
+                        "secondary-fixed": "#dae2fd",
+                        "on-primary-container": "#340080",
+                        "surface": "#051424",
+                        "on-secondary": "#283044",
+                        "on-surface-variant": "#cbc3d7",
+                        "background": "#051424",
+                        "surface-variant": "#273647",
+                        "on-secondary-fixed-variant": "#3f465c"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "chip-gap": "0.75rem",
+                        "container-padding-y": "1rem",
+                        "composer-height": "4rem",
+                        "container-padding-x": "2rem",
+                        "block-gap": "1.5rem"
+                    },
+                    "fontFamily": {
+                        "label-sm": ["JetBrains Mono", "monospace"],
+                        "code-block": ["JetBrains Mono", "monospace"],
+                        "ui-bold": ["JetBrains Mono", "monospace"],
+                        "ui-italic": ["JetBrains Mono", "monospace"],
+                        "header-title": ["JetBrains Mono", "monospace"]
+                    },
+                    "fontSize": {
+                        "label-sm": ["12px", { "lineHeight": "16px", "fontWeight": "600" }],
+                        "code-block": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "ui-bold": ["14px", { "lineHeight": "20px", "fontWeight": "700" }],
+                        "ui-italic": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "header-title": ["16px", { "lineHeight": "24px", "fontWeight": "800" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { font-family: 'JetBrains Mono', monospace; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-background text-on-background min-h-screen flex flex-col md:flex-row overflow-hidden selection:bg-primary-container selection:text-on-primary-container">
+<!-- Main Content Area -->
+<div class="flex-1 flex flex-col h-screen relative pl-0 md:pr-80">
+<!-- TopAppBar -->
+<header class="bg-surface dark:bg-surface border-b border-outline-variant dark:border-outline-variant flex justify-between items-center px-container-padding-x h-12 w-full z-10 shrink-0">
+<div class="flex items-center gap-4">
+<span class="font-header-title text-header-title text-primary dark:text-primary">smlcli</span>
+<div class="hidden sm:flex items-center gap-2 px-2 py-0.5 rounded border border-outline-variant bg-surface-container-high">
+<span class="w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+<span class="font-label-sm text-label-sm text-on-surface">RUN</span>
+</div>
+<div class="hidden sm:flex items-center gap-2 px-2 py-0.5 rounded border border-outline-variant text-secondary">
+<span class="font-label-sm text-label-sm">[Git: Reverted]</span>
+</div>
+</div>
+<div class="flex items-center gap-4">
+<button aria-label="Terminal" class="text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-variant dark:hover:bg-surface-variant transition-colors duration-150 p-1.5 rounded">
+<span class="material-symbols-outlined text-[20px]" data-icon="terminal">terminal</span>
+</button>
+<button aria-label="Settings" class="text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-variant dark:hover:bg-surface-variant transition-colors duration-150 p-1.5 rounded">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+</button>
+<button aria-label="Help" class="text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-variant dark:hover:bg-surface-variant transition-colors duration-150 p-1.5 rounded">
+<span class="material-symbols-outlined text-[20px]" data-icon="help">help</span>
+</button>
+</div>
+</header>
+<!-- Timeline (Scrollable) -->
+<main class="flex-1 overflow-y-auto p-container-padding-x pb-24 scrollbar-hide flex flex-col gap-block-gap">
+<!-- Previous Turn (Faded) -->
+<div class="flex gap-4 opacity-50">
+<div class="w-1 bg-primary rounded-full shrink-0"></div>
+<div class="flex-1 flex flex-col gap-2">
+<div class="flex items-center gap-2">
+<span class="font-ui-bold text-ui-bold text-primary">User</span>
+<span class="font-label-sm text-label-sm text-outline">10:42 AM</span>
+</div>
+<div class="font-code-block text-code-block bg-surface-container p-3 rounded border border-outline-variant">
+                        &gt; Please add refresh token logic to the AuthContext.
+                    </div>
+</div>
+</div>
+<!-- Previous System Turn (Faded) -->
+<div class="flex gap-4 opacity-50">
+<div class="w-1 bg-secondary rounded-full shrink-0"></div>
+<div class="flex-1 flex flex-col gap-2">
+<div class="flex items-center gap-2">
+<span class="font-ui-bold text-ui-bold text-secondary">System</span>
+<span class="font-label-sm text-label-sm text-outline">10:43 AM</span>
+</div>
+<div class="bg-surface-container rounded border border-outline-variant overflow-hidden">
+<div class="border-b border-outline-variant px-3 py-2 flex items-center justify-between bg-surface-container-high">
+<span class="font-ui-bold text-ui-bold text-on-surface">ReplaceFileContent</span>
+<span class="font-label-sm text-label-sm text-outline">src/auth/AuthContext.jsx</span>
+</div>
+<div class="p-3 font-code-block text-code-block text-outline">
+                            Updated 42 lines.
+                        </div>
+</div>
+</div>
+</div>
+<!-- Current User Turn -->
+<div class="flex gap-4">
+<div class="w-1 bg-primary rounded-full shrink-0"></div>
+<div class="flex-1 flex flex-col gap-2">
+<div class="flex items-center gap-2">
+<span class="font-ui-bold text-ui-bold text-primary">User</span>
+<span class="font-label-sm text-label-sm text-outline">10:45 AM</span>
+</div>
+<div class="font-code-block text-code-block bg-surface-container p-3 rounded border border-outline-variant">
+                        &gt; /undo
+                    </div>
+</div>
+</div>
+<!-- Current System Turn -->
+<div class="flex gap-4">
+<div class="w-1 bg-[#10b981] rounded-full shrink-0 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
+<div class="flex-1 flex flex-col gap-2">
+<div class="flex items-center gap-2">
+<span class="font-ui-bold text-ui-bold text-[#10b981]">System</span>
+<span class="font-label-sm text-label-sm text-outline">10:45 AM</span>
+</div>
+<div class="bg-surface-container rounded border border-[#10b981]/30 overflow-hidden relative">
+<div class="absolute top-0 left-0 w-full h-full bg-[#10b981]/5 pointer-events-none"></div>
+<div class="px-4 py-3 border-b border-outline-variant flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px] text-secondary" data-icon="info">info</span>
+<span class="font-ui-bold text-ui-bold text-on-surface">Resumed session #42</span>
+<span class="font-code-block text-code-block text-outline ml-auto">Reverted to previous checkpoint.</span>
+</div>
+<div class="p-4">
+<div class="flex items-start gap-3 bg-surface p-3 rounded border border-outline-variant">
+<span class="material-symbols-outlined text-[20px] text-[#10b981] mt-0.5" data-icon="check_circle">check_circle</span>
+<div class="flex-1">
+<div class="flex items-center justify-between mb-1">
+<span class="font-ui-bold text-ui-bold text-on-surface">Reverted last change</span>
+<span class="px-2 py-0.5 bg-[#10b981]/20 text-[#10b981] rounded text-xs font-bold">DONE</span>
+</div>
+<div class="font-code-block text-code-block text-secondary">
+                                        ReplaceFileContent <span class="text-outline">(src/auth/AuthContext.jsx)</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- Composer Area -->
+<div class="fixed bottom-0 left-0 w-full md:w-[calc(100%-20rem)] bg-surface-container p-4 border-t border-outline-variant z-20 flex flex-col gap-2 pb-safe">
+<!-- Toolbar Chips -->
+<div class="flex items-center gap-chip-gap overflow-x-auto scrollbar-hide pb-1">
+<div class="px-3 py-1 rounded-full bg-primary-container text-on-primary-container font-label-sm text-label-sm flex items-center gap-1 shrink-0">
+<span class="w-2 h-2 rounded-full bg-on-primary-container"></span> RUN
+                </div>
+<div class="px-3 py-1 rounded-full border border-outline-variant text-on-surface font-label-sm text-label-sm flex items-center gap-1 shrink-0">
+<span class="material-symbols-outlined text-[14px]" data-icon="folder">folder</span> ~/workspace/auth-module
+                </div>
+<div class="px-3 py-1 rounded-full border border-[#f59e0b] text-[#f59e0b] font-label-sm text-label-sm flex items-center gap-1 shrink-0 bg-[#f59e0b]/10">
+<span class="material-symbols-outlined text-[14px]" data-icon="terminal">terminal</span> Shell Ask
+                </div>
+</div>
+<!-- Input Buffer -->
+<div class="relative bg-surface rounded border border-outline-variant flex items-center">
+<div class="pl-3 pr-2 py-3 text-primary font-code-block">❯</div>
+<input class="w-full bg-transparent border-none focus:ring-0 text-on-surface font-code-block text-code-block placeholder-outline-variant py-3" readonly="" type="text" value="/undo"/>
+<div class="px-3 text-outline">
+<span class="inline-block w-2 h-4 bg-outline-variant animate-pulse align-middle"></span>
+</div>
+</div>
+</div>
+</div>
+<!-- SideNavBar (Inspector) -->
+<aside class="fixed right-0 top-0 bottom-0 bg-surface-container dark:bg-surface-container border-l border-outline-variant dark:border-outline-variant flex-col pt-12 z-30 transition-all duration-200 docked h-full w-80 hidden md:flex">
+<div class="px-4 py-3 border-b border-outline-variant shrink-0">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-surface-container-high flex items-center justify-center border border-outline-variant">
+<span class="material-symbols-outlined text-primary text-[20px]" data-icon="terminal">terminal</span>
+</div>
+<div>
+<h2 class="font-header-title text-header-title text-on-surface m-0 leading-tight">Inspector</h2>
+<p class="font-label-sm text-label-sm text-outline m-0">smlcli v1.0</p>
+</div>
+</div>
+</div>
+<div class="flex border-b border-outline-variant shrink-0 bg-surface-container-low">
+<button class="flex-1 py-2 flex flex-col items-center justify-center gap-1 text-tertiary dark:text-tertiary border-b-2 border-tertiary bg-surface-container-high hover:bg-surface-variant dark:hover:bg-surface-variant transition-colors duration-150 relative">
+<span class="material-symbols-outlined text-[18px]" data-icon="visibility">visibility</span>
+<span class="font-label-sm text-label-sm">Preview</span>
+</button>
+<button class="flex-1 py-2 flex flex-col items-center justify-center gap-1 text-on-surface-variant dark:text-on-surface-variant border-b-2 border-transparent hover:bg-surface-variant dark:hover:bg-surface-variant transition-colors duration-150">
+<span class="material-symbols-outlined text-[18px]" data-icon="difference">difference</span>
+<span class="font-label-sm text-label-sm">Diff</span>
+</button>
+<button class="flex-1 py-2 flex flex-col items-center justify-center gap-1 text-on-surface-variant dark:text-on-surface-variant border-b-2 border-transparent hover:bg-surface-variant dark:hover:bg-surface-variant transition-colors duration-150">
+<span class="material-symbols-outlined text-[18px]" data-icon="list_alt">list_alt</span>
+<span class="font-label-sm text-label-sm">Logs</span>
+</button>
+<button class="flex-1 py-2 flex flex-col items-center justify-center gap-1 text-on-surface-variant dark:text-on-surface-variant border-b-2 border-transparent hover:bg-surface-variant dark:hover:bg-surface-variant transition-colors duration-150">
+<span class="material-symbols-outlined text-[18px]" data-icon="search">search</span>
+<span class="font-label-sm text-label-sm">Search</span>
+</button>
+<button class="flex-1 py-2 flex flex-col items-center justify-center gap-1 text-on-surface-variant dark:text-on-surface-variant border-b-2 border-transparent hover:bg-surface-variant dark:hover:bg-surface-variant transition-colors duration-150">
+<span class="material-symbols-outlined text-[18px]" data-icon="hub">hub</span>
+<span class="font-label-sm text-label-sm">Git</span>
+</button>
+</div>
+<div class="flex-1 overflow-y-auto p-4 bg-surface scrollbar-hide flex flex-col">
+<div class="flex items-center justify-between mb-2">
+<span class="font-ui-bold text-ui-bold text-on-surface">AuthContext.jsx</span>
+<span class="font-label-sm text-label-sm px-2 py-0.5 bg-tertiary-container/20 text-tertiary rounded">Original Content</span>
+</div>
+<div class="bg-surface-container-low rounded border border-outline-variant overflow-hidden flex-1 relative">
+<!-- Line Numbers -->
+<div class="absolute left-0 top-0 bottom-0 w-8 bg-surface-container border-r border-outline-variant flex flex-col items-center py-2 font-code-block text-[12px] text-outline select-none">
+<span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span>
+</div>
+<!-- Code -->
+<pre class="pl-10 pr-4 py-2 font-code-block text-[13px] leading-snug text-on-surface overflow-x-auto"><span class="text-[#c678dd]">import</span> React, { createContext, useContext, useState } <span class="text-[#c678dd]">from</span> <span class="text-[#98c379]">'react'</span>;
+
+<span class="text-[#c678dd]">const</span> AuthContext = <span class="text-[#61afef]">createContext</span>(<span class="text-[#d19a66]">null</span>);
+
+<span class="text-[#c678dd]">export const</span> AuthProvider = ({ children }) <span class="text-[#c678dd]">=&gt;</span> {
+  <span class="text-[#c678dd]">const</span> [user, setUser] = <span class="text-[#61afef]">useState</span>(<span class="text-[#d19a66]">null</span>);
+
+  <span class="text-[#c678dd]">const</span> login = (userData) <span class="text-[#c678dd]">=&gt;</span> {
+    <span class="text-[#61afef]">setUser</span>(userData);
+  };
+
+  <span class="text-[#c678dd]">const</span> logout = () <span class="text-[#c678dd]">=&gt;</span> {
+    <span class="text-[#61afef]">setUser</span>(<span class="text-[#d19a66]">null</span>);
+  };
+
+  <span class="text-[#c678dd]">return</span> (
+    <span class="text-[#e06c75]">&lt;AuthContext.Provider</span> value={{ user, login, logout }}<span class="text-[#e06c75]">&gt;</span>
+      {children}
+    <span class="text-[#e06c75]">&lt;/AuthContext.Provider&gt;</span>
+  );
+};
+                </pre>
+</div>
+</div>
+</aside>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex items-center justify-between px-container-padding-x bg-surface-container-low dark:bg-surface-container-lowest border-t border-outline-variant dark:border-outline-variant h-14 md:hidden">
+<button class="flex flex-col items-center justify-center text-outline dark:text-outline px-3 py-1 hover:text-primary dark:hover:text-primary transition-transform scale-95 active:scale-90">
+<span class="material-symbols-outlined text-[20px]" data-icon="edit_note">edit_note</span>
+<span class="font-label-sm text-label-sm mt-1 text-[10px]">PLAN</span>
+</button>
+<button class="flex flex-col items-center justify-center bg-primary-container text-on-primary-container rounded-lg px-6 py-1 transition-transform scale-95 active:scale-90">
+<span class="material-symbols-outlined text-[20px]" data-icon="play_arrow">play_arrow</span>
+<span class="font-label-sm text-label-sm mt-1 text-[10px]">RUN</span>
+</button>
+<button class="flex flex-col items-center justify-center text-outline dark:text-outline px-3 py-1 hover:text-primary dark:hover:text-primary transition-transform scale-95 active:scale-90">
+<span class="material-symbols-outlined text-[20px]" data-icon="gavel">gavel</span>
+<span class="font-label-sm text-label-sm mt-1 text-[10px]">POLICY</span>
+</button>
+</nav>
+</body></html>

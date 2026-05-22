@@ -1,4 +1,4 @@
-# smlcli Implementation Spec (v3.8.1)
+# smlcli Implementation Spec (v3.9.0)
 
 ## 0. Global Documentation Rules (Git Policy)
 
@@ -23,7 +23,7 @@
 smlcli
 
 **Current Version**
-v3.8.1
+v3.9.0
 
 **Status**
 Initial Specification & Implementation Entry
@@ -951,6 +951,7 @@ pub enum AutoVerifyState {
 - **Repo Map 백그라운드 생성 규칙**: Repo Map 생성은 `tokio::task::spawn_blocking` 워커에서 수행한다. UI/입력 루프는 절대 동기 스캔을 기다리지 않는다. 최근 생성본은 캐시에 유지하고, `WriteFile`/`ReplaceFileContent`/`ExecShell` 이후 stale 처리 후 백그라운드로 재생성한다.
 - **Git Checkpoint 안전 정책**: `create_checkpoint()`는 강제 커밋을 수행하지 **않는다**. 워킹 트리가 깨끗한지만 검사하여 `bool`을 반환하고, `true`일 때만 롤백(`git reset --hard HEAD`)이 허용된다. `git clean -fd`는 사용하지 **않으며**, untracked 파일은 어떤 경우에도 삭제되지 않는다.
 - **직접 셸 실행(`!`) 정책**: 사용자가 `!` 접두사로 직접 입력한 명령에 대해서도 `safe_to_auto_run: false`를 설정하여 `SafeOnly` 모드의 allowlist 정책을 반드시 존중한다. 블랙리스트와 allowlist 모두 동일하게 적용된다.
+- **ExecShell.safe_to_auto_run 신뢰 권한 경계 제한 정책**: AI 모델이 도구 호출 시 `safe_to_auto_run: true`로 마킹하여 전달하더라도, `SafeOnly` 모드에서는 이를 무조건 신뢰하지 않는다. 모델의 주장에 상관없이, 해당 명령이 런타임 빌트인 안전 명령(`is_builtin_safe`)이거나 사용자 설정 허용 목록(`is_custom_safe`)에 명시되어 있는 경우에만 `safe_to_auto_run=true`와 결합하여 자동 실행(`Allow`)을 승인한다. 안전 목록에 포함되지 않는 임의의 명령은 반드시 차단(`Deny`) 또는 명시적 사용자 승인(`Ask`)을 거치도록 강제하여 신뢰 권한 경계를 보호한다.
 - **Linux 샌드박스 백엔드**: Linux의 `ExecShell`은 `bubblewrap(bwrap)` 기반의 실제 프로세스 격리를 사용한다. 호스트 파일시스템은 기본 읽기 전용으로 노출하고, 요청한 작업 디렉터리만 `/workspace`로 쓰기 가능하게 bind mount 한다.
 - **HITL 만료 시간**: 승인 대기(`Approval`)는 시작 시각을 기록하고 **5분**이 지나면 자동 `Abort` 처리한다. 만료 시 pending queue와 diff preview를 즉시 비우고, 타임라인/세션에 시스템 알림을 남긴다.
 
@@ -1415,7 +1416,7 @@ Linux QA / Windows QA / release gate
 
 1. **Action enum 14종 확장**: ChatStarted/ChatDelta/ToolQueued/ToolStarted/ToolOutputChunk/ToolSummaryReady 추가
 2. **TimelineEntry 모델 도입**: session.messages(LLM 컨텍스트)와 timeline(UI 카드) 이중 구조. timeline이 비어있을 때만 session.messages 폴백 허용
-3. **Semantic Palette 도입**: info/success/warning/danger/muted + bg_base/bg_panel/bg_elevated 색상 체계
+3. **Semantic Palette 도입**: 11대 스케일 RGB 색상 체계 (accent, success, warning, danger, info, text_primary, text_secondary, outline + bg_base, bg_panel, bg_elevated, bg_lowest)
 4. **tick 기반 애니메이션**: thinking 스피너, 도구 실행 배지 깜빡임, diff 승인 pulse, compact progress
 5. **Inspector 탭 실체 구현**: Preview/Diff/Search/Logs/Recent 각 탭에 실제 콘텐츠 렌더링
 6. **Tool 출력 요약 분리**: raw stdout → 2~4줄 요약 타임라인, 원문 Logs 탭
@@ -1781,6 +1782,10 @@ ComposerToolbarState {
   - 포커스 전환, pane별 키 라우팅, palette 토글, 블록 조작 입력 처리
 - `src/app/command_router.rs`
   - `/help`는 palette와 동기화되는 구조화 데이터 소스로 전환
+- `src/tui/palette.rs`
+  - `bg_lowest`, `outline` 필드 추가 및 11대 RGB 고성능 팔레트 재매핑
+- `src/tui/i18n.rs`
+  - `I18nManager` 다국어 리소스 사전 구축 및 5대 지원 언어 연동
 - `src/tui/layout.rs`
   - block renderer, toolbar, adaptive top bar, palette overlay, compact/wide breakpoints
 - `src/tui/widgets/inspector_tabs.rs`

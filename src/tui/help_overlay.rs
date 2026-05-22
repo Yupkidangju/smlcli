@@ -49,6 +49,12 @@ pub fn render(
             ("Enter", "Execute Command"),
             ("Esc", "Close Palette/Help"),
         ],
+        // [v3.9.0] Phase 4-A 설문지 오버레이 단축키 정보 추가
+        FocusedPane::Questionnaire => vec![
+            ("Up/Down", "Navigate Options"),
+            ("Enter", "Select/Submit Option"),
+            ("Esc", "Close Questionnaire/Help"),
+        ],
     };
 
     let popup_width = 40;

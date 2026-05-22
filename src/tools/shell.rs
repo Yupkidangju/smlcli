@@ -557,11 +557,14 @@ impl Tool for ExecShellTool {
                     .contains(&parts[0])
                 };
 
-                if safe_to_auto_run || is_custom_safe || is_builtin_safe {
+                // [v3.9.0] safe_to_auto_run의 신뢰 권한 경계를 런타임 빌트인(is_builtin_safe) 및 사용자 설정(is_custom_safe) 명령으로 한정합니다.
+                // AI 모델이 safe_to_auto_run=true라고 주장하더라도, 실제로 안전한 빌트인 명령이거나 사용자가 허용한 커스텀 명령이 아니라면 SafeOnly 모드에서 차단합니다.
+                let is_safe = is_custom_safe || is_builtin_safe;
+                if is_safe && safe_to_auto_run {
                     PermissionResult::Allow
                 } else {
                     PermissionResult::Deny(format!(
-                        "Command '{}' is blocked in SafeOnly mode.",
+                        "Command '{}' is blocked in SafeOnly mode. (Must be explicitly safe and safe_to_auto_run must be true)",
                         command
                     ))
                 }

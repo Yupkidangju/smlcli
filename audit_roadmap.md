@@ -583,3 +583,50 @@ test result: ok. 105 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; fi
   - **내용**: 팝업 크기 상향(`MAX_HEIGHT = 6`)으로 인해 가로 80칸, 세로 24칸 미만의 초소형 터미널 창에서 `/config`를 구동할 시 UI 패널이 깨질 위험이 있습니다.
   - **대응책**: 터미널 최소 권장 해상도(80x24) 미만 진입 시 UI 렌더링 오류 피드백 카드를 화면 최상단에 안전하게 그리도록 예외 렌더러가 설정되어 있어, 오버플로우 충돌을 미연에 방지합니다.
 
+---
+
+## Phase 52: v3.9.0 TUI Modernization & Responsive Multi-viewport Redesign 감사 기준 (완료)
+
+### 52.1 감사 항목 및 합격 검증 기준표
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| RGB 고스케일 세맨틱 팔레트 | `src/tui/palette.rs` 및 `designs.md` 확인 | 11대 RGB 고스케일 세맨틱 팔레트 명세(`bg_lowest`, `bg_panel`, `outline`, `text_primary`, `text_secondary` 등)가 완전 매핑되고 하드코딩 색상이 제거됨 |
+| 다국어 5대어 실연결 | `src/tui/i18n.rs` 및 설문조사 위젯 번역 확인 | `I18nManager` 내 설문조사 전용 다국어 키 매핑(`question_progress`, `input_prompt`, `custom_input_prompt`, `input_hint` 등)이 올바르게 통합 및 tr() 바인딩 보장됨 |
+| 반응형 3분할 및 Tree of Thoughts 트리 | `src/tui/layout.rs` 소스 확인 | `unicode-width` 기반 래핑 처리, `Borders::LEFT` 2px 세로바(`┃`) 적용, `└─ ⚙️` 회색 깊이 들여쓰기 트리 구조 렌더링이 정확하게 구현됨 |
+| 단축키 인스펙터 탭 및 Diff 캐시 가속 | `src/tui/widgets/inspector_tabs.rs` 확인 | `Alt+1` ~ `Alt+6` 단축키 바인딩 인스펙터 탭바 연동, `DIFF_RENDER_CACHE` thread_local 5000라인급 Diff 라인 캐싱 가속 구현 완료 |
+| Composer Inset & Fuzzy Command Palette | `src/tui/layout.rs` 내 커서 렌더링 확인 | `draw_composer`에 `bg_lowest` 배경과 보라색 `❯` 프롬프트 적용, `draw_command_palette` 오버레이에 `bg_panel` 스타일 및 `Clear` 위젯 소거 연동. `tick_count` 기반 500ms 깜빡임 `█` 커서 점멸 연동 완료 |
+| 설문조사 모달 수학적 정렬 | `src/tui/widgets/questionnaire.rs` 확인 | 가로 60%, 세로 45% 수학적 중앙 정렬 공식 보정 및 `Clear` 잔상 소거 적용 완료 |
+| Clippy warning 및 빌드 무결성 | `cargo clippy --all-targets -- -D warnings` 및 `cargo build --release` | 0 warnings, 0 errors로 완벽하게 빌드 및 무결 통과함 |
+
+### 52.2 감사 검증 명령어 및 출력 결과 샘플 (Execution Path)
+감사자는 터미널에서 아래 clippy, 빌드, 및 테스트 명령어를 수행하여 100% 무결성을 정밀 확인해야 합니다.
+
+```bash
+# 1. Clippy 경고 엄격 필터링 실행
+cargo clippy --all-targets -- -D warnings
+
+# 2. Release 프로필 빌드 무결성 검증
+cargo build --release
+
+# 3. 전체 회귀 테스트 스위트 105개 전체 실행
+cargo test
+```
+
+#### Clippy 및 빌드 정상 완료 시 출력 결과 샘플 (Standard Output Spec)
+```
+   Compiling smlcli v3.9.0 (/mnt/Projects_SSD/rust/smlcli)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.25s
+```
+
+```
+   Compiling smlcli v3.9.0 (/mnt/Projects_SSD/rust/smlcli)
+    Finished `release` profile [optimized] target(s) in 21.11s
+```
+
+### 52.3 잔여 리스크 (Residual Risks)
+* **대용량 Diff 라인 캐시 무효화 정합성 리스크**:
+  - **내용**: 5000라인 이상의 대용량 Diff 파싱 캐싱 중, `approval.diff_preview` 값이 런타임에 미세하게 변경되거나 캐시 만료 조건이 꼬여 이전 diff 잔상이 유지될 수 있습니다.
+  - **대응책**: `DIFF_RENDER_CACHE` thread_local은 단순히 diff 텍스트 참조값(`*diff`)을 기준으로 완격히 동등 여부(`==`)를 비교하여 다를 경우 즉시 새로운 파싱 결과를 무효화(invalidate)하고 덮어씌우는 메커니즘을 이식하여 데이터 불일치 위험을 완벽히 격리했습니다.
+* **100 cols 미만의 반응형 탭 전환 오인 리스크**:
+  - **내용**: 화면 폭이 좁은 가상 터미널 환경에서 인스펙터 서브 드로어가 닫혔을 때, 탭 단축키(`Alt+1`~`Alt+6`) 입력 시 탭 상태 전이가 제대로 동작하지 않는 것처럼 오해할 수 있습니다.
+  - **대응책**: 탭 상태는 내부적으로 항상 동기화되어 인스펙터 활성화 시 즉각 반영되도록 설계되었으며, Composer 하단 도움말에 탭 상태 인디케이터가 명확히 명시되도록 보강 조치했습니다.

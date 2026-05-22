@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>smlcli - Diff Inspector</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "error": "#ffb4ab",
+                        "tertiary": "#ffb869",
+                        "on-primary-container": "#340080",
+                        "on-secondary-container": "#adb4ce",
+                        "on-primary-fixed-variant": "#5516be",
+                        "tertiary-container": "#ca801e",
+                        "surface-tint": "#d0bcff",
+                        "on-tertiary-fixed": "#2c1700",
+                        "surface-variant": "#273647",
+                        "surface-dim": "#051424",
+                        "on-surface": "#d4e4fa",
+                        "on-error": "#690005",
+                        "surface-container": "#122131",
+                        "outline": "#958ea0",
+                        "tertiary-fixed-dim": "#ffb869",
+                        "on-background": "#d4e4fa",
+                        "on-tertiary-fixed-variant": "#673d00",
+                        "primary-container": "#a078ff",
+                        "primary-fixed": "#e9ddff",
+                        "on-secondary-fixed": "#131b2e",
+                        "inverse-on-surface": "#233143",
+                        "secondary": "#bec6e0",
+                        "primary-fixed-dim": "#d0bcff",
+                        "primary": "#d0bcff",
+                        "on-primary": "#3c0091",
+                        "on-error-container": "#ffdad6",
+                        "on-tertiary-container": "#3f2300",
+                        "inverse-primary": "#6d3bd7",
+                        "on-surface-variant": "#cbc3d7",
+                        "on-secondary-fixed-variant": "#3f465c",
+                        "inverse-surface": "#d4e4fa",
+                        "surface-container-lowest": "#010f1f",
+                        "surface-container-high": "#1c2b3c",
+                        "outline-variant": "#494454",
+                        "secondary-fixed-dim": "#bec6e0",
+                        "background": "#051424",
+                        "secondary-fixed": "#dae2fd",
+                        "on-tertiary": "#482900",
+                        "secondary-container": "#3f465c",
+                        "error-container": "#93000a",
+                        "on-primary-fixed": "#23005c",
+                        "on-secondary": "#283044",
+                        "surface-container-low": "#0d1c2d",
+                        "tertiary-fixed": "#ffdcbb",
+                        "surface": "#051424",
+                        "surface-container-highest": "#273647",
+                        "surface-bright": "#2c3a4c"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "composer-height": "4rem",
+                        "container-padding-y": "1rem",
+                        "chip-gap": "0.75rem",
+                        "container-padding-x": "2rem",
+                        "block-gap": "1.5rem"
+                    },
+                    "fontFamily": {
+                        "ui-bold": ["JetBrains Mono", "monospace"],
+                        "header-title": ["JetBrains Mono", "monospace"],
+                        "code-block": ["JetBrains Mono", "monospace"],
+                        "ui-italic": ["JetBrains Mono", "monospace"],
+                        "label-sm": ["JetBrains Mono", "monospace"]
+                    },
+                    "fontSize": {
+                        "ui-bold": ["14px", { "lineHeight": "20px", "fontWeight": "700" }],
+                        "header-title": ["16px", { "lineHeight": "24px", "fontWeight": "800" }],
+                        "code-block": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "ui-italic": ["14px", { "lineHeight": "20px", "fontWeight": "400", "fontStyle": "italic" }],
+                        "label-sm": ["12px", { "lineHeight": "16px", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .unicode-border {
+            border: 1px solid theme('colors.outline-variant');
+            border-radius: theme('borderRadius.DEFAULT');
+        }
+        /* Custom scrollbar for webkit */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: theme('colors.surface-container-low');
+        }
+        ::-webkit-scrollbar-thumb {
+            background: theme('colors.outline-variant');
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: theme('colors.outline');
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-code-block min-h-screen flex flex-col overflow-hidden">
+<!-- TopAppBar -->
+<header class="bg-surface border-b border-outline-variant flex justify-between items-center px-container-padding-x h-12 w-full z-10 shrink-0">
+<div class="flex items-center gap-4">
+<span class="font-header-title text-header-title text-primary">smlcli</span>
+<span class="text-on-surface-variant text-label-sm border border-outline-variant rounded px-2 py-0.5">/home/workspace/auth-module</span>
+</div>
+<div class="flex items-center gap-4 text-on-surface-variant">
+<span class="material-symbols-outlined hover:bg-surface-variant transition-colors duration-150 p-1 rounded cursor-pointer" data-icon="terminal">terminal</span>
+<span class="material-symbols-outlined hover:bg-surface-variant transition-colors duration-150 p-1 rounded cursor-pointer" data-icon="settings">settings</span>
+<span class="material-symbols-outlined hover:bg-surface-variant transition-colors duration-150 p-1 rounded cursor-pointer" data-icon="help">help</span>
+</div>
+</header>
+<!-- Main Content Area -->
+<main class="flex-1 flex overflow-hidden relative">
+<!-- Left Panel: Timeline & Interaction Blocks -->
+<div class="flex-1 overflow-y-auto p-container-padding-x pb-32">
+<!-- User Turn -->
+<div class="flex gap-4 mb-block-gap">
+<div class="w-1 bg-primary rounded-full shrink-0"></div>
+<div class="flex-1">
+<p class="text-on-surface">Update the auth context to support refresh tokens and handle 401 interceptors in axios.</p>
+</div>
+</div>
+<!-- System Turn -->
+<div class="flex gap-4 mb-block-gap">
+<div class="w-1 bg-tertiary rounded-full shrink-0"></div>
+<div class="flex-1 space-y-4">
+<p class="text-on-surface-variant">I've analyzed the current <span class="font-ui-italic text-on-surface">AuthContext.jsx</span> and prepared the changes. The modifications include:</p>
+<ul class="list-disc pl-5 text-on-surface-variant space-y-1">
+<li>Adding <span class="font-ui-bold text-on-surface">refreshToken</span> state.</li>
+<li>Implementing an axios interceptor for automatic token refresh on 401 responses.</li>
+</ul>
+<!-- Pending Approval Card -->
+<div class="unicode-border bg-surface-container-low p-4 mt-4">
+<div class="flex items-center justify-between mb-4">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-tertiary" data-icon="pending_actions">pending_actions</span>
+<span class="font-ui-bold text-tertiary">Changes Requested</span>
+</div>
+<span class="text-label-sm text-on-surface-variant border border-outline-variant rounded px-2">src/auth/AuthContext.jsx</span>
+</div>
+<p class="text-on-surface mb-4">Review the proposed diff in the Inspector before applying.</p>
+<div class="flex gap-3">
+<button class="bg-tertiary text-on-tertiary font-ui-bold px-4 py-2 rounded hover:bg-tertiary-container transition-colors">Apply Changes</button>
+<button class="border border-outline text-on-surface font-ui-bold px-4 py-2 rounded hover:bg-surface-variant transition-colors">Reject</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Right Panel: SideNavBar (Inspector) -->
+<aside class="w-80 bg-surface-container border-l border-outline-variant flex flex-col shrink-0">
+<!-- Inspector Header -->
+<div class="p-4 border-b border-outline-variant flex items-center gap-3">
+<span class="material-symbols-outlined text-primary text-2xl" data-icon="terminal">terminal</span>
+<div>
+<h2 class="font-ui-bold text-ui-bold text-on-surface">Inspector</h2>
+<p class="text-label-sm text-on-surface-variant">smlcli v1.0</p>
+</div>
+</div>
+<!-- Inspector Tabs -->
+<div class="flex border-b border-outline-variant bg-surface-container-lowest">
+<!-- Preview -->
+<button class="flex-1 flex flex-col items-center py-2 text-on-surface-variant hover:bg-surface-variant transition-all duration-200 group">
+<span class="material-symbols-outlined text-lg mb-1 group-hover:text-primary transition-colors" data-icon="visibility">visibility</span>
+<span class="font-label-sm text-label-sm">Preview</span>
+</button>
+<!-- Diff (Active) -->
+<button class="flex-1 flex flex-col items-center py-2 text-tertiary border-b-2 border-tertiary bg-surface-container-high transition-all duration-200">
+<span class="material-symbols-outlined text-lg mb-1" data-icon="difference">difference</span>
+<span class="font-label-sm text-label-sm">Diff</span>
+</button>
+<!-- Logs -->
+<button class="flex-1 flex flex-col items-center py-2 text-on-surface-variant hover:bg-surface-variant transition-all duration-200 group">
+<span class="material-symbols-outlined text-lg mb-1 group-hover:text-primary transition-colors" data-icon="list_alt">list_alt</span>
+<span class="font-label-sm text-label-sm">Logs</span>
+</button>
+<!-- Search -->
+<button class="flex-1 flex flex-col items-center py-2 text-on-surface-variant hover:bg-surface-variant transition-all duration-200 group">
+<span class="material-symbols-outlined text-lg mb-1 group-hover:text-primary transition-colors" data-icon="search">search</span>
+<span class="font-label-sm text-label-sm">Search</span>
+</button>
+<!-- Git -->
+<button class="flex-1 flex flex-col items-center py-2 text-on-surface-variant hover:bg-surface-variant transition-all duration-200 group">
+<span class="material-symbols-outlined text-lg mb-1 group-hover:text-primary transition-colors" data-icon="hub">hub</span>
+<span class="font-label-sm text-label-sm">Git</span>
+</button>
+</div>
+<!-- Diff Content Area -->
+<div class="flex-1 overflow-y-auto bg-surface-container-lowest">
+<div class="p-2 border-b border-outline-variant bg-surface-container-low flex items-center justify-between sticky top-0 z-10 shadow-sm">
+<span class="text-label-sm font-ui-bold text-on-surface">src/auth/AuthContext.jsx</span>
+<div class="flex gap-2 text-xs">
+<span class="text-error bg-error/10 px-1 rounded">-3</span>
+<span class="text-[#81c995] bg-[#81c995]/10 px-1 rounded">+9</span>
+</div>
+</div>
+<!-- Unified Diff Viewer -->
+<div class="text-code-block whitespace-pre font-code-block text-[13px] leading-5 w-full">
+<!-- Context Lines -->
+<div class="flex hover:bg-surface-variant/50">
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none">42</div>
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none">42</div>
+<div class="px-3 text-on-surface-variant opacity-70">  const [user, setUser] = useState(null);</div>
+</div>
+<div class="flex hover:bg-surface-variant/50">
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none">43</div>
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none">43</div>
+<div class="px-3 text-on-surface-variant opacity-70">  const [loading, setLoading] = useState(true);</div>
+</div>
+<!-- Deletions -->
+<div class="flex bg-error/10 hover:bg-error/20">
+<div class="w-12 shrink-0 text-right pr-2 text-error/70 border-r border-error/30 bg-error/5 select-none">44</div>
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none"></div>
+<div class="px-3 text-error"><span class="select-none pr-2">-</span>  const [token, setToken] = useState(localStorage.getItem('token'));</div>
+</div>
+<div class="flex bg-error/10 hover:bg-error/20">
+<div class="w-12 shrink-0 text-right pr-2 text-error/70 border-r border-error/30 bg-error/5 select-none">45</div>
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none"></div>
+<div class="px-3 text-error"><span class="select-none pr-2">-</span></div>
+</div>
+<div class="flex bg-error/10 hover:bg-error/20">
+<div class="w-12 shrink-0 text-right pr-2 text-error/70 border-r border-error/30 bg-error/5 select-none">46</div>
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none"></div>
+<div class="px-3 text-error"><span class="select-none pr-2">-</span>  useEffect(() =&gt; {</div>
+</div>
+<!-- Additions -->
+<div class="flex bg-[#81c995]/10 hover:bg-[#81c995]/20">
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none"></div>
+<div class="w-12 shrink-0 text-right pr-2 text-[#81c995]/80 border-r border-[#81c995]/30 bg-[#81c995]/5 select-none">44</div>
+<div class="px-3 text-[#a8deb5]"><span class="select-none pr-2">+</span>  const [accessToken, setAccessToken] = useState(localStorage.getItem('accessToken'));</div>
+</div>
+<div class="flex bg-[#81c995]/10 hover:bg-[#81c995]/20">
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none"></div>
+<div class="w-12 shrink-0 text-right pr-2 text-[#81c995]/80 border-r border-[#81c995]/30 bg-[#81c995]/5 select-none">45</div>
+<div class="px-3 text-[#a8deb5]"><span class="select-none pr-2">+</span>  const [refreshToken, setRefreshToken] = useState(localStorage.getItem('refreshToken'));</div>
+</div>
+<div class="flex bg-[#81c995]/10 hover:bg-[#81c995]/20">
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none"></div>
+<div class="w-12 shrink-0 text-right pr-2 text-[#81c995]/80 border-r border-[#81c995]/30 bg-[#81c995]/5 select-none">46</div>
+<div class="px-3 text-[#a8deb5]"><span class="select-none pr-2">+</span></div>
+</div>
+<div class="flex bg-[#81c995]/10 hover:bg-[#81c995]/20">
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none"></div>
+<div class="w-12 shrink-0 text-right pr-2 text-[#81c995]/80 border-r border-[#81c995]/30 bg-[#81c995]/5 select-none">47</div>
+<div class="px-3 text-[#a8deb5]"><span class="select-none pr-2">+</span>  useEffect(() =&gt; {</div>
+</div>
+<div class="flex bg-[#81c995]/10 hover:bg-[#81c995]/20">
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none"></div>
+<div class="w-12 shrink-0 text-right pr-2 text-[#81c995]/80 border-r border-[#81c995]/30 bg-[#81c995]/5 select-none">48</div>
+<div class="px-3 text-[#a8deb5]"><span class="select-none pr-2">+</span>    const interceptor = axios.interceptors.response.use(</div>
+</div>
+<div class="flex bg-[#81c995]/10 hover:bg-[#81c995]/20">
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none"></div>
+<div class="w-12 shrink-0 text-right pr-2 text-[#81c995]/80 border-r border-[#81c995]/30 bg-[#81c995]/5 select-none">49</div>
+<div class="px-3 text-[#a8deb5]"><span class="select-none pr-2">+</span>      (response) =&gt; response,</div>
+</div>
+<div class="flex bg-[#81c995]/10 hover:bg-[#81c995]/20">
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none"></div>
+<div class="w-12 shrink-0 text-right pr-2 text-[#81c995]/80 border-r border-[#81c995]/30 bg-[#81c995]/5 select-none">50</div>
+<div class="px-3 text-[#a8deb5]"><span class="select-none pr-2">+</span>      async (error) =&gt; {</div>
+</div>
+<div class="flex bg-[#81c995]/10 hover:bg-[#81c995]/20">
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none"></div>
+<div class="w-12 shrink-0 text-right pr-2 text-[#81c995]/80 border-r border-[#81c995]/30 bg-[#81c995]/5 select-none">51</div>
+<div class="px-3 text-[#a8deb5]"><span class="select-none pr-2">+</span>        // Handle 401 refresh logic here</div>
+</div>
+<div class="flex bg-[#81c995]/10 hover:bg-[#81c995]/20">
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none"></div>
+<div class="w-12 shrink-0 text-right pr-2 text-[#81c995]/80 border-r border-[#81c995]/30 bg-[#81c995]/5 select-none">52</div>
+<div class="px-3 text-[#a8deb5]"><span class="select-none pr-2">+</span>      }</div>
+</div>
+<!-- Context Lines -->
+<div class="flex hover:bg-surface-variant/50">
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none">47</div>
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none">53</div>
+<div class="px-3 text-on-surface-variant opacity-70">    if (token) {</div>
+</div>
+<div class="flex hover:bg-surface-variant/50">
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none">48</div>
+<div class="w-12 shrink-0 text-right pr-2 text-on-surface-variant border-r border-outline-variant bg-surface-container select-none">54</div>
+<div class="px-3 text-on-surface-variant opacity-70">      verifyToken(token);</div>
+</div>
+</div>
+</div>
+</aside>
+</main>
+<!-- BottomNavBar / Composer -->
+<footer class="bg-surface-container-lowest border-t border-outline-variant h-composer-height fixed bottom-0 left-0 w-full z-50 flex flex-col justify-center px-container-padding-x md:hidden">
+<!-- Mobile Only Bottom Nav -->
+<div class="flex items-center justify-between w-full h-full">
+<button class="flex flex-col items-center gap-1 text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="edit_note">edit_note</span>
+<span class="font-label-sm text-label-sm">PLAN</span>
+</button>
+<button class="flex flex-col items-center gap-1 text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="play_arrow">play_arrow</span>
+<span class="font-label-sm text-label-sm">RUN</span>
+</button>
+<button class="flex flex-col items-center gap-1 text-on-surface-variant">
+<span class="material-symbols-outlined" data-icon="gavel">gavel</span>
+<span class="font-label-sm text-label-sm">POLICY</span>
+</button>
+</div>
+</footer>
+<!-- Desktop Composer -->
+<footer class="bg-surface-container border-t border-outline-variant h-auto min-h-[4rem] fixed bottom-0 left-0 right-80 z-40 hidden md:flex flex-col justify-end p-4">
+<div class="flex items-center gap-2 mb-2">
+<!-- Status Chips -->
+<div class="bg-primary-container text-on-primary-container font-ui-bold text-label-sm px-2 py-1 rounded flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]" data-icon="edit_note">edit_note</span>
+                PLAN
+            </div>
+<div class="border border-outline-variant text-on-surface-variant font-label-sm text-label-sm px-2 py-1 rounded">
+                Strict Mode
+            </div>
+</div>
+<div class="flex items-end gap-2 bg-surface-container-lowest border border-outline-variant rounded-lg p-2 focus-within:border-primary transition-colors">
+<span class="text-primary font-ui-bold shrink-0 self-center pl-2">❯</span>
+<textarea class="flex-1 bg-transparent border-none text-on-surface focus:ring-0 resize-none font-code-block text-code-block h-6 max-h-32 placeholder-on-surface-variant/50" placeholder="Type a command or ask a question..." rows="1"></textarea>
+<button class="text-on-surface-variant hover:text-primary transition-colors p-1 shrink-0">
+<span class="material-symbols-outlined" data-icon="send">send</span>
+</button>
+</div>
+</footer>
+</body></html>

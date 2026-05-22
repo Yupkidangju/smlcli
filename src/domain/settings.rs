@@ -46,6 +46,10 @@ pub struct PersistedSettings {
     /// "default" 또는 "high_contrast". designs.md §21 참조.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// [v3.9.0] 다국어(i18n) 설정.
+    /// "ko", "en", "ja", "zh_TW", "zh_CN".
+    #[serde(default = "default_lang")]
+    pub lang: String,
     /// [Workspace Trust] Workspace root별 신뢰 상태 레코드 목록.
     #[serde(default)]
     pub trusted_workspaces: Vec<WorkspaceTrustRecord>,
@@ -135,6 +139,11 @@ fn default_theme() -> String {
     "default".to_string()
 }
 
+/// [v3.9.0] lang 필드의 기본값: "en"
+fn default_lang() -> String {
+    "en".to_string()
+}
+
 /// LM Studio 로컬 base_url의 기본값: "http://localhost:1234/v1"
 fn default_lmstudio_base_url() -> Option<String> {
     Some("http://localhost:1234/v1".to_string())
@@ -156,6 +165,7 @@ impl Default for PersistedSettings {
             safe_commands: None,
             encrypted_keys: HashMap::new(),
             theme: default_theme(),
+            lang: default_lang(),
             trusted_workspaces: Vec::new(),
             denied_roots: Vec::new(),
             extra_workspace_dirs: Vec::new(),

@@ -4077,3 +4077,84 @@ fn test_lm_studio_wizard_flow() {
         "모델 지정 완료 후 Saving 단계로 진입해야 함"
     );
 }
+
+// ============================================================
+// [v3.9.0] Phase 52 TUI Modernization & Responsive Multi-viewport
+// ============================================================
+
+/// [v3.9.0] 5개 언어 번역 사전(i18n.rs)의 완벽한 1:1 대칭 키 완전성(Completeness) 검증
+#[test]
+fn test_v3_9_0_i18n_key_completeness() {
+    use crate::tui::i18n::I18nManager;
+
+    let keys = vec![
+        "badge_done",
+        "badge_pending",
+        "badge_approval",
+        "btn_approve",
+        "btn_reject",
+        "questionnaire_title",
+        "tab_preview",
+        "tab_diff",
+        "tab_logs",
+        "tab_search",
+        "tab_recent",
+        "tab_git",
+        "question_progress",
+        "input_prompt",
+        "custom_input_prompt",
+        "input_hint",
+        "select_hint",
+        "custom_option",
+    ];
+
+    let languages = vec!["ko", "en", "ja", "zh_TW", "zh_CN"];
+
+    for lang in languages {
+        let manager = I18nManager::new(lang);
+        for key in &keys {
+            let translated = manager.tr(key);
+            // 만약 tr 실패로 원래의 key 문자열이 그대로 반환된다면 missing translation이 발생한 것
+            assert_ne!(
+                translated, *key,
+                "다국어 사전 '{}' 내에 번역 키 '{}'가 누락되었습니다.",
+                lang, key
+            );
+        }
+    }
+}
+
+/// [v3.9.0] 설문조사 플로팅 모달의 가로 60%, 세로 45% 수학적 중앙 정렬 공식 정밀 검증
+#[test]
+fn test_v3_9_0_centered_rect_formula() {
+    use crate::tui::widgets::questionnaire::QuestionnaireWidget;
+    use ratatui::layout::Rect;
+
+    // 1. 일반적인 120 x 40 터미널 환경
+    let area_1 = Rect::new(0, 0, 120, 40);
+    let modal_1 = QuestionnaireWidget::centered_rect(area_1);
+
+    // 가로: 120 * 60% = 72
+    assert_eq!(modal_1.width, 72, "가로 폭은 120의 60%인 72여야 함");
+    // 세로: 40 * 45% = 18
+    assert_eq!(modal_1.height, 18, "세로 높이는 40의 45%인 18여야 함");
+    // X좌표: (120 - 72) / 2 = 24
+    assert_eq!(modal_1.x, 24, "X 좌표는 24여야 함");
+    // Y좌표: (40 - 18) / 2 = 11
+    assert_eq!(modal_1.y, 11, "Y 좌표는 11여야 함");
+
+    // 2. 아주 극단적으로 작은 30 x 8 터미널 환경 (최소 가드 max(40).min(width), max(10).min(height) 작동 검증)
+    let area_2 = Rect::new(0, 0, 30, 8);
+    let modal_2 = QuestionnaireWidget::centered_rect(area_2);
+
+    // 가로: 30 * 60% = 18 -> max(40) -> min(30) -> 30
+    assert_eq!(
+        modal_2.width, 30,
+        "극소 화면에서 가로 폭은 터미널 전체 너비인 30으로 고정되어야 함"
+    );
+    // 세로: 8 * 45% = 3 -> max(10) -> min(8) -> 8
+    assert_eq!(
+        modal_2.height, 8,
+        "극소 화면에서 세로 높이는 터미널 전체 높이인 8로 고정되어야 함"
+    );
+}

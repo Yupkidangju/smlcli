@@ -29,6 +29,7 @@
 - **오프라인 수동 Fallback**: 로컬/오프라인 환경 및 API 핑 실패 시에도 마법사에서 `"✏ 직접 입력..."` 모드를 제공하여 모델명을 수동으로 임의 지정할 수 있어 연결 차단 없이 onboarding 완수 가능.
 - **Tree-sitter Repo Map**: AST 파싱 기반 저장소 요약 맵을 통해 AI가 전체 프로젝트 구조를 맥락으로 주입받아 정확한 코드를 수정.
 - **플랫폼 지원**: Linux (bash/zsh) 및 Windows (PowerShell/WSL) 동시 지원.
+- **v3.9.0 TUI 현대화 개편**: 반응형 3분할 뷰포트 레이아웃, `Alt+1`~`Alt+6` 단축키 기반 탭 전환, 500ms 점멸 커서 애니메이션, 극소 화면에서도 깨지지 않는 수학적 모달 중앙 정렬 공식을 탑재하여 극상의 TUI 사용자 경험 제공.
 
 ### 빠른 시작
 1. 저장소를 클론합니다.
@@ -75,6 +76,7 @@
 - **Offline Manual Fallback**: Always provides `"✏ 직접 입력..."` (Manual Input) mode during setup even if the local server is offline or the models API ping fails, enabling seamless wizard completion.
 - **Tree-sitter Repo Map**: Injects AST-parsed repository summary maps into the AI context for accurate code modifications.
 - **Cross-platform**: Full support for Linux and Windows.
+- **v3.9.0 TUI Modernization**: Provides a premium terminal experience featuring a responsive 3-viewport layout, instant tab-switching via `Alt+1` to `Alt+6` hotkeys, a smooth 500ms blinking cursor animation, and a robust mathematical modal auto-centering formula that never breaks even on extremely small terminal dimensions.
 
 ### Quick Start
 1. Clone the repository.
@@ -113,6 +115,7 @@
 - **エージェント自律性 (Agentic Autonomy)**: 破壊的な操作の前後で自動化されたGitチェックポイントと自己修復ループにより、安全なAIコード生成を保証します。`ListDir`, `GrepSearch`, `FetchURL` などの高度なツールを内蔵。
 - **オフラインでの手動フォールバック**: ローカル/オフライン環境やAPIの疎通確認（PING）が失敗した場合でも、設定ウィザードで「✏ 直接入力...」モードを提供し、モデル名を手動で任意に入力して接続を中断することなくオンボーディングを完了できます。
 - **Tree-sitter Repo Map**: AST解析ベースのリポジトリ概要マップをAIコンテキストに注入し、正確なコード修正を実現します。
+- **v3.9.0 TUI近代化改修**: レスポンシブな3分割ビューポートレイアウト、`Alt+1`〜`Alt+6`のショートカットキーによる瞬時のタブ切り替え、500ms周期の点滅カーソルアニメーション、極小画面でも崩れない数学的なモーダル中央配置公式を搭載し、極上のTUIユーザー体験を提供。
 
 ### クイックスタート
 1. リポジトリをクローンします。
@@ -151,6 +154,7 @@
 - **代理自主性 (Agentic Autonomy)**: 透過破壞性操作前後的自動 Git 檢查點與自我修復循環，確保 AI 程式碼生成的安全性。內建 `ListDir`, `GrepSearch`, `FetchURL` 等進階工具。
 - **離線手動 Fallback**: 在本地/離線環境或 API Ping 失敗時，設定精靈仍提供「✏ 離線手動輸入...」模式，允許手動指定模型名稱，確保在無連線狀態下也能順利完成 Onboarding。
 - **Tree-sitter Repo Map**: 將基於 AST 解析的儲存庫摘要地圖注入 AI 上下文中，實現精確的程式碼修改。
+- **v3.9.0 TUI 現代化改編**: 提供響應式 3 分割視埠版面配置、基於 `Alt+1` 到 `Alt+6` 快捷鍵的即時分頁切換、500ms 游標閃爍動畫，以及在極小終端解析度下也絕不崩潰的數學式視窗自動置中公式，打造極致的 TUI 使用者體驗。
 
 ### 快速開始
 1. 複製專案:
@@ -189,6 +193,7 @@
 - **代理自主性 (Agentic Autonomy)**: 通过破坏性操作前后的自动 Git 检查点与自我修复循环，确保 AI 代码生成的安全性。内置 `ListDir`, `GrepSearch`, `FetchURL` 等高级探索工具。
 - **离线手动 Fallback**: 在本地/离线环境或 API Ping 失败时，配置向导中仍提供“✏ 直接输入...”模式，支持手动指定任意模型名称，确保在无网络连接状态下也能顺利完成 Onboarding。
 - **Tree-sitter Repo Map**: 将基于 AST 解析的仓库摘要地图注入 AI 上下文中，实现精确的代码修改。
+- **v3.9.0 TUI 现代化改编**: 配备响应式 3 分割视口布局、基于 `Alt+1` 至 `Alt+6` 键的即时标签页切换、500ms 光标闪烁动画，以及在极小终端分辨率下也绝不崩溃的数学化窗口自动居中公式，提供极致的 TUI 用户体验。
 
 ### 快速开始
 1. 克隆项目

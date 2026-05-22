@@ -4,3 +4,5 @@ pub mod layout;
 pub mod palette;
 pub mod terminal;
 pub mod widgets;
+// [v3.9.0] Phase 1-B: 다국어(i18n.rs) 매니저 모듈 활성화
+pub mod i18n;

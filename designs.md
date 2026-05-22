@@ -1,5 +1,5 @@
 # smlcli designs.md
-Version: v0.1 BETA
+Version: v3.9.0
 
 ## 0. 문서 목적
 
@@ -61,34 +61,33 @@ Version: v0.1 BETA
 
 ## 3. 레이아웃 정의
 
-## 3.1 기본 레이아웃
+## 3.1 기본 레이아웃 (둥근 유니코드 상자 및 Terminal Precision 이식 규격)
 
 ```text
-┌──────────────────────────────────────────────────────────────────────────────┐
-│ smlcli · OpenAI/gpt-5 · /workspace/app · PLAN · Shell Ask · 61% ctx · ✓    │
-├──────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  Timeline                                                                    │
-│  ─────────────────────────────────────────────────────────────────────────   │
-│  User: auth flow 설명해줘                                                    │
-│  AI  : src/auth, src/session, config/security를 확인했습니다.                │
-│        다음 파일을 읽었습니다...                                              │
-│                                                                              │
-│  Tool Summary                                                                │
-│  ReadFile 3 · Grep 1                                                         │
-│                                                                              │
-│  Proposed Change                                                             │
-│  settings.rs  +12 -4                                         [Preview]      │
-│                                                                              │
-│  Shell Request                                                               │
-│  cargo test --lib                                          [Approve] [Deny] │
-│                                                                              │
-│                                                                              │
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ smlcli · openai/gpt-5 · ~/project · [PLAN] · Shell Ask · 61% ctx · ✓         │
 ├──────────────────────────────────────────────────────────────┬───────────────┤
-│ Composer                                                     │ Inspector     │
-│ /, @, ! 사용 가능                                            │ Diff / Preview│
-│ > @src/auth/mod.rs 로그인 흐름 요약해줘                      │ Search / Logs │
-└──────────────────────────────────────────────────────────────┴───────────────┘
+│ Timeline                                                     │ Inspector     │
+│ 🏷️  042  [DONE]                                               ├───────────────┤
+│ ┃  ❯ 1부터 100까지 더하는 파이썬 코드 작성                   │ ▶ PREVIEW ◀   │
+│ ┃  I will create a Python script to sum numbers from 1 to 100│   DIFF        │
+│ ┃                                                            │   LOGS        │
+│ ┃  └─ ⚙️  WriteFile: sum_1_to_100.py (depth: 1)              │   SEARCH      │
+│ ┃     [DONE] sum_1_to_100.py 생성 완료                       │   GIT         │
+│                                                              ├───────────────┤
+│ 🏷️  043  [NEEDS APPROVAL]                                     │ File:         │
+│ ⚠️  Modifying settings.rs to enable background workers.        │ settings.rs   │
+│ ⚠️  ╭── settings.rs ────────────────────────────── +12 -4 ──╮ │ Diff summary: │
+│ ⚠️  │ 42 | struct AppConfig {                               │ │ +12 -4        │
+│ ⚠️  │ 43 | -   workers: u32,                                │ │               │
+│ ⚠️  │ 44 | +   pub background_workers: u32,                 │ │ @@ -40,8 @@   │
+│ ⚠️  │ 45 | }                                                │ │ - workers:    │
+│ ⚠️  ╰──────────────────────────────────────────────────────╯ │ + pub config: │
+│ ⚠️  [ Approve (Enter) ]    [ Reject (Esc) ]                  │               │
+├──────────────────────────────────────────────────────────────┴───────────────┤
+│ [PLAN]   [RUN]   [POLICY]  ·  Ctrl+K Actions                                 │
+│ ❯ prompt buffer text...                                      █ (Active Cursor)│
+╰──────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ## 3.2 레이아웃 원칙
@@ -966,41 +965,50 @@ panic, Ctrl+C, validation error 후에도:
 
 ---
 
-## 21. Semantic Palette 설계 (v0.1.0-beta.18 개편)
+## 21. Semantic Palette 설계 (v0.1.0-beta.24 개편)
 
-모든 색상을 의미 기반(semantic)으로 통일하여 UI 일관성을 확보한다.
+모든 색상을 의미 기반(semantic)으로 통일하여 UI 일관성을 확보하고, 현대적 프리미엄 TUI 비주얼(Terminal Precision 테마)을 제공하기 위해 11대 스케일 RGB 팔레트 사양으로 개편한다.
 
-### 21.1 전경색 (Foreground)
+### 21.1 전경색 및 의미 기반 색상 (Foreground & Semantic)
 
-| 역할 | 색상 | RGB | 용도 |
-|------|--------|-----|------|
-| `info` | 파랑 | (96, 165, 250) | 시스템 알림, 상태 정보 |
-| `success` | 초록 | (74, 222, 128) | 성공 메시지, 완료 표시 |
-| `warning` | 앨버 | (251, 191, 36) | 승인 대기, context 경고 |
-| `danger` | 빨강 | (248, 113, 113) | 에러, 보안 차단 |
-| `muted` | 회색 | (107, 114, 128) | 비활성 텍스트, 힌트 |
-| `accent` | 보라 | (167, 139, 250) | 강조 표시, 선택 상태 |
+| 역할 | 색상 | RGB 값 | 용도 |
+|------|--------|---------|------|
+| `accent` | 보라 (#d0bcff) | (208, 188, 255) | User 턴, 액티브 테두리, 프롬프트, 주요 선택 강조 |
+| `success` | 초록 (#81c995) | (129, 201, 149) | DONE 상태, 작업 정상 완료, Git 세이브 성공 |
+| `warning` | 오렌지 (#ffb869) | (255, 184, 105) | Needs Approval 턴, 중요 경고 배지 |
+| `danger` | 라이트레드 (#ffb4ab) | (255, 180, 171) | Error 상태, 실패 배지, 보안 위반 알림 |
+| `info` | 연블루회색 (#bec6e0) | (190, 198, 224) | System 턴, 일반 메타데이터 텍스트, 도움말 정보 |
+| `text_primary` | 크림화이트 (#d4e4fa) | (212, 228, 250) | 기본 코드 리터럴, 핵심 강조 텍스트 |
+| `text_secondary` | 연보라회색 (#cbc3d7) | (203, 195, 215) | 설명문, 디렉터리 경로, 주석, 타임스탬프 |
+| `outline` | 중회색 (#958ea0) | (149, 142, 160) | 기본 테두리선, 미활성 탭, 트리 구조 아이콘 기호 |
 
-### 21.2 배경색 (Background)
+### 21.2 배경색 (Background Layers)
 
-| 역할 | 색상 | RGB | 용도 |
-|------|--------|-----|------|
-| `bg_base` | 진한 네이비 | (17, 24, 39) | 전체 배경 |
-| `bg_panel` | 어두운 네이비 | (31, 41, 55) | 패널 배경 |
-| `bg_elevated` | 중간 네이비 | (55, 65, 81) | 카드/팝업 배경 |
+| 역할 | 색상 | RGB 값 | 용도 |
+|------|--------|---------|------|
+| `bg_base` | 기본 딥 네이비 (#051424) | (5, 20, 36) | 기본 뷰포트 바탕 배경색 |
+| `bg_panel` | 패널 딥 네이비 (#122131) | (18, 33, 49) | 상단바, 인스펙터 탭바, 하단 Composer 툴바 배경색 |
+| `bg_elevated` | 융기 딥 네이비 (#1c2b3c) | (28, 43, 60) | 플로팅 모달 내부, 활성/포커스된 턴 블록 배경색 |
+| `bg_lowest` | 침전 딥 네이비 (#010f1f) | (1, 15, 31) | Composer 프롬프트 입력창 내부 Inset 배경색 |
 
 ### 21.3 고대비 모드 (High Contrast Palette)
 
-접근성 지원을 위해 색상 대비를 극대화한 고대비 팔레트를 추가로 정의한다.
+접근성 지원을 위해 색상 대비를 극대화한 고대비 팔레트에도 신규 배경/선 스펙 필드를 매핑한다.
 
 | 역할 | 색상 | 용도 |
 |------|--------|------|
-| `info` | 밝은 시안 | 시스템 알림 |
-| `success` | 순수 초록 | 완료 표시 |
-| `warning` | 순수 노랑 | 주의 필요 |
-| `danger` | 순수 빨강 | 에러/차단 |
-| `accent` | 순수 마젠타 | 선택 강조 |
-| `bg_base` | 검정 (#000000) | 배경 |
+| `info` | 밝은 시안 (Cyan) | 시스템 알림, 일반 텍스트 |
+| `success` | 순수 초록 (Green) | 완료 표시 |
+| `warning` | 순수 노랑 (Yellow) | 주의 및 승인 필요 |
+| `danger` | 순수 빨강 (Red) | 에러/차단 |
+| `accent` | 순수 마젠타 (Magenta) | 선택 강조 |
+| `text_primary` | 백색 (White) | 주요 텍스트 |
+| `text_secondary` | 연회색 (LightGray) | 일반 텍스트 및 주석 |
+| `outline` | 회색 (Gray) | 테두리선 |
+| `bg_base` | 순수 검정 (#000000) | 기본 배경 |
+| `bg_panel` | 어두운 회색 (#1c1c1c) | 패널 배경 |
+| `bg_elevated` | 짙은 회색 (#2d2d2d) | 모달/팝업 배경 |
+| `bg_lowest` | 순수 검정 (#000000) | Composer 입력창 배경 |
 
 ### 21.4 테마 전환 로직
 

@@ -1,7 +1,8 @@
-// [v3.7.0] Phase 47 Task Q-2: Questionnaire TUI 렌더러.
+// [v3.9.0] Phase 4: Floating Modals & Command Palette 완성
 // AskClarification 도구가 호출되면 타임라인 위에 오버레이 모달로
 // 질문 폼을 렌더링한다. 객관식은 화살표로 탐색/Enter로 선택,
 // 주관식은 텍스트 입력 후 Enter로 제출.
+// designs.md 및 spec.md 규격에 따른 가로 60%, 세로 45% 수학적 정렬 및 5대어 다국어(i18n) 키 매핑 실연결.
 
 use ratatui::{
     buffer::Buffer,
@@ -19,6 +20,7 @@ pub struct QuestionnaireWidget<'a> {
     pub state: &'a QuestionnaireState,
     pub use_ascii_borders: bool,
     pub palette: crate::tui::palette::Palette,
+    pub i18n: &'a crate::tui::i18n::I18nManager, // [v3.9.0] 다국어 매니저 연동 추가
 }
 
 impl<'a> QuestionnaireWidget<'a> {
@@ -26,18 +28,24 @@ impl<'a> QuestionnaireWidget<'a> {
         state: &'a QuestionnaireState,
         use_ascii_borders: bool,
         palette: crate::tui::palette::Palette,
+        i18n: &'a crate::tui::i18n::I18nManager,
     ) -> Self {
         Self {
             state,
             use_ascii_borders,
             palette,
+            i18n,
         }
     }
 
-    /// 화면 중앙에 모달 영역을 계산.
+    /// 화면 중앙에 모달 영역을 계산 (가로 60%, 세로 45% 수학적 중앙 정렬).
     pub fn centered_rect(area: Rect) -> Rect {
-        let width = area.width.clamp(30, 60);
-        let height = area.height.clamp(8, 20);
+        let width = ((area.width as u32 * 60) / 100)
+            .max(40)
+            .min(area.width as u32) as u16;
+        let height = ((area.height as u32 * 45) / 100)
+            .max(10)
+            .min(area.height as u32) as u16;
         let x = (area.width.saturating_sub(width)) / 2;
         let y = (area.height.saturating_sub(height)) / 2;
         Rect::new(x, y, width, height)
@@ -48,22 +56,25 @@ impl Widget for QuestionnaireWidget<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let modal_area = Self::centered_rect(area);
 
-        // 배경 클리어
+        // [v3.9.0] 네이티브 Clear 위젯을 활용하여 이전 화면 잔상을 완전히 소거
         Clear.render(modal_area, buf);
 
         let Some(question) = self.state.current_question() else {
             return;
         };
 
-        // 진행률 표시
-        let progress = format!(
-            " 질문 {}/{} ",
-            self.state.current_index + 1,
-            self.state.questions.len()
-        );
+        // [v3.9.0] 다국어 사전 키("question_progress")를 기반으로 한 진행도 포맷팅
+        let raw_progress_fmt = self.i18n.tr("question_progress");
+        let progress_text = raw_progress_fmt
+            .replacen("{}", &(self.state.current_index + 1).to_string(), 1)
+            .replacen("{}", &self.state.questions.len().to_string(), 1);
+
+        // [v3.9.0] 다국어 타이틀("questionnaire_title")과 진행도 조합
+        let title_label = self.i18n.tr("questionnaire_title");
+        let header_title = format!(" {} ({}) ", title_label, progress_text);
 
         let block = Block::default()
-            .title(progress)
+            .title(header_title)
             .borders(Borders::ALL)
             .border_set(super::get_border_set(self.use_ascii_borders))
             .border_style(Style::default().fg(self.palette.accent))
@@ -78,7 +89,7 @@ impl Widget for QuestionnaireWidget<'_> {
             .add_modifier(Modifier::BOLD);
         let title_line = Line::from(Span::styled(&question.title, title_style));
 
-        // 질문 제목 렌더링 (1줄)
+        // 질문 제목 렌더링 (2줄 확보)
         let title_para = Paragraph::new(title_line).wrap(Wrap { trim: true });
         let title_area = Rect::new(inner.x, inner.y, inner.width, 2);
         title_para.render(title_area, buf);
@@ -94,9 +105,9 @@ impl Widget for QuestionnaireWidget<'_> {
         if question.options.is_empty() || self.state.is_custom_input_mode {
             // 주관식 또는 직접 입력 모드: 텍스트 입력 표시
             let prompt_text = if self.state.is_custom_input_mode {
-                "직접 입력:"
+                self.i18n.tr("custom_input_prompt")
             } else {
-                "답변 입력:"
+                self.i18n.tr("input_prompt")
             };
             let input_lines = vec![
                 Line::from(Span::styled(
@@ -109,7 +120,7 @@ impl Widget for QuestionnaireWidget<'_> {
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Enter: 제출  |  Esc: 취소",
+                    self.i18n.tr("input_hint"),
                     Style::default().fg(self.palette.text_secondary),
                 )),
             ];
@@ -146,8 +157,9 @@ impl Widget for QuestionnaireWidget<'_> {
                 } else {
                     Style::default().fg(self.palette.text_secondary)
                 };
+                let custom_label = self.i18n.tr("custom_option");
                 lines.push(Line::from(Span::styled(
-                    format!("{}✏ 직접 입력...", marker),
+                    format!("{}{}", marker, custom_label),
                     style,
                 )));
             }
@@ -155,7 +167,7 @@ impl Widget for QuestionnaireWidget<'_> {
             // 하단 힌트
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "↑↓: 이동  |  Enter: 선택  |  Esc: 취소",
+                self.i18n.tr("select_hint"),
                 Style::default().fg(self.palette.text_secondary),
             )));
 

@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>smlcli - Status</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "surface-container-low": "#0d1c2d",
+                        "on-primary-fixed": "#23005c",
+                        "outline-variant": "#494454",
+                        "background": "#051424",
+                        "on-tertiary-fixed": "#2c1700",
+                        "inverse-primary": "#6d3bd7",
+                        "on-secondary-container": "#adb4ce",
+                        "surface-container-high": "#1c2b3c",
+                        "surface-dim": "#051424",
+                        "on-error-container": "#ffdad6",
+                        "tertiary-fixed-dim": "#ffb869",
+                        "outline": "#958ea0",
+                        "on-primary": "#3c0091",
+                        "tertiary": "#ffb869",
+                        "secondary-container": "#3f465c",
+                        "on-primary-fixed-variant": "#5516be",
+                        "primary-fixed": "#e9ddff",
+                        "surface-variant": "#273647",
+                        "on-tertiary": "#482900",
+                        "on-secondary-fixed": "#131b2e",
+                        "on-error": "#690005",
+                        "error-container": "#93000a",
+                        "primary-container": "#a078ff",
+                        "inverse-on-surface": "#233143",
+                        "on-secondary-fixed-variant": "#3f465c",
+                        "on-background": "#d4e4fa",
+                        "surface-container-highest": "#273647",
+                        "primary": "#d0bcff",
+                        "error": "#ffb4ab",
+                        "tertiary-container": "#ca801e",
+                        "surface-container": "#122131",
+                        "secondary-fixed-dim": "#bec6e0",
+                        "primary-fixed-dim": "#d0bcff",
+                        "on-secondary": "#283044",
+                        "surface": "#051424",
+                        "surface-container-lowest": "#010f1f",
+                        "secondary": "#bec6e0",
+                        "surface-tint": "#d0bcff",
+                        "secondary-fixed": "#dae2fd",
+                        "on-tertiary-container": "#3f2300",
+                        "on-primary-container": "#340080",
+                        "on-tertiary-fixed-variant": "#673d00",
+                        "on-surface-variant": "#cbc3d7",
+                        "surface-bright": "#2c3a4c",
+                        "tertiary-fixed": "#ffdcbb",
+                        "on-surface": "#d4e4fa",
+                        "inverse-surface": "#d4e4fa"
+                    },
+                    borderRadius: {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    spacing: {
+                        "container-padding-y": "1rem",
+                        "container-padding-x": "2rem",
+                        "composer-height": "4rem",
+                        "block-gap": "1.5rem",
+                        "chip-gap": "0.75rem"
+                    },
+                    fontFamily: {
+                        "header-title": ["JetBrains Mono", "monospace"],
+                        "label-sm": ["JetBrains Mono", "monospace"],
+                        "ui-italic": ["JetBrains Mono", "monospace"],
+                        "code-block": ["JetBrains Mono", "monospace"],
+                        "ui-bold": ["JetBrains Mono", "monospace"]
+                    },
+                    fontSize: {
+                        "header-title": ["16px", { lineHeight: "24px", fontWeight: "800" }],
+                        "label-sm": ["12px", { lineHeight: "16px", fontWeight: "600" }],
+                        "ui-italic": ["14px", { lineHeight: "20px", fontWeight: "400" }],
+                        "code-block": ["14px", { lineHeight: "20px", fontWeight: "400" }],
+                        "ui-bold": ["14px", { lineHeight: "20px", fontWeight: "700" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { font-family: 'JetBrains Mono', monospace; }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        /* Unicode border styling for TUI aesthetic */
+        .tui-border {
+            border: 1px solid theme('colors.outline-variant');
+        }
+    </style>
+</head>
+<body class="bg-background text-on-surface min-h-screen flex flex-col overflow-hidden selection:bg-primary selection:text-on-primary">
+<!-- TopAppBar -->
+<header class="bg-surface border-b border-outline-variant flex justify-between items-center px-container-padding-x h-12 w-full z-20 sticky top-0 shrink-0">
+<div class="flex items-center gap-4">
+<span class="font-header-title text-header-title text-primary">smlcli</span>
+<span class="font-code-block text-code-block text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[16px]">folder</span>
+                ~/workspace/auth-module
+            </span>
+</div>
+<div class="flex items-center gap-6">
+<span class="font-code-block text-code-block text-tertiary">[Git: Clean]</span>
+<div class="flex items-center gap-3">
+<span class="material-symbols-outlined text-on-surface-variant hover:text-primary transition-colors duration-150 cursor-pointer text-[20px]">terminal</span>
+<span class="material-symbols-outlined text-on-surface-variant hover:text-primary transition-colors duration-150 cursor-pointer text-[20px]">settings</span>
+<span class="material-symbols-outlined text-on-surface-variant hover:text-primary transition-colors duration-150 cursor-pointer text-[20px]">help</span>
+</div>
+</div>
+</header>
+<div class="flex flex-1 overflow-hidden">
+<!-- Main Timeline Canvas -->
+<main class="flex-1 overflow-y-auto pb-32 pt-container-padding-y pr-80"> <!-- pr-80 to account for fixed right sidebar -->
+<div class="max-w-4xl mx-auto px-container-padding-x flex flex-col gap-block-gap">
+<!-- Turn 1: User Input -->
+<div class="flex gap-4 group">
+<div class="w-1 bg-primary-container rounded-full shrink-0"></div>
+<div class="flex-1">
+<div class="flex items-center gap-2 mb-1">
+<span class="font-ui-bold text-ui-bold text-on-surface">User</span>
+<span class="font-ui-italic text-ui-italic text-on-surface-variant text-[12px]">just now</span>
+</div>
+<div class="font-code-block text-code-block text-on-surface bg-surface-container-low p-3 rounded tui-border inline-block">
+                            /status
+                        </div>
+</div>
+</div>
+<!-- Turn 2: System Output -->
+<div class="flex gap-4 group">
+<div class="w-1 bg-secondary rounded-full shrink-0"></div>
+<div class="flex-1">
+<div class="flex items-center gap-2 mb-2">
+<span class="font-ui-bold text-ui-bold text-on-surface">System</span>
+<span class="material-symbols-outlined text-[16px] text-secondary">info</span>
+</div>
+<!-- Configuration Summary (KeyValueTable) -->
+<div class="bg-surface-container rounded-lg tui-border overflow-hidden">
+<div class="bg-surface-container-high border-b border-outline-variant px-4 py-2 flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px] text-primary">settings_applications</span>
+<span class="font-ui-bold text-ui-bold text-on-surface">Configuration Summary</span>
+</div>
+<div class="p-4 grid grid-cols-[max-content_1fr] gap-x-8 gap-y-2 font-code-block text-code-block">
+<div class="text-on-surface-variant">Provider</div>
+<div class="text-primary-fixed">anthropic/claude-3.5-sonnet</div>
+<div class="text-on-surface-variant">Workspace</div>
+<div class="text-on-surface">~/workspace/auth-module</div>
+<div class="text-on-surface-variant">Mode</div>
+<div class="text-primary-container font-bold">RUN</div>
+<div class="text-on-surface-variant">Trust State</div>
+<div class="text-[#81c995]">Trusted</div> <!-- Custom success green approximation using acceptable pattern if needed, but sticking to theme if possible. Let's use secondary which is bright -->
+<div class="text-on-surface-variant">Shell Policy</div>
+<div class="text-on-surface">Ask <span class="text-on-surface-variant">(SafeOnly allowed)</span></div>
+<div class="text-on-surface-variant">Context Budget</div>
+<div class="text-tertiary">84% <span class="text-on-surface-variant">(used: 168k / 200k)</span></div>
+<div class="text-on-surface-variant">Git Status</div>
+<div class="text-on-surface">Clean <span class="text-on-surface-variant">(last sync: 2m ago)</span></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- SideNavBar (Inspector) -->
+<aside class="bg-surface-container border-l border-outline-variant docked right-0 h-full w-80 fixed right-0 top-0 bottom-0 flex flex-col pt-12 z-10">
+<div class="p-4 border-b border-outline-variant">
+<div class="flex items-center gap-3 mb-1">
+<span class="material-symbols-outlined text-primary text-[24px]" title="System Terminal Icon">terminal</span>
+<h2 class="font-ui-bold text-ui-bold text-on-surface">Inspector</h2>
+</div>
+<div class="font-code-block text-code-block text-on-surface-variant text-[12px]">smlcli v1.0</div>
+</div>
+<nav class="flex flex-col border-b border-outline-variant">
+<button class="flex items-center gap-3 px-4 py-3 text-tertiary border-r-2 border-tertiary bg-surface-container-high transition-all duration-200">
+<span class="material-symbols-outlined text-[20px]">visibility</span>
+<span class="font-ui-bold text-ui-bold">Preview</span>
+</button>
+<button class="flex items-center gap-3 px-4 py-3 text-on-surface-variant hover:bg-surface-variant transition-all duration-200">
+<span class="material-symbols-outlined text-[20px]">difference</span>
+<span class="font-ui-bold text-ui-bold">Diff</span>
+</button>
+<button class="flex items-center gap-3 px-4 py-3 text-on-surface-variant hover:bg-surface-variant transition-all duration-200">
+<span class="material-symbols-outlined text-[20px]">list_alt</span>
+<span class="font-ui-bold text-ui-bold">Logs</span>
+</button>
+<button class="flex items-center gap-3 px-4 py-3 text-on-surface-variant hover:bg-surface-variant transition-all duration-200">
+<span class="material-symbols-outlined text-[20px]">search</span>
+<span class="font-ui-bold text-ui-bold">Search</span>
+</button>
+<button class="flex items-center gap-3 px-4 py-3 text-on-surface-variant hover:bg-surface-variant transition-all duration-200">
+<span class="material-symbols-outlined text-[20px]">hub</span>
+<span class="font-ui-bold text-ui-bold">Git</span>
+</button>
+</nav>
+<div class="flex-1 overflow-y-auto p-4 flex flex-col">
+<div class="font-label-sm text-label-sm text-on-surface-variant mb-2 flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">description</span>
+                    AuthContext.jsx
+                </div>
+<pre class="bg-surface-container-low rounded tui-border p-3 font-code-block text-code-block text-on-surface overflow-x-auto flex-1"><code class="text-tertiary">import</code> React, { createContext, useContext } <code class="text-tertiary">from</code> <span class="text-primary-fixed">'react'</span>;
+
+<code class="text-tertiary">const</code> AuthContext = <span class="text-secondary">createContext</span>(<code class="text-primary">null</code>);
+
+<code class="text-tertiary">export const</code> AuthProvider = ({ children }) =&gt; {
+  <code class="text-tertiary">const</code> [user, setUser] = <span class="text-secondary">useState</span>(<code class="text-primary">null</code>);
+  <code class="text-tertiary">const</code> [loading, setLoading] = <span class="text-secondary">useState</span>(<code class="text-primary">true</code>);
+
+  <span class="text-on-surface-variant">// Initialization logic...</span>
+
+  <code class="text-tertiary">return</code> (
+    &lt;<span class="text-primary-container">AuthContext.Provider</span> value={{ user, loading }}&gt;
+      {children}
+    &lt;/<span class="text-primary-container">AuthContext.Provider</span>&gt;
+  );
+};
+</pre>
+</div>
+</aside>
+</div>
+<!-- BottomNavBar (Composer) -->
+<div class="fixed bottom-0 left-0 w-full z-50 flex flex-col pr-80"> <!-- pr-80 matches right sidebar -->
+<div class="bg-surface-container-low border-t border-outline-variant p-3 flex flex-col gap-2 mx-auto w-full max-w-4xl px-container-padding-x">
+<!-- Input Buffer -->
+<div class="bg-surface-container rounded tui-border flex items-center px-3 py-2 shadow-sm">
+<span class="text-primary font-code-block mr-2">❯</span>
+<input autocomplete="off" class="bg-transparent border-none focus:ring-0 text-on-surface font-code-block text-code-block flex-1 p-0 caret-primary-container" spellcheck="false" type="text" value="/status"/>
+</div>
+<!-- Toolbar / BottomNavBar Core -->
+<div class="flex items-center gap-2 font-label-sm text-label-sm">
+<!-- Tabs acting as mode chips per request & JSON overlap -->
+<div class="flex bg-surface-container-highest rounded-lg p-1 mr-4">
+<button class="text-outline px-3 py-1 hover:text-primary transition-colors duration-150 rounded-md">PLAN</button>
+<button class="bg-primary-container text-on-primary-container rounded-md px-3 py-1 shadow-sm">RUN</button>
+<button class="text-outline px-3 py-1 hover:text-primary transition-colors duration-150 rounded-md">POLICY</button>
+</div>
+<!-- Additional Context Chips -->
+<div class="flex items-center gap-2">
+<div class="flex items-center gap-1 bg-surface-variant text-on-surface-variant px-2 py-1 rounded tui-border">
+<span class="material-symbols-outlined text-[14px]">folder</span>
+                        ~/workspace/auth-module
+                    </div>
+<div class="flex items-center gap-1 bg-surface-variant text-on-surface-variant px-2 py-1 rounded tui-border">
+<span class="material-symbols-outlined text-[14px]">gavel</span>
+                        Shell Ask
+                    </div>
+</div>
+</div>
+</div>
+</div>
+</body></html>

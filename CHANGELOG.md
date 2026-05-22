@@ -3,6 +3,22 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [3.9.0] - 2026-05-23 (TUI Modernization & Responsive Multi-viewport Redesign)
+
+### Added
+- **RGB 고스케일 세맨틱 팔레트 명세 및 구현 완료 (`src/tui/palette.rs`)**: 11대 고스케일 RGB 컬러 체계(`bg_lowest`, `bg_panel`, `outline`, `text_primary`, `text_secondary` 등)를 도입하여 최신 터미널 미학 구현.
+- **다국어(한/영/일/중(번체)/중(간체)) 5대 지원 언어 실연결 및 매니저 고도화 (`src/tui/i18n.rs`)**: `I18nManager` 내 설문조사 위젯 전용 다국어 키 매핑(`question_progress`, `input_prompt`, `custom_input_prompt`, `input_hint`, `select_hint`, `custom_option` 등) 통합 및 라이프타임 정합성 보장.
+- **수학적 정렬 설문조사 플로팅 모달 구현 (`src/tui/widgets/questionnaire.rs`)**: 화면 중앙 정렬 비율(가로 60%, 세로 45%) 공식 보정, `Clear` 위젯을 통한 잔상 소거 및 다국어 tr() 매핑 연동 구현 완료.
+
+### Changed
+- **Timeline Block-based Layout 개편 및 반응형 구조화 (`src/tui/layout.rs`)**: `unicode-width` 기반의 풀위드 텍스트 래핑 및 `Borders::LEFT` 2px 세로바(`┃`) 기호, Tree of Thoughts 깊이 들여쓰기 융합 브랜치(`└─ ⚙️`) 트리 드로잉 개편 완료.
+- **다중 뷰포트 레이아웃 & 단축키 바인딩 인스펙터 탭바 연동**: `Alt+1` ~ `Alt+6` 단축키 바인딩과 thread_local 기반 5000라인 가속 디프 라인 캐싱(`DIFF_RENDER_CACHE`) 구현 완료.
+- **Composer Inset 및 Fuzzy Command Palette 개선**: `draw_composer`에 `bg_lowest` 배경 및 보라색 `❯` 프롬프트 적용, `draw_command_palette` 오버레이에 `bg_panel` 단색 패널 스타일과 `Clear` 소거 연동. `tick_count`를 활용한 500ms 주기 깜빡임 `█` 네이티브 커서 점멸 연동 완료.
+
+### Fixed
+- **Clippy 경고 일소 및 빌드 무결성 확보**: `std::cell::RefCell::new(None)`을 const 블록으로 초기화하여 `missing-const-for-thread-local` 경고 해결. stable/unstable let_chains 호환성을 우회하기 위해 `#[allow(clippy::collapsible_if)]` 속성을 `src/tui/widgets/inspector_tabs.rs` 및 `src/tui/i18n.rs`에 적절히 배치하여 Clippy 경고 0건 완전 통과 및 빌드 무결성 보장.
+- **TimelineBlock 및 App 구조 정리**: `src/app/state.rs` 내 TimelineBlock 구조체 컬렉션 마이그레이션 및 미사용 variants `Reverted`, `Questionnaire`에 `#[allow(dead_code)]` 속성 적용. `src/app/mod.rs` 내 `BlockStatus` 및 `BlockDisplayMode` 복사 가능 타입에 대한 불필요한 `.clone()` 호출 제거.
+
 ## [3.8.1] - 2026-05-22 (LM Studio Integration Fix & UI Path alignment)
 
 ### Fixed

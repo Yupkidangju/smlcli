@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>smlcli - Timeline</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,600;0,700;0,800;1,400&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "primary": "#d0bcff",
+                        "on-secondary-fixed-variant": "#3f465c",
+                        "on-primary-fixed": "#23005c",
+                        "primary-container": "#a078ff",
+                        "on-error-container": "#ffdad6",
+                        "tertiary-fixed-dim": "#ffb869",
+                        "on-surface": "#d4e4fa",
+                        "tertiary-container": "#ca801e",
+                        "surface-dim": "#051424",
+                        "on-secondary": "#283044",
+                        "on-tertiary-fixed": "#2c1700",
+                        "surface-bright": "#2c3a4c",
+                        "primary-fixed": "#e9ddff",
+                        "on-tertiary": "#482900",
+                        "inverse-primary": "#6d3bd7",
+                        "on-primary": "#3c0091",
+                        "surface-container-high": "#1c2b3c",
+                        "primary-fixed-dim": "#d0bcff",
+                        "surface-variant": "#273647",
+                        "on-tertiary-container": "#3f2300",
+                        "surface-container-highest": "#273647",
+                        "on-secondary-fixed": "#131b2e",
+                        "on-error": "#690005",
+                        "outline": "#958ea0",
+                        "secondary-fixed-dim": "#bec6e0",
+                        "secondary-container": "#3f465c",
+                        "secondary": "#bec6e0",
+                        "on-surface-variant": "#cbc3d7",
+                        "error-container": "#93000a",
+                        "outline-variant": "#494454",
+                        "inverse-surface": "#d4e4fa",
+                        "tertiary": "#ffb869",
+                        "surface-container-lowest": "#010f1f",
+                        "on-primary-container": "#340080",
+                        "surface-container": "#122131",
+                        "tertiary-fixed": "#ffdcbb",
+                        "surface": "#051424",
+                        "inverse-on-surface": "#233143",
+                        "secondary-fixed": "#dae2fd",
+                        "on-background": "#d4e4fa",
+                        "on-tertiary-fixed-variant": "#673d00",
+                        "on-secondary-container": "#adb4ce",
+                        "on-primary-fixed-variant": "#5516be",
+                        "background": "#051424",
+                        "surface-tint": "#d0bcff",
+                        "surface-container-low": "#0d1c2d",
+                        "error": "#ffb4ab"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "container-padding-y": "1rem",
+                        "chip-gap": "0.75rem",
+                        "container-padding-x": "2rem",
+                        "composer-height": "4rem",
+                        "block-gap": "1.5rem"
+                    },
+                    "fontFamily": {
+                        "label-sm": ["JetBrains Mono", "monospace"],
+                        "ui-bold": ["JetBrains Mono", "monospace"],
+                        "header-title": ["JetBrains Mono", "monospace"],
+                        "code-block": ["JetBrains Mono", "monospace"],
+                        "ui-italic": ["JetBrains Mono", "monospace"]
+                    },
+                    "fontSize": {
+                        "label-sm": ["12px", { "lineHeight": "16px", "fontWeight": "600" }],
+                        "ui-bold": ["14px", { "lineHeight": "20px", "fontWeight": "700" }],
+                        "header-title": ["16px", { "lineHeight": "24px", "fontWeight": "800" }],
+                        "code-block": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "ui-italic": ["14px", { "lineHeight": "20px", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { font-family: 'JetBrains Mono', monospace; }
+        .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #273647; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #3f465c; }
+    </style>
+</head>
+<body class="bg-background text-on-surface h-screen overflow-hidden flex selection:bg-primary-container selection:text-on-primary-container">
+<!-- Main Content Area -->
+<main class="flex-1 flex flex-col relative h-full max-w-[calc(100%-20rem)]">
+<!-- TopAppBar -->
+<header class="bg-surface dark:bg-surface border-b border-outline-variant dark:border-outline-variant flex justify-between items-center px-container-padding-x h-12 w-full shrink-0 relative z-10 shadow-sm">
+<div class="flex items-center gap-4">
+<span class="font-header-title text-header-title text-primary dark:text-primary tracking-tight">smlcli</span>
+<div class="hidden sm:flex gap-2">
+<span class="bg-primary/10 text-primary border border-primary/20 px-2 py-0.5 rounded font-label-sm text-label-sm">PLAN</span>
+<span class="text-on-surface-variant border border-outline-variant px-2 py-0.5 rounded font-label-sm text-label-sm">anthropic/claude-3.5-sonnet</span>
+</div>
+</div>
+<div class="flex gap-2 text-primary dark:text-primary">
+<button class="hover:bg-surface-variant dark:hover:bg-surface-variant transition-colors duration-150 p-1.5 rounded-md flex items-center justify-center">
+<span class="material-symbols-outlined text-[20px]" data-icon="terminal">terminal</span>
+</button>
+<button class="hover:bg-surface-variant dark:hover:bg-surface-variant transition-colors duration-150 p-1.5 rounded-md flex items-center justify-center">
+<span class="material-symbols-outlined text-[20px]" data-icon="settings">settings</span>
+</button>
+<button class="hover:bg-surface-variant dark:hover:bg-surface-variant transition-colors duration-150 p-1.5 rounded-md flex items-center justify-center">
+<span class="material-symbols-outlined text-[20px]" data-icon="help">help</span>
+</button>
+</div>
+</header>
+<!-- Timeline (Scrollable Canvas) -->
+<div class="flex-1 overflow-y-auto px-container-padding-x py-container-padding-y space-y-block-gap pb-32">
+<!-- Block 1: AskClarification Tool -->
+<div class="flex gap-4 group">
+<!-- System Accent Line -->
+<div class="w-1 bg-secondary rounded-full shrink-0 opacity-80 group-hover:opacity-100 transition-opacity"></div>
+<div class="flex-1 bg-surface-container border border-outline-variant rounded-lg overflow-hidden shadow-sm">
+<!-- Header -->
+<div class="bg-surface-container-high px-4 py-2 border-b border-outline-variant flex justify-between items-center">
+<div class="flex items-center gap-2 text-secondary">
+<span class="material-symbols-outlined text-[18px]" data-icon="build">build</span>
+<span class="font-ui-bold text-ui-bold">AskClarification</span>
+</div>
+<span class="font-label-sm text-label-sm bg-surface-variant text-on-surface-variant border border-outline px-2 py-0.5 rounded text-[10px] tracking-wider text-[#66bb6a]">DONE</span>
+</div>
+<!-- Body -->
+<div class="p-4 space-y-3 font-code-block text-code-block">
+<p class="text-on-surface-variant">Questionnaire completed. User preferences recorded:</p>
+<div class="bg-surface-container-lowest border border-outline-variant rounded p-3 text-on-surface">
+<div class="grid grid-cols-[120px_1fr] gap-2">
+<span class="text-secondary opacity-70">Framework:</span>
+<span class="text-secondary">React</span>
+<span class="text-secondary opacity-70">Auth:</span>
+<span class="text-secondary">JWT</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Block 2: AI Planning -->
+<div class="flex gap-4 group">
+<!-- AI Accent Line -->
+<div class="w-1 bg-primary rounded-full shrink-0 shadow-[0_0_8px_rgba(208,188,255,0.4)]"></div>
+<div class="flex-1 bg-surface-container border border-outline-variant rounded-lg overflow-hidden shadow-sm">
+<!-- Header -->
+<div class="bg-surface-container-high px-4 py-2 border-b border-outline-variant flex justify-between items-center">
+<div class="flex items-center gap-2 text-primary">
+<span class="material-symbols-outlined text-[18px]" data-icon="auto_awesome">auto_awesome</span>
+<span class="font-ui-bold text-ui-bold">AI Planning</span>
+</div>
+<span class="font-label-sm text-label-sm bg-surface-variant text-on-surface-variant border border-outline px-2 py-0.5 rounded text-[10px] tracking-wider text-[#66bb6a]">DONE</span>
+</div>
+<!-- Body -->
+<div class="p-4 space-y-3 font-code-block text-code-block">
+<p class="text-on-surface-variant">Based on your selections, I have formulated the following implementation plan:</p>
+<ul class="space-y-2 mt-2">
+<li class="flex items-start gap-2">
+<span class="text-primary opacity-80 mt-0.5">[1]</span>
+<span class="text-on-surface">Initialize React project using Vite</span>
+</li>
+<li class="flex items-start gap-2">
+<span class="text-primary opacity-80 mt-0.5">[2]</span>
+<span class="text-on-surface">Install dependencies: <code class="bg-surface-container-highest px-1.5 py-0.5 rounded text-secondary">jsonwebtoken</code>, <code class="bg-surface-container-highest px-1.5 py-0.5 rounded text-secondary">axios</code></span>
+</li>
+<li class="flex items-start gap-2">
+<span class="text-primary opacity-80 mt-0.5">[3]</span>
+<span class="text-on-surface">Scaffold Auth Context and Login/Register modules</span>
+</li>
+</ul>
+</div>
+</div>
+</div>
+<!-- Spacer for bottom elements -->
+<div class="h-4"></div>
+</div>
+<!-- Composer & BottomNav Container -->
+<div class="absolute bottom-0 left-0 w-full flex flex-col z-20">
+<!-- Composer -->
+<div class="px-container-padding-x pb-4 pt-2 bg-gradient-to-t from-background via-background to-transparent">
+<!-- Status Chips -->
+<div class="flex gap-chip-gap mb-2 font-label-sm text-label-sm">
+<span class="bg-primary/10 text-primary border border-primary/30 px-2 py-0.5 rounded shadow-sm">[PLAN]</span>
+<span class="bg-surface-variant text-on-surface-variant border border-outline-variant px-2 py-0.5 rounded">[~/workspace]</span>
+<span class="bg-tertiary/10 text-tertiary border border-tertiary/30 px-2 py-0.5 rounded">[Shell Ask]</span>
+</div>
+<!-- Input Box -->
+<div class="flex items-center bg-surface border border-outline-variant focus-within:border-primary focus-within:ring-1 focus-within:ring-primary rounded px-3 py-2 transition-all">
+<span class="text-primary mr-2 font-ui-bold text-ui-bold">❯</span>
+<input autofocus="" class="bg-transparent flex-1 text-on-surface focus:outline-none font-code-block text-code-block placeholder-on-surface-variant/50" placeholder="Proceed with step 1..." type="text" value="Proceed with step 1"/>
+<div class="w-2.5 h-5 bg-on-surface animate-pulse opacity-70 ml-1"></div>
+</div>
+</div>
+<!-- BottomNavBar (from JSON) -->
+<nav class="bg-surface-container-lowest dark:bg-surface-container-lowest border-t border-outline-variant dark:border-outline-variant h-composer-height flex items-center justify-between px-container-padding-x">
+<div class="flex items-center gap-4">
+<!-- PLAN (Active) -->
+<button class="bg-primary-container text-on-primary-container rounded-lg px-3 py-1 font-label-sm text-label-sm flex items-center gap-2 scale-95 active:scale-90 transition-transform">
+<span class="material-symbols-outlined text-[18px]" data-icon="edit_note">edit_note</span>
+                        PLAN
+                    </button>
+<!-- RUN (Inactive) -->
+<button class="text-outline dark:text-outline px-3 py-1 font-label-sm text-label-sm flex items-center gap-2 hover:text-primary dark:hover:text-primary scale-95 active:scale-90 transition-transform">
+<span class="material-symbols-outlined text-[18px]" data-icon="play_arrow">play_arrow</span>
+                        RUN
+                    </button>
+<!-- POLICY (Inactive) -->
+<button class="text-outline dark:text-outline px-3 py-1 font-label-sm text-label-sm flex items-center gap-2 hover:text-primary dark:hover:text-primary scale-95 active:scale-90 transition-transform">
+<span class="material-symbols-outlined text-[18px]" data-icon="gavel">gavel</span>
+                        POLICY
+                    </button>
+</div>
+</nav>
+</div>
+</main>
+<!-- SideNavBar (Inspector) -->
+<aside class="w-80 bg-surface-container dark:bg-surface-container border-l border-outline-variant dark:border-outline-variant flex flex-col shrink-0 h-full z-30">
+<!-- Header -->
+<div class="px-4 py-4 border-b border-outline-variant flex items-center gap-3 shrink-0">
+<span aria-label="System Terminal Icon" class="material-symbols-outlined text-[24px] text-tertiary" data-icon="terminal">terminal</span>
+<div>
+<h2 class="font-header-title text-header-title text-primary dark:text-primary">Inspector</h2>
+<div class="font-label-sm text-label-sm text-on-surface-variant opacity-80">smlcli v1.0</div>
+</div>
+</div>
+<!-- Tabs -->
+<nav class="flex flex-col pt-2 shrink-0 border-b border-outline-variant pb-2">
+<!-- Preview (Active) -->
+<button class="text-tertiary dark:text-tertiary border-r-2 border-tertiary bg-surface-container-high font-ui-bold text-ui-bold flex items-center gap-3 px-4 py-2.5 transition-all duration-200 text-left">
+<span class="material-symbols-outlined text-[18px]" data-icon="visibility">visibility</span>
+                Preview
+            </button>
+<!-- Diff (Inactive) -->
+<button class="text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-variant dark:hover:bg-surface-variant font-ui-bold text-ui-bold flex items-center gap-3 px-4 py-2.5 transition-all duration-200 text-left">
+<span class="material-symbols-outlined text-[18px]" data-icon="difference">difference</span>
+                Diff
+            </button>
+<!-- Logs (Inactive) -->
+<button class="text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-variant dark:hover:bg-surface-variant font-ui-bold text-ui-bold flex items-center gap-3 px-4 py-2.5 transition-all duration-200 text-left">
+<span class="material-symbols-outlined text-[18px]" data-icon="list_alt">list_alt</span>
+                Logs
+            </button>
+<!-- Search (Inactive) -->
+<button class="text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-variant dark:hover:bg-surface-variant font-ui-bold text-ui-bold flex items-center gap-3 px-4 py-2.5 transition-all duration-200 text-left">
+<span class="material-symbols-outlined text-[18px]" data-icon="search">search</span>
+                Search
+            </button>
+<!-- Git (Inactive) -->
+<button class="text-on-surface-variant dark:text-on-surface-variant hover:bg-surface-variant dark:hover:bg-surface-variant font-ui-bold text-ui-bold flex items-center gap-3 px-4 py-2.5 transition-all duration-200 text-left">
+<span class="material-symbols-outlined text-[18px]" data-icon="hub">hub</span>
+                Git
+            </button>
+</nav>
+<!-- Content Area -->
+<div class="flex-1 overflow-y-auto p-4 bg-surface-container-low">
+<div class="font-label-sm text-label-sm text-on-surface-variant mb-3 uppercase tracking-wider">Project Structure</div>
+<div class="font-code-block text-code-block text-on-surface leading-loose">
+<span class="text-secondary">workspace/</span>
+├── <span class="text-secondary">src/</span>
+│   ├── <span class="text-secondary">components/</span>
+│   │   └── <span class="text-secondary">Auth/</span>
+│   │       ├── Login.jsx <span class="text-[#66bb6a] text-[10px] ml-1 bg-[#66bb6a]/10 px-1 rounded">(new)</span>
+│   │       └── Register.jsx <span class="text-[#66bb6a] text-[10px] ml-1 bg-[#66bb6a]/10 px-1 rounded">(new)</span>
+│   ├── <span class="text-secondary">utils/</span>
+│   │   └── jwt.js <span class="text-[#66bb6a] text-[10px] ml-1 bg-[#66bb6a]/10 px-1 rounded">(new)</span>
+│   ├── App.jsx <span class="text-tertiary text-[10px] ml-1 bg-tertiary/10 px-1 rounded">(mod)</span>
+│   └── index.js
+├── package.json <span class="text-tertiary text-[10px] ml-1 bg-tertiary/10 px-1 rounded">(mod)</span>
+└── vite.config.js
+            </div>
+</div>
+</aside>
+</body></html>

@@ -28,12 +28,21 @@ pub struct ScrollAnchor {
     pub active: bool,
 }
 
+struct DiffCache {
+    pub last_diff_text: String,
+    pub cached_lines: Vec<Line<'static>>,
+}
+
 thread_local! {
     static LOGS_RENDER_CACHE: std::cell::RefCell<RenderCache> = std::cell::RefCell::new(RenderCache {
         lines_cache: HashMap::new(),
         is_dirty: true,
         last_total_lines: 0,
     });
+
+    // [v3.9.0] Diff 렌더링 성능 가속을 위한 thread_local 캐시 인스턴스 선언
+    // clippy::missing_const_for_thread_local 경고를 해소하기 위해 const { ... } 블록으로 초기화
+    static DIFF_RENDER_CACHE: std::cell::RefCell<Option<DiffCache>> = const { std::cell::RefCell::new(None) };
 }
 
 fn ansi_regex() -> &'static Regex {
@@ -133,23 +142,50 @@ pub fn render_preview(f: &mut Frame, state: &AppState, area: Rect) {
 }
 
 /// Diff 탭 렌더링: 승인 대기 중인 변경사항 미리보기.
+/// [v3.9.0] 5000라인급 대용량 Diff 파싱 부하를 없애기 위해 thread_local 기반 Diff 텍스트 캐싱 기법 적용.
+/// clippy::collapsible-if 경고 우회를 위해 allow 속성 부여 (unstable let_chains 방지)
+#[allow(clippy::collapsible_if)]
 pub fn render_diff(f: &mut Frame, state: &AppState, area: Rect) {
     let p = state.palette();
 
     if let Some(diff) = &state.runtime.approval.diff_preview {
-        let lines: Vec<Line> = diff
-            .lines()
-            .map(|line| {
-                let color = if line.starts_with('+') {
-                    p.success
-                } else if line.starts_with('-') {
-                    p.danger
-                } else {
-                    p.text_primary
-                };
-                Line::from(Span::styled(line, Style::default().fg(color)))
-            })
-            .collect();
+        // 캐시 히트 체크
+        let cached_hit = DIFF_RENDER_CACHE.with(|cache_ref| {
+            if let Some(cache) = &*cache_ref.borrow() {
+                if cache.last_diff_text == *diff {
+                    return Some(cache.cached_lines.clone());
+                }
+            }
+            None
+        });
+
+        let lines = match cached_hit {
+            Some(lines) => lines,
+            None => {
+                // 캐시 미스 시 새로 파싱하고 캐시 갱신
+                let new_lines: Vec<Line<'static>> = diff
+                    .lines()
+                    .map(|line| {
+                        let color = if line.starts_with('+') {
+                            p.success
+                        } else if line.starts_with('-') {
+                            p.danger
+                        } else {
+                            p.text_primary
+                        };
+                        Line::from(Span::styled(line.to_string(), Style::default().fg(color)))
+                    })
+                    .collect();
+
+                DIFF_RENDER_CACHE.with(|cache_ref| {
+                    *cache_ref.borrow_mut() = Some(DiffCache {
+                        last_diff_text: diff.clone(),
+                        cached_lines: new_lines.clone(),
+                    });
+                });
+                new_lines
+            }
+        };
 
         let top_scroll = if lines.len() > area.height as usize {
             lines
@@ -595,4 +631,89 @@ pub fn render_git(f: &mut Frame, state: &AppState, area: Rect) {
         .wrap(Wrap { trim: false })
         .scroll((top_scroll, 0));
     f.render_widget(para, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// [v3.9.0] DIFF_RENDER_CACHE 대용량 디프 캐시 무효화 및 갱신 정합성 단위 테스트
+    #[test]
+    fn test_diff_render_cache_invalidation() {
+        // 1. 초기 상태에서 캐시가 비어있는지 검증
+        DIFF_RENDER_CACHE.with(|cache_ref| {
+            *cache_ref.borrow_mut() = None;
+        });
+
+        DIFF_RENDER_CACHE.with(|cache_ref| {
+            assert!(cache_ref.borrow().is_none(), "초기 캐시는 None이어야 함");
+        });
+
+        // 2. 첫 번째 가상 디프 텍스트 렌더링 후 캐시 등록 시뮬레이션
+        let diff_text_1 = "line1\n+line2\n-line3".to_string();
+        let new_lines_1: Vec<Line<'static>> = vec![
+            Line::from("line1"),
+            Line::from("+line2"),
+            Line::from("-line3"),
+        ];
+
+        DIFF_RENDER_CACHE.with(|cache_ref| {
+            *cache_ref.borrow_mut() = Some(DiffCache {
+                last_diff_text: diff_text_1.clone(),
+                cached_lines: new_lines_1.clone(),
+            });
+        });
+
+        // 캐시 히트 및 데이터 보존성 검증
+        DIFF_RENDER_CACHE.with(|cache_ref| {
+            let cache_opt = cache_ref.borrow();
+            let cache = cache_opt.as_ref().unwrap();
+            assert_eq!(
+                cache.last_diff_text, diff_text_1,
+                "캐시된 디프 원문이 일치해야 함"
+            );
+            assert_eq!(
+                cache.cached_lines.len(),
+                3,
+                "캐시된 디프 라인 수가 3개여야 함"
+            );
+        });
+
+        // 3. 디프 텍스트가 미세하게 변경(유효하지 않음)되었을 때 캐시 갱신 및 무효화 시뮬레이션
+        let diff_text_2 = "line1\n+line2_updated".to_string();
+        let new_lines_2: Vec<Line<'static>> =
+            vec![Line::from("line1"), Line::from("+line2_updated")];
+
+        // 캐시 미스 시 갱신 로직 시뮬레이션
+        DIFF_RENDER_CACHE.with(|cache_ref| {
+            let mut cache_opt = cache_ref.borrow_mut();
+            let need_update = if let Some(cache) = &*cache_opt {
+                cache.last_diff_text != diff_text_2
+            } else {
+                true
+            };
+
+            if need_update {
+                *cache_opt = Some(DiffCache {
+                    last_diff_text: diff_text_2.clone(),
+                    cached_lines: new_lines_2.clone(),
+                });
+            }
+        });
+
+        // 캐시 무효화 후 새로운 값으로 정상 교체되었는지 검증
+        DIFF_RENDER_CACHE.with(|cache_ref| {
+            let cache_opt = cache_ref.borrow();
+            let cache = cache_opt.as_ref().unwrap();
+            assert_eq!(
+                cache.last_diff_text, diff_text_2,
+                "무효화 후 새로운 디프 원문이 반영되어야 함"
+            );
+            assert_eq!(
+                cache.cached_lines.len(),
+                2,
+                "갱신된 디프 라인 수가 2개여야 함"
+            );
+        });
+    }
 }

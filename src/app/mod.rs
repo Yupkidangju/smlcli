@@ -1122,9 +1122,9 @@ impl App {
                         && (block.status == crate::app::state::BlockStatus::Running
                             || block.status == crate::app::state::BlockStatus::Idle)
                     {
-                        block.status = final_status.clone();
+                        block.status = final_status; // [v3.9.0] Copy 특성 파생에 따른 .clone() 제거
                         if diff_summary.is_some() {
-                            block.display_mode = display_mode.clone();
+                            block.display_mode = display_mode; // [v3.9.0] Copy 특성 파생에 따른 .clone() 제거
                             block.diff_summary = diff_summary;
                         }
                         block
@@ -1945,6 +1945,26 @@ impl App {
         if self.state.ui.questionnaire.is_some() {
             self.handle_questionnaire_key(key);
             return;
+        }
+
+        // [v3.9.0] Alt+1 ~ Alt+6 단축키로 우측 인스펙터 탭 전환 및 포커스 바인딩 구현
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            let tab_to_switch = match key.code {
+                KeyCode::Char('1') => Some(crate::app::state::InspectorTab::Preview),
+                KeyCode::Char('2') => Some(crate::app::state::InspectorTab::Diff),
+                KeyCode::Char('3') => Some(crate::app::state::InspectorTab::Search),
+                KeyCode::Char('4') => Some(crate::app::state::InspectorTab::Logs),
+                KeyCode::Char('5') => Some(crate::app::state::InspectorTab::Recent),
+                KeyCode::Char('6') => Some(crate::app::state::InspectorTab::Git),
+                _ => None,
+            };
+            if let Some(tab) = tab_to_switch {
+                self.state.ui.show_inspector = true;
+                self.state.ui.focused_pane = crate::app::state::FocusedPane::Inspector;
+                self.state.ui.active_inspector_tab = tab;
+                self.state.ui.inspector_scroll.set(0);
+                return;
+            }
         }
 
         if key.code == KeyCode::F(1)
