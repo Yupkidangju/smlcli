@@ -104,8 +104,14 @@ impl App {
             "Anthropic" => crate::domain::provider::ProviderKind::Anthropic,
             "xAI" => crate::domain::provider::ProviderKind::Xai,
             "Google" => crate::domain::provider::ProviderKind::Google,
+            "LmStudio" => crate::domain::provider::ProviderKind::LmStudio,
             _ => crate::domain::provider::ProviderKind::OpenRouter,
         };
+
+        if provider == crate::domain::provider::ProviderKind::LmStudio {
+            // [v3.8.1] LM Studio는 로컬 무인증 API이므로 API 키 조회 과정을 건너뜀
+            return Ok((provider, settings.default_model.clone(), "".to_string()));
+        }
 
         let alias = format!("{}_key", settings.default_provider.to_lowercase());
         // [v0.1.0-beta.14] 파일 기반 암호화 저장소에서 API 키 조회
@@ -169,9 +175,11 @@ impl App {
                 "Anthropic" => crate::domain::provider::ProviderKind::Anthropic,
                 "xAI" => crate::domain::provider::ProviderKind::Xai,
                 "Google" => crate::domain::provider::ProviderKind::Google,
+                "LmStudio" => crate::domain::provider::ProviderKind::LmStudio,
                 _ => crate::domain::provider::ProviderKind::OpenRouter,
             };
-            (p, format!("{}_key", provider_str.to_lowercase()), true)
+            let needs_k = p != crate::domain::provider::ProviderKind::LmStudio;
+            (p, format!("{}_key", provider_str.to_lowercase()), needs_k)
         };
 
         if !needs_key {

@@ -4038,8 +4038,7 @@ fn test_lm_studio_wizard_flow() {
         "LM Studio 선택 시 API Key 단계를 건너뛰고 Base URL 입력 단계로 전이되어야 함"
     );
     assert_eq!(
-        app.state.ui.wizard.base_url_input,
-        "http://localhost:1234/v1",
+        app.state.ui.wizard.base_url_input, "http://localhost:1234/v1",
         "기본 Base URL이 올바르게 초기화되어야 함"
     );
 
@@ -4069,8 +4068,7 @@ fn test_lm_studio_wizard_flow() {
     // 입력 완료 후 엔터 입력 -> 최종 Saving 단계 전이 및 selected_model 저장 검증
     app.handle_wizard_enter();
     assert_eq!(
-        app.state.ui.wizard.selected_model,
-        "custom-local-model",
+        app.state.ui.wizard.selected_model, "custom-local-model",
         "수동 입력된 모델명이 최종 선택된 모델로 지정되어야 함"
     );
     assert_eq!(

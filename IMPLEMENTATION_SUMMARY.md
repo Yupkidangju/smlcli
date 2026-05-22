@@ -87,6 +87,11 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
   - ✅ **실시간 프로바이더 어댑터 동기화**: `ProviderRegistry` 내 RwLock 보관 중인 OpenAICompatAdapter의 base_url을 TUI 위저드 입력값에 기반해 런타임에 즉시 갱신하는 static API(`update_lmstudio_base_url`) 이식.
   - ✅ **LM Studio 설정 위저드 E2E 통합 테스트 검증**: `test_lm_studio_wizard_flow`를 추가하여 ProviderKind 선택, API Key 생략, BaseUrl 렌더링, API 핑 실패 시 수동 Fallback 모드 선택 및 입력, 최종 Settings 영속화 저장의 전 과정을 정밀 단언 검증하여 105개 전체 테스트 패스 보장.
 
+- [2026-05-22] : **[Audit Remediation - v3.8.0 Build Gate Recovery]**
+  - ✅ **컴파일 오류 수정**: `OpenAICompatAdapter`가 LM Studio 어댑터 조회 경로에서 복제될 수 있도록 `Clone` 파생을 추가하여 `cargo check --all-targets` 실패를 해결.
+  - ✅ **버전 동기화 수정**: `Cargo.toml`, `Cargo.lock`, `spec.md`의 현재 버전을 `3.8.0`으로 맞춰 `scripts/check-version-sync.sh` 실패를 해소.
+  - ✅ **감사 보고서 산출**: 전체 구현 감사 및 빌드 수정 결과를 `audit_report_4.md`에 별도 기록.
+
 - [2026-04-21] : **[Implemented - Phase 25 Ultimate Polish & Security Hardening]**
   - ✅ **UTF-8 안전성 보장 (UX/UI)**: TUI 렌더링 시 `unicode-width` 크레이트를 적용하여 한국어/이모지 멀티바이트 문자가 깨지거나 패닉이 발생하는 현상 수정.
   - ✅ **심볼릭 링크 샌드박스 탈옥 방지 (Security)**: `file_ops`에서 `std::fs::canonicalize`를 통해 파일 절대 경로를 확인하여 Workspace 외부 경로 접근(Path Traversal/Symlink) 차단.
@@ -1102,3 +1107,40 @@ cargo test  ✅ 46 passed (0 failed)
   - `ProviderRegistry` 내 RwLock 보관 중인 OpenAICompatAdapter의 base_url을 TUI 위저드 입력값에 기반해 런타임에 즉시 갱신하는 static API(`update_lmstudio_base_url`) 이식.
 - [x] **Task L-5: 통합 회귀 테스트 검증** ✅ (v3.8.0)
   - `test_lm_studio_wizard_flow`를 추가하여 ProviderKind 선택, API Key 생략, BaseUrl 렌더링, API 핑 실패 시 수동 Fallback 모드 선택 및 입력, 최종 Settings 영속화 저장의 전 과정을 정밀 단언 검증하여 105개 전체 테스트 패스 보장.
+
+### Phase 51: LM Studio 런타임 연동 및 무인증 예외 처리 (v3.8.1) ✅
+
+#### 시스템 구성 요소 분해 및 모듈 파일 책임
+| 파일 경로 | 시스템 분류 | 주요 책임 | 핵심 변경 내역 |
+|-----------|--------------|-----------|----------------|
+| [chat_runtime.rs](file:///home/eunho1/Projects/rust/smlcli/src/app/chat_runtime.rs) | Chat Engine | 챗 세션 구동 및 크레덴셜 해소 | `LmStudio`일 시 API Key 복호화 탐색 우회 및 빈 키(`""`) 즉시 반환 가드 구축 |
+| [config_dashboard.rs](file:///home/eunho1/Projects/rust/smlcli/src/tui/widgets/config_dashboard.rs) | TUI Dashboard | 설정 대시보드 위젯 렌더링 | `"LM Studio"` 프로바이더 옵션 노출 및 최대 한계 패널 버퍼 확장 |
+| [wizard_controller.rs](file:///home/eunho1/Projects/rust/smlcli/src/app/wizard_controller.rs) | Event Controller | 설정 마법사 입력 핸들링 | 인덱스 분기 `idx => 5` 매핑 및 custom_provider 오프셋 `saturating_sub(6)` 보정 |
+| [mod.rs](file:///home/eunho1/Projects/rust/smlcli/src/app/mod.rs) | App Core | 어플리케이션 전역 상태 관리 | TUI 팝업 레이아웃의 고정 렌더링 영역 상한 높이(`MAX_POPUP_HEIGHT = 6`)로 상향 조정 |
+| [workspace_utils.rs](file:///home/eunho1/Projects/rust/smlcli/src/infra/workspace_utils.rs) | Infrastructure | 환경 진단 및 유틸리티 | 조상 노드 실존 여부를 검증하는 견고한 가드 탑재하여 `/tmp/.git` 전역 노이즈 방어 |
+
+#### 런타임 자격 증명 우회 및 TUI 입력 데이터 흐름도 (Data Flow)
+```
+[Chat Runtime 시작]
+        │
+        ▼
+[resolve_credentials_for_provider]
+        │
+        ├─► Provider == LmStudio? ──► YES ──► needs_key = false, API Key = "" (즉시 반환, Decryption 생략)
+        │
+        └─► Provider != LmStudio? ──► NO  ──► Key Store 검색 ──► Decryption 진행 ──► API Key 로드
+```
+
+#### 세부 알고리즘 메모 (Algorithm Memo)
+- **자격 증명 무인증 가드**: 일반 AI 프로바이더(OpenAI, Anthropic 등)는 런타임 구동을 위해 반드시 암호화 키스토어에서 복호화 과정을 수반하여 API Key를 검색해야 하지만, 로컬 무인증 API인 LM Studio는 키가 물리적으로 누락된 경우가 대부분입니다. 이에 따라 `resolve_credentials_for_provider` 함수 내에 LmStudio 계열을 격리 차단하는 early-return 가드 패턴을 정밀 적용했습니다.
+- **TUI 인덱스 상수 통제**: UI 상에서 나열되는 목록 인덱스와 저장 배열 인덱스 간의 불일치는 하드코딩된 오프셋 계산에 기인합니다. 팝업 리스트 구조가 확장될 때, 컨트롤러(`wizard_controller.rs`)의 `idx => 5` 매핑 및 하위 오프셋 `saturating_sub(6)` 연산이 대시보드 렌더러와 동시 동기화되도록 엄격히 제어했습니다.
+
+#### Task 완료 상세 내역
+- [x] **Task L-6: LM Studio 런타임 크레덴셜 무인증 우회 가드** ✅ (v3.8.1)
+  - `src/app/chat_runtime.rs` 내 `resolve_credentials` 및 `resolve_credentials_for_provider`에서 LmStudio일 경우 빈 API Key(`""`)와 기본 모델명을 즉시 반환하도록 하여, 파일 기반 암호 저장소 검색을 우회하도록 예외 처리 완료.
+- [x] **Task L-7: TUI 대시보드 인덱스 교정 및 팝업 높이 상향** ✅ (v3.8.1)
+  - `/config` 대시보드 팝업 메뉴에 `"LM Studio"` 문자열 옵션을 정식 추가.
+  - `wizard_controller.rs` 내 팝업 입력 핸들러 `idx => 5` 분기 매핑 및 custom_provider 인덱스 오프셋을 `saturating_sub(6)`으로 교정하여 인덱스 정합성 완비.
+  - `mod.rs`에서 팝업 네비게이션 최대 높이 한계를 `5 + ...`로 상향 조정하여 잘림 현상 방지.
+- [x] **Task L-8: 테스트 환경 /tmp/.git 노이즈 방어 리팩토링** ✅ (v3.8.1)
+  - 로컬 환경 중 `/tmp/.git` 폴더가 전역적으로 존재하여 `find_workspace_root`가 오탐을 내는 문제를 예방하기 위해, `workspace_utils.rs` of `test_find_workspace_root_fallback` 검증 로직에 부모 노드의 `.git` 실존 체크 가드를 덧씌워 테스트 견고성 확보.

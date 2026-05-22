@@ -150,13 +150,16 @@ impl App {
                     // 수동 입력 모드인 경우 입력된 텍스트를 선택된 모델로 최종 지정
                     let val = self.state.ui.wizard.custom_model_input.trim().to_string();
                     if val.is_empty() {
-                        self.state.ui.wizard.err_msg = Some("Model name cannot be empty.".to_string());
+                        self.state.ui.wizard.err_msg =
+                            Some("Model name cannot be empty.".to_string());
                         return;
                     }
                     self.state.ui.wizard.selected_model = val;
                     self.state.ui.wizard.step = state::WizardStep::Saving;
                 } else if !self.state.ui.wizard.available_models.is_empty() {
-                    let selected = self.state.ui.wizard.available_models[self.state.ui.wizard.cursor_index].clone();
+                    let selected = self.state.ui.wizard.available_models
+                        [self.state.ui.wizard.cursor_index]
+                        .clone();
                     if selected == "✏ 직접 입력..." {
                         // 수동 직접 입력 모드 활성화
                         self.state.ui.wizard.is_custom_model_mode = true;
@@ -409,10 +412,11 @@ impl App {
                     2 => "xAI".to_string(),
                     3 => "OpenRouter".to_string(),
                     4 => "Google".to_string(),
+                    5 => "LmStudio".to_string(),
                     idx => {
                         let mut res = "OpenAI".to_string();
                         if let Some(settings) = &self.state.domain.settings
-                            && let Some(cp) = settings.custom_providers.get(idx.saturating_sub(5))
+                            && let Some(cp) = settings.custom_providers.get(idx.saturating_sub(6))
                         {
                             res = format!("Custom: {}", cp.id);
                         }

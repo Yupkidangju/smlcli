@@ -1826,7 +1826,10 @@ impl App {
                         // [v3.7.2] Q2 추천안: 모델 조회 실패(오프라인 등) 시에도 수동 지정을 위해 "✏ 직접 입력..."을 제공
                         self.state.ui.wizard.available_models = vec!["✏ 직접 입력...".to_string()];
                         self.state.ui.wizard.cursor_index = 0;
-                        self.state.ui.wizard.err_msg = Some(format!("모델 목록 조회 실패: {}. 수동 입력을 진행할 수 있습니다.", e));
+                        self.state.ui.wizard.err_msg = Some(format!(
+                            "모델 목록 조회 실패: {}. 수동 입력을 진행할 수 있습니다.",
+                            e
+                        ));
                     }
                 }
             }
@@ -1884,7 +1887,9 @@ impl App {
             Err(e) => {
                 // 검증 실패: LmStudio일 경우 BaseUrlInput 단계로 복귀하고 그 외에는 ApiKeyInput으로 복귀
                 self.state.ui.wizard.is_loading_models = false;
-                if self.state.ui.wizard.selected_provider == Some(crate::domain::provider::ProviderKind::LmStudio) {
+                if self.state.ui.wizard.selected_provider
+                    == Some(crate::domain::provider::ProviderKind::LmStudio)
+                {
                     self.state.ui.wizard.step = state::WizardStep::BaseUrlInput;
                 } else {
                     self.state.ui.wizard.step = state::WizardStep::ApiKeyInput;
@@ -2080,7 +2085,8 @@ impl App {
                     // Provider -> ApiKey -> Model -> SaveButton
                     let reverse =
                         key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
-                    let is_lmstudio = self.state.ui.wizard.selected_provider == Some(crate::domain::provider::ProviderKind::LmStudio);
+                    let is_lmstudio = self.state.ui.wizard.selected_provider
+                        == Some(crate::domain::provider::ProviderKind::LmStudio);
                     self.state.ui.wizard.step = match self.state.ui.wizard.step {
                         state::WizardStep::ProviderSelection => {
                             if reverse {
@@ -2192,7 +2198,9 @@ impl App {
                 // [v3.7.2] Base URL 입력 시 에러 초기화 및 입력 버퍼 누적
                 self.state.ui.wizard.err_msg = None;
                 self.state.ui.wizard.base_url_input.push(c);
-            } else if self.state.ui.wizard.step == state::WizardStep::ModelSelection && self.state.ui.wizard.is_custom_model_mode {
+            } else if self.state.ui.wizard.step == state::WizardStep::ModelSelection
+                && self.state.ui.wizard.is_custom_model_mode
+            {
                 // [v3.7.2] 모델 직접 수동 입력 시 에러 초기화 및 버퍼 누적
                 self.state.ui.wizard.err_msg = None;
                 self.state.ui.wizard.custom_model_input.push(c);
@@ -2365,7 +2373,7 @@ impl App {
             let max = match self.state.ui.config.active_popup {
                 state::ConfigPopup::Dashboard => 4,
                 state::ConfigPopup::ProviderList => {
-                    4 + self
+                    5 + self
                         .state
                         .domain
                         .settings
@@ -2464,7 +2472,9 @@ impl App {
                 // [v3.7.2] Base URL 입력 상태에서 백스페이스 처리 및 에러 초기화
                 self.state.ui.wizard.err_msg = None;
                 self.state.ui.wizard.base_url_input.pop();
-            } else if self.state.ui.wizard.step == state::WizardStep::ModelSelection && self.state.ui.wizard.is_custom_model_mode {
+            } else if self.state.ui.wizard.step == state::WizardStep::ModelSelection
+                && self.state.ui.wizard.is_custom_model_mode
+            {
                 // [v3.7.2] 모델명 수동 입력 상태에서 백스페이스 처리 및 에러 초기화
                 self.state.ui.wizard.err_msg = None;
                 self.state.ui.wizard.custom_model_input.pop();

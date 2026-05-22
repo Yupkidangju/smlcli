@@ -547,3 +547,39 @@
 | 수동 직접 입력 Fallback UI | `src/tui/widgets/setting_wizard.rs` 확인 | API 핑`/models`의 로딩 및 실패 여부에 관계없이 목록 최하단에 항상 `"✏ 직접 입력..."`을 제공하고, 선택 시 전용 수동 입력 모달(`is_custom_model_mode`) 전개 |
 | E2E 통합 회귀 테스트 통과 | `cargo test test_lm_studio_wizard_flow` | LmStudio 선택 -> Base URL 입력 -> API 핑 실패 시 수동 입력 -> 최종 settings 저장 영속화 과정이 무결하게 검증되며, 전체 105개 테스트 무결 통과 |
 
+## Phase 51: v3.8.1 LM Studio 런타임 연동 및 무인증 예외 처리 감사 기준 (완료)
+
+### 51.1 감사 항목 및 합격 검증 기준표
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| LM Studio 런타임 크레덴셜 예외 | `src/app/chat_runtime.rs` `resolve_credentials` 확인 | LmStudio 프로바이더의 경우 API Key 조회 및 에러 처리를 스킵하고 빈 문자열(`""`)로 즉시 통과 처리 |
+| LM Studio 프로바이더 연동 가드 | `src/app/chat_runtime.rs` `resolve_credentials_for_provider` 확인 | LmStudio에 대해 `needs_key` 플래그를 `false`로 제어하여 암호 저장소 키 수집 단계를 우회 |
+| 대시보드 리스트 연동 | `src/tui/widgets/config_dashboard.rs` 확인 | `/config` 대시보드 내 "Select Provider" 목록에 `"LM Studio"` 문자열 옵션이 정상 렌더링됨 |
+| 대시보드 인덱스 교정 | `src/app/wizard_controller.rs` 및 `mod.rs` 확인 | 대시보드 키 핸들러 `idx => 5` 분기 처리, custom_providers 오프셋 보정(`saturating_sub(6)`), 팝업 네비게이션 최대값 상향(`5 + ...`) 정상 반영 |
+
+### 51.2 감사 검증 명령어 및 출력 결과 샘플 (Execution Path)
+감사자는 터미널에서 아래 통합 테스트 검증 명령어를 수행하고 100% 성공 여부를 단언 판단해야 합니다.
+
+```bash
+# 1. 핫픽스 패치에 관한 단위/통합 테스트 집중 실행
+cargo test tests::audit_regression::test_lm_studio_wizard_flow
+
+# 2. 전체 회귀 테스트 스위트 105개 전체 실행 및 환경 노이즈 격리 여부 확인
+cargo test
+```
+
+#### 정상 통과 시 터미널 출력 결과 샘플 (Standard Output Spec)
+```
+running 105 tests
+.........................................................................................................
+test result: ok. 105 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+```
+
+### 51.3 잔여 리스크 (Residual Risks)
+* **로컬 LLM 포트/서버 설정 불일치 리스크**:
+  - **내용**: LM Studio가 실행 중인 로컬 포트가 기본값(`1234`)이 아니거나, 런타임 중에 서버가 다운되는 경우 챗 연동이 거부됩니다.
+  - **대응책**: 설정 마법사 Step 2 단계에서 포트 편집 편집기를 유연하게 제공하고, 검증 실패 시 즉시 에러 알림 카드와 수동 모델명 직접 입력(`✏ 직접 입력...`) 카드를 제공해 마법사를 중단 없이 이어가도록 조치했습니다.
+* **TUI 위젯 최소 크기 초과 시 오버플로우 리스크**:
+  - **내용**: 팝업 크기 상향(`MAX_HEIGHT = 6`)으로 인해 가로 80칸, 세로 24칸 미만의 초소형 터미널 창에서 `/config`를 구동할 시 UI 패널이 깨질 위험이 있습니다.
+  - **대응책**: 터미널 최소 권장 해상도(80x24) 미만 진입 시 UI 렌더링 오류 피드백 카드를 화면 최상단에 안전하게 그리도록 예외 렌더러가 설정되어 있어, 오버플로우 충돌을 미연에 방지합니다.
+

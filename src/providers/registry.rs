@@ -58,6 +58,7 @@ pub enum AuthStrategy {
     CustomHeader(String),
 }
 
+#[derive(Clone)]
 pub struct OpenAICompatAdapter {
     client: Client,
     base_url: String,
@@ -966,8 +967,5 @@ pub fn update_custom_providers(configs: &[crate::domain::provider::CustomProvide
 
 // [v3.7.2] 전역 레지스트리에 LM Studio base_url을 바인딩하기 위한 공용 인터페이스
 pub fn update_lmstudio_base_url(url: &str) {
-    get_registry()
-        .read()
-        .unwrap()
-        .update_lmstudio_base_url(url);
+    get_registry().read().unwrap().update_lmstudio_base_url(url);
 }

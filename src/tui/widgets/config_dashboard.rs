@@ -123,6 +123,7 @@ pub fn draw_config(f: &mut Frame, state: &AppState) {
                 "xAI".to_string(),
                 "OpenRouter".to_string(),
                 "Google (Gemini)".to_string(),
+                "LM Studio".to_string(),
             ];
 
             if let Some(settings) = &state.domain.settings {

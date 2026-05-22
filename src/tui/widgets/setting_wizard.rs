@@ -111,10 +111,11 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
         WizardStep::ModelSelection => {
             if state.ui.wizard.is_custom_model_mode {
                 // [v3.7.2] 모델 수동 직접 입력 모드 텍스트 박스 렌더링
-                let rendered =
-                    crate::tui::widgets::input_field::InputField::new(&state.ui.wizard.custom_model_input)
-                        .with_password(false)
-                        .render();
+                let rendered = crate::tui::widgets::input_field::InputField::new(
+                    &state.ui.wizard.custom_model_input,
+                )
+                .with_password(false)
+                .render();
                 let err_str = state.ui.wizard.err_msg.as_deref().unwrap_or("");
                 let err_disp = if err_str.is_empty() {
                     String::new()

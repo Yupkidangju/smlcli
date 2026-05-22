@@ -1,4 +1,4 @@
-# smlcli Implementation Spec (v3.7.1)
+# smlcli Implementation Spec (v3.8.1)
 
 ## 0. Global Documentation Rules (Git Policy)
 
@@ -23,7 +23,7 @@
 smlcli
 
 **Current Version**
-v3.7.1
+v3.8.1
 
 **Status**
 Initial Specification & Implementation Entry
@@ -2786,3 +2786,115 @@ pub enum WizardStep {
 #### 48.4 테스트 및 검증
 - `test_lm_studio_wizard_flow` 통합 테스트를 통해 LmStudio 선택 ➔ URL 입력 ➔ 수동 지정 ➔ 저장 영속화까지의 데이터 무결성을 검증.
 - 105개 전체 회귀 테스트의 100% 정상 패스 보장.
+
+---
+
+### Phase 48-A: LM Studio 런타임 연동 및 무인증 예외 처리 (v3.8.1)
+
+#### 48-A.1 Scope Closure (범위 격리)
+- **목표**: v3.8.0 설계 이후 실제 런타임 호출 시 LM Studio가 로컬 무인증 API임에도 불구하고 암호화 저장소에서 API 키를 조회하려 시도하다가 누락 오류가 발생하는 문제를 해결하고, 대시보드 내 인덱스 불일치 및 팝업 렌더링 한계를 정상 교정함.
+- **성공 기준 (Success Criteria)**:
+  1. `src/app/chat_runtime.rs` 내 `resolve_credentials` 및 `resolve_credentials_for_provider`에서 `LmStudio`일 때 API Key 수집 및 암호 복호화 절차를 완벽히 우회하고 가드 처리 완료.
+  2. `/config` 대시보드 리스트의 "Select Provider" 메뉴에 `"LM Studio"` 문자열 옵션이 정상 노출되며, 선택 시 인덱스 엇갈림이 없도록 오프셋 상향 조정 및 팝업 높이 보정 반영.
+  3. 로컬 환경의 가상 `/tmp/.git` 전역 노이즈를 방어한 105개 전체 테스트 무결 패스 보장.
+- **비목표 (Non-Goals)**:
+  - LM Studio를 위한 전역 가상 API Key 생성 또는 암호화 저장소 강제 기입 방식은 도입하지 않음 (로컬 무인증 UX 직관성 보존을 위해 배제).
+  - TUI 대시보드 내 리스트 렌더링 패널의 동적 가변 높이 자동 계산 메커니즘 전면 리팩토링은 레이아웃 견고성과 Flicker 방지를 위해 비목표로 설정하며, 대신 정적 상수를 한 칸 보정하는 안전한 방식을 택함.
+
+#### 48-A.2 Typed Contracts (타입 계약)
+런타임 크레덴셜 해소 및 TUI 매핑을 위해 정의된 명확한 API 시그니처와 매칭 타입 계약은 다음과 같습니다.
+
+```rust
+// 1. src/domain/provider.rs
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProviderKind {
+    OpenRouter,
+    Google,
+    OpenAi,
+    Anthropic,
+    Ollama,
+    LmStudio, // [v3.8.0] 추가됨
+}
+
+// 2. src/app/chat_runtime.rs 내 크레덴셜 해소 시그니처 및 LmStudio 예외 규격
+pub fn resolve_credentials(provider: &ProviderKind) -> Result<(String, String), AppError> {
+    match provider {
+        ProviderKind::LmStudio => {
+            // LM Studio는 로컬 무인증 API이므로 Key Store 접근을 스킵하고 즉시 기본값 반환
+            Ok(("".to_string(), "local-model".to_string()))
+        }
+        _ => {
+            // 일반 프로바이더는 전역 Key Store 복호화 수행
+            let key = crypto_store::get_key(provider)?;
+            let model = config::get_default_model(provider)?;
+            Ok((key, model))
+        }
+    }
+}
+
+pub fn resolve_credentials_for_provider(provider: &ProviderKind) -> Result<ProviderCredentialSpec, AppError> {
+    match provider {
+        ProviderKind::LmStudio => {
+            Ok(ProviderCredentialSpec {
+                needs_key: false, // API Key 검증 우회 플래그
+                api_key: "".to_string(),
+            })
+        }
+        _ => {
+            let api_key = crypto_store::get_key(provider)?;
+            Ok(ProviderCredentialSpec {
+                needs_key: true,
+                api_key,
+            })
+        }
+    }
+}
+```
+
+#### 48-A.3 Concrete Numbers (구체적 수치)
+TUI 레이아웃 패널 및 인덱스 핸들러에 적용된 명확한 정적 수치 명세는 다음과 같습니다.
+
+* **대시보드 팝업 최대 렌더링 높이 (`MAX_HEIGHT`)**:
+  - 기존: `5` (OpenRouter, Gemini, OpenAI, Anthropic, Ollama)
+  - 변경: `6` (LM Studio 추가로 인한 TUI 높이 1칸 확장 보정, `5 + custom` 구조 안정성 확보)
+* **Select Provider 팝업 메뉴 인덱스**:
+  - `idx => 5` 분기: LM Studio 프로바이더와 1:1 매핑
+* **사용자 정의 프로바이더 오프셋 오버플로우 보정**:
+  - 기존: `saturating_sub(5)`
+  - 변경: `saturating_sub(6)` (LM Studio 삽입에 따른 커서 선택 배열 인덱스 시프트 1칸 보정)
+
+#### 48-A.4 Real Data Samples (실데이터 샘플)
+LM Studio 프로바이더 연동 및 모델 설정 완료 시 `smlcli` 설정 영속화 파일(`~/.smlcli/config.json`)에 기록되는 규격 데이터 샘플입니다.
+
+```json
+{
+  "active_provider": "LmStudio",
+  "providers": {
+    "LmStudio": {
+      "base_url": "http://localhost:1234/v1",
+      "default_model": "qwen2.5-7b-instruct",
+      "skip_credentials_validation": true
+    }
+  },
+  "security": {
+    "permission_preset": "SafeStarter"
+  }
+}
+```
+
+#### 48-A.5 Execution & Verification Path (구현 및 검증 경로)
+이번 패치 사항의 무결성 검증을 위해 제공되는 자동화 테스트 실행 및 수동 검증 경로입니다.
+
+* **자동화 테스트 검증 명령어**:
+  ```bash
+  # LM Studio 위저드 흐름 및 런타임 모킹 검증
+  cargo test tests::audit_regression::test_lm_studio_wizard_flow
+  
+  # 전체 105개 회귀 및 통합 테스트 스위트 무결성 검증
+  cargo test
+  ```
+* **테스트 단언(Assertion) 검증 기준**:
+  - `assert_eq!(settings.active_provider, ProviderKind::LmStudio)`로 영속 저장 정합성 통과.
+  - `assert_eq!(credentials.needs_key, false)` 단언문 통과를 통한 크레덴셜 해소 예외 우회 보증.
+  - `assert_eq!(wizard_state.selected_index(), 5)`를 통한 TUI 팝업 인덱스 매칭 성공 검증.
+

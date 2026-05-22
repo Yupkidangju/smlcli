@@ -123,7 +123,9 @@ impl App {
                                         &settings.custom_providers,
                                     );
                                     if let Some(base_url) = &settings.lmstudio_base_url {
-                                        crate::providers::registry::update_lmstudio_base_url(base_url);
+                                        crate::providers::registry::update_lmstudio_base_url(
+                                            base_url,
+                                        );
                                     }
 
                                     let settings_clone = settings.clone();

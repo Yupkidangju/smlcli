@@ -3,6 +3,13 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [3.8.1] - 2026-05-22 (LM Studio Integration Fix & UI Path alignment)
+
+### Fixed
+- **LM Studio 런타임 연동 누락 수정**: `src/app/chat_runtime.rs` 내 `resolve_credentials` 및 `resolve_credentials_for_provider` 함수에 `"LmStudio"` 분기를 추가하여, LM Studio가 암호화 저장소에서 API 키를 조회하지 않고 무인증 로컬 API로 동작하도록 예외 처리를 완료했습니다.
+- **TUI 대시보드 인덱스 불일치 교정**: `src/tui/widgets/config_dashboard.rs` 대시보드 리스트에 `"LM Studio"` 문자열 옵션을 추가하고, `src/app/wizard_controller.rs` 내 인덱스 처리(`idx => 5`) 분기 및 커스텀 프로바이더 인덱스 오프셋 보정(`saturating_sub(6)`)을 적용하여 커서 하이라이트가 엇갈리는 현상을 해결했습니다.
+- **대시보드 최대 팝업 범위 한계 보정**: `src/app/mod.rs`에서 대시보드 네비게이션 최대 한계 상수값을 상향 보정(`4` -> `5`)하여, 새로 추가된 LM Studio 프로바이더를 포함한 5개 기본 프로바이더와 사용자 정의 프로바이더 리스트가 잘림 없이 렌더링되도록 조치했습니다.
+
 ## [3.8.0] - 2026-05-22 (LM Studio Provider Support & Wizard Fallback Integration)
 
 ### Added
@@ -13,6 +20,9 @@
 
 ### Changed
 - **실시간 프로바이더 어댑터 동기화**: `ProviderRegistry` 내 RwLock 보관 중인 OpenAICompatAdapter의 base_url을 TUI 위저드 입력값에 기반해 런타임에 즉시 갱신하는 static API(`update_lmstudio_base_url`) 이식.
+
+### Fixed
+- **빌드 오류 수정 및 버전 동기화**: `OpenAICompatAdapter`에 `Clone` 파생을 추가하여 LM Studio 어댑터 조회 경로의 `cargo check --all-targets` 컴파일 오류를 해결하고, `Cargo.toml`/`Cargo.lock`/`spec.md` 버전을 `3.8.0`으로 동기화하여 `scripts/check-version-sync.sh` 게이트를 통과하도록 수정.
 
 ## [3.7.2] - 2026-05-22 (Headless Test Suite Isolation & TUI Mouse Routing Patch)
 
