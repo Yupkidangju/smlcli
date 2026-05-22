@@ -71,6 +71,9 @@ pub struct PersistedSettings {
     /// [v3.3.0] Phase 43: MCP 클라이언트 서버 설정
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    /// [v3.7.2] LM Studio 로컬 base_url 설정
+    #[serde(default = "default_lmstudio_base_url")]
+    pub lmstudio_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +135,11 @@ fn default_theme() -> String {
     "default".to_string()
 }
 
+/// LM Studio 로컬 base_url의 기본값: "http://localhost:1234/v1"
+fn default_lmstudio_base_url() -> Option<String> {
+    Some("http://localhost:1234/v1".to_string())
+}
+
 fn default_version() -> u32 {
     1
 }
@@ -157,6 +165,7 @@ impl Default for PersistedSettings {
             custom_providers: Vec::new(),
             sandbox: SandboxConfig::default(),
             mcp_servers: Vec::new(),
+            lmstudio_base_url: default_lmstudio_base_url(),
         }
     }
 }

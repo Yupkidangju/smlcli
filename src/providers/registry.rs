@@ -771,6 +771,8 @@ pub struct ProviderRegistry {
     openrouter: Arc<OpenAICompatAdapter>,
     anthropic: Arc<crate::providers::anthropic::AnthropicAdapter>,
     google: Arc<GeminiAdapter>,
+    // [v3.7.2] LM Studio의 동적인 base_url 변경 요구사항에 유연하게 대응하기 위해 RwLock으로 감싸서 저장
+    lmstudio: Arc<RwLock<OpenAICompatAdapter>>,
     custom_adapters: std::collections::HashMap<String, Arc<dyn ProviderAdapter>>,
 }
 
@@ -788,6 +790,11 @@ impl ProviderRegistry {
                 "https://api.anthropic.com/v1".to_string(),
             )),
             google: Arc::new(GeminiAdapter::new()),
+            // [v3.7.2] LM Studio 로컬 기본 엔드포인트("http://localhost:1234/v1")와 인증 생략(None) 전략 바인딩
+            lmstudio: Arc::new(RwLock::new(OpenAICompatAdapter::with_auth(
+                "http://localhost:1234/v1".to_string(),
+                AuthStrategy::None,
+            ))),
             custom_adapters: std::collections::HashMap::new(),
         }
     }
@@ -826,6 +833,13 @@ impl ProviderRegistry {
         }
     }
 
+    // [v3.7.2] LM Studio의 base_url을 실시간 갱신하는 런타임 제어 함수 구현
+    pub fn update_lmstudio_base_url(&self, url: &str) {
+        if let Ok(mut lock) = self.lmstudio.write() {
+            *lock = OpenAICompatAdapter::with_auth(url.to_string(), AuthStrategy::None);
+        }
+    }
+
     // [v2.5.0] cfg별 분리 구현으로 #[allow(unused_variables)] 제거
     #[cfg(test)]
     pub fn get_adapter(&self, _kind: &ProviderKind) -> Arc<dyn ProviderAdapter> {
@@ -840,6 +854,11 @@ impl ProviderRegistry {
             ProviderKind::OpenRouter => self.openrouter.clone(),
             ProviderKind::Anthropic => self.anthropic.clone(),
             ProviderKind::Google => self.google.clone(),
+            // [v3.7.2] LmStudio 요청 시 RwLock 보관 중인 실시간 어댑터 클론 전달
+            ProviderKind::LmStudio => {
+                let adapter = self.lmstudio.read().unwrap().clone();
+                Arc::new(adapter)
+            }
             ProviderKind::Custom(id) => self
                 .custom_adapters
                 .get(id)
@@ -943,4 +962,12 @@ pub fn update_custom_providers(configs: &[crate::domain::provider::CustomProvide
         .write()
         .unwrap()
         .register_custom_providers(configs);
+}
+
+// [v3.7.2] 전역 레지스트리에 LM Studio base_url을 바인딩하기 위한 공용 인터페이스
+pub fn update_lmstudio_base_url(url: &str) {
+    get_registry()
+        .read()
+        .unwrap()
+        .update_lmstudio_base_url(url);
 }

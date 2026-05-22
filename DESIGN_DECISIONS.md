@@ -1237,3 +1237,40 @@ v3.7.1 릴리스를 앞두고 진행된 보안 및 안정성 감사에서 몇 �
 - MCP 서버의 비정상 종료 시에도 클라이언트 상태가 꼬이지 않고 안전하게 복구/정리됨.
 - 보안 샌드박스의 무결성 복원 및 104개 전 항목에 대한 회귀 테스트 통과.
 - 프로젝트 전체 공백(Trailing whitespace) 및 EOF newline 일치로 철저한 소스 무결성 달성.
+
+---
+
+## ADR-036: LM Studio 로컬 프로바이더 추가 및 무결 위저드 설계 (v3.8.0)
+
+### Status
+Implemented
+
+### Date
+2026-05-22
+
+### Context
+사용자의 로컬 AI 개발 및 오프라인 구동 요구사항에 대응하기 위해, 대표적인 로컬 LLM 런타임인 LM Studio 공식 프로바이더(`ProviderKind::LmStudio`)를 통합해야 했습니다.
+기존 설정 위저드(Setup Wizard)는 '프로바이더 선택 -> API Key 입력 -> 비동기 모델 리스트 로딩 -> 저장'의 선형 프로세스로 고정되어 있었으나, 로컬 런타임인 LM Studio는 API Key가 존재하지 않고 로컬 포트 및 호스트(`base_url`) 설정이 핵심이므로 다음과 같은 설계적 과제를 해결해야 했습니다:
+1. **API Key 단계 건너뛰기**: LM Studio 선택 시 API Key 단계를 완전 생략하고 `Base URL 입력` 단계로 분기해야 함.
+2. **동적 어댑터 갱신**: 사용자가 TUI 상에서 수정한 `base_url`이 비동기 모델 핑 검증 및 프로바이더 생성 시점에 실시간으로 연동되어야 함.
+3. **오프라인 회복력 확보**: 로컬 AI 특성상 로컬 서버가 꺼져 있어 API `/models` 조회가 완전히 실패하더라도, 위저드가 터지거나 중단되지 않고 사용자가 원하는 모델명을 직접 수동 타이핑하여 위저드를 통과할 수 있는 Fallback 기작이 요구됨.
+
+### Decision
+
+**1. 설정 위저드 분기 처리 모델 도입**
+- `WizardStep`에 `BaseUrlInput` 단계를 신설하고, `selected_provider`가 `LmStudio`인 경우 키 입력 처리기 및 UI 렌더러에서 API Key 입력을 자동으로 건너뛰어(Skip) `BaseUrlInput` 단계로 전환하도록 구현.
+- LmStudio 외 다른 프로바이더 선택 시에는 기존과 같이 API Key 입력 단계로 분기하여 이전 버전과의 호환성 유지.
+
+**2. static RwLock 기반 런타임 어댑터 동적 동기화**
+- `ProviderRegistry` 내에 static 변수로 보관되고 1회만 초기화되는 `lmstudio` `OpenAICompatAdapter`를 전역 `update_lmstudio_base_url` API를 통해 감싸서 노출.
+- 설정 마법사에서 Base URL을 입력받을 때 및 `Settings` 저장/로드 핸들러에서 이 전역 함수를 트리거하여 런타임 호출 시 dynamic base_url 반영이 가능하도록 설계.
+
+**3. 오프라인 수동 지정 `"✏ 직접 입력..."` Fallback 모드 및 전용 UI 탑재**
+- API `/models` 핑 검증이 성공하든, 오프라인으로 인해 연결이 실패하든 관계없이 모델 선택 목록 하단에 항상 `"✏ 직접 입력..."` 항목을 동적으로 생성하여 노출.
+- 모델 핑 실패 시에는 목록을 빈 화면으로 두지 않고 에러 카드 피드백과 함께 오직 `"✏ 직접 입력..."` 1개 항목을 노출하여 다음 설정 단계 진행을 보장.
+- `"✏ 직접 입력..."` 선택 시 화면 중앙에 수동 텍스트 타이핑 전용 모달 버퍼(`is_custom_model_mode`)를 전개하여 사용자가 로컬 모델명을 임의 입력하도록 돕고, `Enter`를 통해 저장 단계로 안전하게 전이시킴.
+
+### Consequences
+- LM Studio 로컬 LLM 환경을 API Key 없이 직관적으로 설정 가능.
+- 로컬 서버 오프라인 상황에서도 마법사가 정상 가동되며, 사용자가 수동 입력을 통해 onboarding flow를 차질 없이 완수할 수 있는 완벽한 안정성 확보.
+- 신규 통합 테스트 `test_lm_studio_wizard_flow`를 통해 LM Studio 셋업 흐름 전체의 무결성이 영속적으로 검증됨.

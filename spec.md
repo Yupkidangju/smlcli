@@ -2730,7 +2730,7 @@ Phase 40 (Git)        ✅ 완료
     │                                         │
     └──→ Phase 42 (Sandbox) ✅ 완료           │
               │                               │
-              └──────→ Phase 44 (Cleanup) ✅ ──→ Phase 45 (Deploy) ✅ ──→ Phase 46 (Session) ✅ ──→ Phase 47 (Plan Form) ✅ ◀── 완료
+              └──────→ Phase 44 (Cleanup) ✅ ──→ Phase 45 (Deploy) ✅ ──→ Phase 46 (Session) ✅ ──→ Phase 47 (Plan Form) ✅ ◀── 완료 ──→ Phase 48 (LM Studio) ✅
 ```
 
 - **Phase 40 (Git) ✅**: Git-Native Integration 완료. `GitEngine` 자동 커밋, `/undo` 되돌리기, Inspector Git 탭.
@@ -2741,3 +2741,48 @@ Phase 40 (Git)        ✅ 완료
 - **Phase 45 (Deploy) ✅**: GitHub Actions CI/CD 파이프라인 구축 완료. fmt/clippy/test 게이트 + Release 크로스빌드.
 - **Phase 46 (Session) ✅**: 워크스페이스 연동 세션 관리 완료. `/session`, `/resume`, `/new` 명령어 + Auto-Titling.
 - **Phase 47 (Plan Form) ✅**: PLAN 모드 전용 Interactive Questionnaire 폼 완료. `AskClarification` 도구 + TUI 모달 + State Machine.
+- **Phase 48 (LM Studio) ✅**: LM Studio 공식 프로바이더 지원 및 위저드 Fallback 통합 완료. `ProviderKind::LmStudio`, API Key 생략 및 `base_url` 동적 핑 검증, 수동 모델 지정(`✏ 직접 입력...`) 모드 탑재.
+
+---
+
+### Phase 48: LM Studio 공식 프로바이더 지원 및 위저드 Fallback 통합 (v3.8.0)
+
+#### 48.1 Scope Closure
+- **목표**: 로컬 AI 개발 지원을 위해 LM Studio를 공식 프로바이더로 추가하고, 설정 위저드(Setup Wizard)에서 로컬 통신을 처리하기 위한 UX 및 Fallback 모드를 제공함.
+- **성공 기준**:
+  1. `ProviderKind::LmStudio` 정식 지원 및 기본 base_url (`http://localhost:1234/v1`) 영속화.
+  2. LM Studio 선택 시 API Key 단계를 건너뛰고 Base URL을 입력받아 `/models` 핑 검증을 수행하는 흐름 제어.
+  3. 로드된 모델 목록의 하단에 `"✏ 직접 입력..."` 옵션을 제공하고, 연결 실패 시에도 수동 모델 입력을 즉시 연동하여 오프라인 유연성 보장.
+
+#### 48.2 Typed Contracts
+```rust
+/// src/domain/provider.rs
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProviderKind {
+    OpenAI,
+    Anthropic,
+    Xai,
+    OpenRouter,
+    Google,
+    LmStudio, // [v3.8.0] LM Studio 공식 지원 추가
+}
+
+/// src/app/state.rs
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WizardStep {
+    ProviderSelection,
+    BaseUrlInput, // [v3.8.0] Base URL 수집용 신규 위저드 단계
+    ApiKeyInput,
+    ModelSelection,
+    Saving,
+}
+```
+
+#### 48.3 구현 디테일
+- **위저드 상태 머신 제어**: LmStudio 선택 시 `BaseUrlInput` 단계를 중간 삽입하고 API Key 단계는 자동 패스 처리.
+- **실시간 어댑터 동기화**: `ProviderRegistry` 내 static RwLock 어댑터인 `lmstudio`를 노출하여 사용자가 TUI에서 수정한 `base_url`을 전역 런타임에 즉시 갱신하고 검증하게 설계.
+- **Fallback 직접 입력 모드**: TUI 목록 렌더링에 `"✏ 직접 입력..."`을 추가하고 선택 시 `is_custom_model_mode` 플래그 기동을 통해 자유 텍스트 버퍼 타이핑 및 영속 영역 저장 처리.
+
+#### 48.4 테스트 및 검증
+- `test_lm_studio_wizard_flow` 통합 테스트를 통해 LmStudio 선택 ➔ URL 입력 ➔ 수동 지정 ➔ 저장 영속화까지의 데이터 무결성을 검증.
+- 105개 전체 회귀 테스트의 100% 정상 패스 보장.

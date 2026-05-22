@@ -521,3 +521,29 @@
 | Questionnaire 로직 | `cargo test test_questionnaire_state_submit_and_build` | 3문항 순차 답변 → build_result 조립 |
 | total_options 계산 | `cargo test test_questionnaire_total_options` | allow_custom 포함/미포함 옵션 수 정확 |
 | 전체 테스트 수 | `cargo test` | 102건 이상 통과 |
+
+---
+
+## Phase 48: v3.7.1 1st & 2nd Audit Remediation 감사 기준 (완료)
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| GrepSearch 샌드박스 차단 | `grep.rs` 소스 및 회귀 테스트 확인 | `file_ops::validate_sandbox()`를 통해 외부 경로(`/etc`, `../`) 탐색 원천 차단 및 `test_grep_search_sandbox_bypass` 통과 |
+| Approval 큐 고립 방지 | `mod.rs` 및 `test_approval_timeout_promotes_queue` 확인 | 타임아웃 만료 시 큐에서 제거되고 다음 대기 중인 승인이 정상적으로 팝업 승격됨 |
+| MCP 펜딩 맵 관리 | `McpClient` 소스 확인 | `pending_requests` 맵이 구조체 필드로 존재, 10초 타임아웃 및 EOF 시 펜딩 해제 |
+| TUI 테마 색상 정책 통일 | `questionnaire.rs`, `help_overlay.rs` 확인 | 하드코딩된 Color 대신 `state.palette()`에서 가져온 테마 색상 적용 |
+| 직접 셸 에러 재전송 방어 | `tool_runtime.rs` `ToolError` 분기 확인 | `tool_call_id` 누락 시 LLM 재전송 큐(`pending_tool_outcomes`)에 넣지 않고 드롭 |
+
+## Phase 49: v3.7.2 3rd Audit Remediation 감사 기준 (완료)
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| 헤드리스 가상 터미널 격리 | `src/app/mod.rs` `handle_mouse` 확인 | `cfg!(test)` 플래그 감지 시 가상 TTY 윈도우 크기를 `(100, 30)`으로 강제 하이재킹 모킹(Mocking)하여 클릭/스크롤 좌표 단언문 격리 확보 |
+
+## Phase 50: v3.8.0 LM Studio 공식 프로바이더 및 위저드 Fallback 감사 기준 (완료)
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| LmStudio 프로바이더 지원 | `src/domain/provider.rs` 및 `registry.rs` 확인 | `ProviderKind::LmStudio`가 정식 등록되었으며, 기본 URL(`http://localhost:1234/v1`)이 영속화 및 매핑됨 |
+| 위저드 Base URL 입력 분기 | `src/app/wizard_controller.rs` 확인 | LM Studio 선택 시 API Key 입력을 생략하고 `BaseUrlInput` 단계를 중간 삽입하여 동작 |
+| 실시간 어댑터 URL 동기화 | `src/providers/registry.rs` `update_lmstudio_base_url` 확인 | TUI 위저드 입력값에 기반해 `ProviderRegistry` 내 static RwLock `lmstudio` 어댑터의 base_url이 실시간 갱신됨 |
+| 수동 직접 입력 Fallback UI | `src/tui/widgets/setting_wizard.rs` 확인 | API 핑`/models`의 로딩 및 실패 여부에 관계없이 목록 최하단에 항상 `"✏ 직접 입력..."`을 제공하고, 선택 시 전용 수동 입력 모달(`is_custom_model_mode`) 전개 |
+| E2E 통합 회귀 테스트 통과 | `cargo test test_lm_studio_wizard_flow` | LmStudio 선택 -> Base URL 입력 -> API 핑 실패 시 수동 입력 -> 최종 settings 저장 영속화 과정이 무결하게 검증되며, 전체 105개 테스트 무결 통과 |
+

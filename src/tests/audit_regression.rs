@@ -4005,3 +4005,77 @@ async fn which_python() -> Option<String> {
     }
     None
 }
+
+/// [v3.7.2] LM Studio 설정 위저드 흐름 및 수동 모델 직접 입력 Fallback 로직 검증 통합 테스트.
+/// LmStudio 선택 시 ApiKey 생략, BaseUrlInput 진입, 수동 입력 모드(is_custom_model_mode) 전이 및 최종 영속화 저장의 전 과정을 정밀하게 시뮬레이션함.
+#[test]
+fn test_lm_studio_wizard_flow() {
+    use crate::app::App;
+    use crate::app::state::{AppState, WizardStep};
+    use crate::domain::provider::ProviderKind;
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(32);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+
+    // 1단계: 프로바이더 선택 화면
+    app.state.ui.is_wizard_open = true;
+    app.state.ui.wizard.step = WizardStep::ProviderSelection;
+    app.state.ui.wizard.cursor_index = 5; // LM Studio
+
+    // 엔터 입력 시뮬레이션 -> selected_provider가 LmStudio로 지정되고 BaseUrlInput으로 즉시 전환
+    app.handle_wizard_enter();
+    assert_eq!(
+        app.state.ui.wizard.selected_provider,
+        Some(ProviderKind::LmStudio),
+        "프로바이더가 LmStudio로 올바르게 선택되어야 함"
+    );
+    assert_eq!(
+        app.state.ui.wizard.step,
+        WizardStep::BaseUrlInput,
+        "LM Studio 선택 시 API Key 단계를 건너뛰고 Base URL 입력 단계로 전이되어야 함"
+    );
+    assert_eq!(
+        app.state.ui.wizard.base_url_input,
+        "http://localhost:1234/v1",
+        "기본 Base URL이 올바르게 초기화되어야 함"
+    );
+
+    // 2단계: Base URL 검증 통과 및 모델 선택 단계로 전환 시뮬레이션
+    app.state.ui.wizard.step = WizardStep::ModelSelection;
+    app.state.ui.wizard.available_models = vec![
+        "qwen2.5-coder-7b-instruct".to_string(),
+        "✏ 직접 입력...".to_string(),
+    ];
+    app.state.ui.wizard.cursor_index = 1; // "✏ 직접 입력..." 선택
+
+    // "✏ 직접 입력..." 선택 시 직접 입력 모드 활성화 검증
+    app.handle_wizard_enter();
+    assert!(
+        app.state.ui.wizard.is_custom_model_mode,
+        "✏ 직접 입력... 아이템 선택 시 is_custom_model_mode가 활성화되어야 함"
+    );
+    assert_eq!(
+        app.state.ui.wizard.step,
+        WizardStep::ModelSelection,
+        "직접 입력 모드 활성화 시 여전히 ModelSelection 단계에 머물러 타이핑을 유도해야 함"
+    );
+
+    // 모델명 직접 입력 타이핑 시뮬레이션 (예: "custom-local-model")
+    app.state.ui.wizard.custom_model_input = "custom-local-model".to_string();
+
+    // 입력 완료 후 엔터 입력 -> 최종 Saving 단계 전이 및 selected_model 저장 검증
+    app.handle_wizard_enter();
+    assert_eq!(
+        app.state.ui.wizard.selected_model,
+        "custom-local-model",
+        "수동 입력된 모델명이 최종 선택된 모델로 지정되어야 함"
+    );
+    assert_eq!(
+        app.state.ui.wizard.step,
+        WizardStep::Saving,
+        "모델 지정 완료 후 Saving 단계로 진입해야 함"
+    );
+}

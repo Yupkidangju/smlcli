@@ -456,20 +456,28 @@ Composer 우측 끝에는 현재 실행 맥락이 보인다.
 
 ### Step 1. Provider 선택
 - 방향키(`↑`, `↓`)를 이용해 리스트에서 커서로 선택
-- 기본 항목: `OpenRouter`, `Google (Gemini)`
-- `Enter` 시 즉시 다음 단계(API Key) 전환
+- 지원 항목: `OpenRouter`, `Google (Gemini)`, `OpenAI`, `Anthropic`, `Ollama`, `LM Studio` [v3.8.0 추가]
+- `Enter` 시 즉시 다음 단계로 전환. (LM Studio 선택 시 API Key 단계를 완전히 건너뛰고 `Base URL 입력` 단계로 분기하며, 그 외 프로바이더는 `API Key 입력` 단계로 전환)
 - Workspace Trust Gate가 끝난 뒤에만 진입한다.
 
-### Step 2. 자격 증명 입력 (API Key)
-- 타이핑하여 API Key를 인풋 버퍼에 누적(마스킹 지원 예정)
-- 복사/붙여넣기 지원
-- `Enter` 누르는 즉시 **비동기 모델 리스트 페칭(Loading)** 상태로 전환되어 화면 멈춤(프리징) 없이 통신 상태 표시
+### Step 2. 자격 증명 입력 (API Key) 또는 Base URL 입력 [v3.8.0 분기 확장]
+- **API 자격 증명 (LM Studio 외 타 프로바이더)**:
+  - 타이핑하여 API Key를 인풋 버퍼에 누적(마스킹 지원 예정)
+  - 복사/붙여넣기 지원
+  - `Enter` 누르는 즉시 비동기 모델 리스트 페칭(Loading) 상태로 전환되어 화면 멈춤(프리징) 없이 통신 상태 표시
+- **Base URL 입력 (LM Studio 전용)**:
+  - API Key 입력 단계 대신 `BaseUrlInput` 단계가 활성화됨.
+  - 기본값으로 `http://localhost:1234/v1`이 자동 채워지며, 사용자가 직접 커스텀 포트나 호스트를 편집하여 입력 가능.
+  - `Enter` 시 전역 `ProviderRegistry`의 static RwLock `lmstudio` 어댑터에 입력받은 URL을 실시간 갱신하고 즉시 `/models` 엔드포인트로 모델 조회 API 핑을 전송.
 
-### Step 3. Model 선택 (Dynamic Listing)
-- API 검증이 성공함과 동시에 동적으로 가져온 수백 개의 모델 리스트 렌더링
-- 방향키 커서로 10개 단위 윈도잉 렌더링
-- `Enter` 누를 시 최종 저장(Saving 단계 전환)
-- API 오류 시 에러 사유를 UI에 알림 카드로 표출 후 `Esc` 대기
+### Step 3. Model 선택 (Dynamic Listing & Manual Fallback) [v3.8.0 고도화]
+- **동적 리스트 로드 및 수동 Fallback**:
+  - API 검증 및 모델 리스트 로딩이 성공하면 동적으로 조회된 모델 목록을 렌더링하고, 목록의 최하단에 `"✏ 직접 입력..."` 항목을 동적으로 생성하여 병합 렌더링.
+  - 로컬 LM Studio 서버가 오프라인이거나 통신 오류로 모델 목록 획득에 실패하더라도 마법사 흐름이 깨지지 않도록 에러 피드백 알림을 표시함과 동시에, 리스트를 비우는 대신 오직 `"✏ 직접 입력..."` 1개 항목만을 목록에 노출하여 로컬 유연성 확보.
+- **✏ 직접 입력 (Custom Model Mode)**:
+  - 목록에서 `"✏ 직접 입력..."`을 선택하고 `Enter`를 누르면 화면 중앙에 수동 모델명 입력 전용 모달 버퍼(`is_custom_model_mode`)가 전개됨.
+  - 사용자는 로딩 성공 여부와 관계없이 로컬 LM Studio에서 가동 중인 모델명을 직접 키보드로 타이핑하여 주입할 수 있음.
+  - 모델명을 입력하고 `Enter` 시 이를 설정 구조체에 매핑하며 다음 저장 단계(Saving 단계)로 즉시 전환.
 
 ### Step 4. Permission Preset
 초기 사용자 경험을 위해 세부 항목 직접 선택보다 preset 우선
@@ -1551,3 +1559,19 @@ FocusedPane
 3. 빈 옵션 배열(`options: []`)인 질문은 자동으로 주관식(freeform) 모드로 렌더링.
 4. LLM이 AskClarification을 호출하지 않고 평문으로 질문할 경우, 시스템 프롬프트 강화로 유도.
 5. ASCII 테두리 모드(`use_ascii_borders`)에서도 정상 렌더링 보장.
+
+---
+
+## 30. [v3.7.2] TUI 테스트 환경 마우스 이벤트 라우팅 안전 격리
+
+### 30.1 가상 터미널 환경 격리 모킹 (Virtual Terminal Environment Mocking)
+- **적용 배경**: 헤드리스 CI/CD 환경 또는 특정 가상 터미널 환경에서는 `crossterm::terminal::size()` 함수가 `Ok((0, 0))` 또는 비표준 터미널 크기(예: `(94, 35)`)를 임의로 반환할 수 있다. 이로 인해 테스트 단언문(Assertion)이 기대하는 고정 좌표 계산이 엇갈려 테스트가 불결정론적으로 실패하는 현상이 발생하였다.
+- **해결 설계**:
+  - 테스트 빌드 환경(`cfg!(test)`)일 경우, `crossterm::terminal::size()`를 실제 호출하는 대신 고정 표준 터미널 크기인 `(100, 30)`을 강제로 반환하도록 하이재킹 모킹(Mocking) 장치를 둔다.
+  - 실제 배포되는 릴리스 프로덕션 빌드에서는 실시간으로 사용자의 물리 TTY 크기를 정상적으로 감지 및 반영하게 함으로써 테스트 결정성 확보와 런타임 유연성을 동시에 만족하도록 이중 가드 구조로 설계한다.
+
+### 30.2 상세 처리 흐름
+1. `src/app/mod.rs` 내의 `handle_mouse()` 이벤트 진입점에서 `cfg!(test)` 플래그 여부를 평가한다.
+2. 테스트 환경일 경우 `(100, 30)` 고정값을 할당하며, 실제 프로덕션 런타임에서는 `crossterm::terminal::size().unwrap_or((100, 30))`을 할당한다.
+3. 반환값이 `0`인 예외 상황(예: 완전히 TTY가 없는 헤드리스 세션 등)에서는 추가로 `term_cols = 100`, `term_rows = 30`으로 보정 가드를 적용하여 패닉 및 0 나누기 오류를 방지한다.
+4. 해당 좌표 규격 `(100, 30)`을 기준으로 최하단 `Composer` (30행 기준 `rows - 3` 이하, 즉 row 27~29)에 정확히 마우스 클릭/휠 라우팅이 분배되도록 보장한다.

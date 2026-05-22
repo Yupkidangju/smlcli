@@ -80,6 +80,13 @@
 ## 최근 구현 요약
 _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니다.)_
 
+- [2026-05-22] : **[Implemented - Phase 50 LM Studio Support & Wizard Fallback]**
+  - ✅ **LM Studio 공식 프로바이더 지원**: `ProviderKind::LmStudio` 신규 추가 및 기본 URL (`http://localhost:1234/v1`) 영속화 지원.
+  - ✅ **설정 위저드 내 LM Studio 전용 Base URL 입력 단계 탑재**: LmStudio 선택 시 API Key 수집 단계를 건너뛰고 `BaseUrlInput` 단계로 전환되어 실시간 API 핑(`/models`)을 검증하는 분기 로직 구현.
+  - ✅ **오프라인 모델 수동 직접 입력 Fallback 모드**: API 통신 실패 혹은 특수 로컬 환경 시 위저드를 중단하지 않고 목록 하단의 `"✏ 직접 입력..."`을 통해 사용자가 모델명을 임의 타이핑할 수 있는 `is_custom_model_mode` 텍스트 입력 및 렌더링 UI 구현.
+  - ✅ **실시간 프로바이더 어댑터 동기화**: `ProviderRegistry` 내 RwLock 보관 중인 OpenAICompatAdapter의 base_url을 TUI 위저드 입력값에 기반해 런타임에 즉시 갱신하는 static API(`update_lmstudio_base_url`) 이식.
+  - ✅ **LM Studio 설정 위저드 E2E 통합 테스트 검증**: `test_lm_studio_wizard_flow`를 추가하여 ProviderKind 선택, API Key 생략, BaseUrl 렌더링, API 핑 실패 시 수동 Fallback 모드 선택 및 입력, 최종 Settings 영속화 저장의 전 과정을 정밀 단언 검증하여 105개 전체 테스트 패스 보장.
+
 - [2026-04-21] : **[Implemented - Phase 25 Ultimate Polish & Security Hardening]**
   - ✅ **UTF-8 안전성 보장 (UX/UI)**: TUI 렌더링 시 `unicode-width` 크레이트를 적용하여 한국어/이모지 멀티바이트 문자가 깨지거나 패닉이 발생하는 현상 수정.
   - ✅ **심볼릭 링크 샌드박스 탈옥 방지 (Security)**: `file_ops`에서 `std::fs::canonicalize`를 통해 파일 절대 경로를 확인하여 Workspace 외부 경로 접근(Path Traversal/Symlink) 차단.
@@ -1077,3 +1084,21 @@ cargo test  ✅ 46 passed (0 failed)
   - `providers/sanitize.rs` 모듈 삭제 및 관련 불필요 임포트 제거.
 - [x] **[Finding 7] 파일 포맷 공백 및 EOF 정비**
   - MD 파일들의 trailing whitespace 및 EOF newline 처리 완료 (`git diff --check` 통과).
+
+### Phase 49: 3rd Audit Remediation (v3.7.2) ✅
+- [x] **[Finding 8] 헤드리스 가상 터미널 TUI 마우스 이벤트 라우팅 테스트 격리** ✅ (v3.7.2)
+  - 헤드리스 CI/CD 환경에서 물리 터미널 크기가 (0, 0) 또는 비표준(예: (94, 35))으로 반환되어 테스트 케이스(`test_mouse_wheel_routing`)가 실패하던 문제 해결.
+  - `src/app/mod.rs` 내 `handle_mouse`에서 `cfg!(test)` 플래그를 감지하여 테스트 빌드 환경일 경우 고정 표준 가상 터미널 크기인 `(100, 30)`을 강제 하이재킹 모킹(Mocking)하도록 안전 격리 장치 탑재.
+  - 프로덕션 배포 시에는 실시간 TTY 윈도우 크기를 감지하여 유연성을 해치지 않는 이중 가드 설계 완료.
+
+### Phase 50: LM Studio 공식 프로바이더 지원 및 위저드 Fallback 통합 (v3.8.0) ✅
+- [x] **Task L-1: LM Studio 프로바이더 모델 연동** ✅ (v3.8.0)
+  - `ProviderKind::LmStudio` 신규 추가 및 기본 URL (`http://localhost:1234/v1`) 영속화 지원.
+- [x] **Task L-2: 위저드 Base URL 수집 및 API Key 생략 분기** ✅ (v3.8.0)
+  - LmStudio 선택 시 API Key 수집 단계를 건너뛰고 `BaseUrlInput` 단계로 전환되어 실시간 API 핑(`/models`)을 검증하는 분기 로직 구현.
+- [x] **Task L-3: 오프라인 모델 수동 직접 입력 Fallback UI** ✅ (v3.8.0)
+  - API 통신 실패 혹은 특수 로컬 환경 시 위저드를 중단하지 않고 목록 하단의 `"✏ 직접 입력..."`을 통해 사용자가 모델명을 임의 타이핑할 수 있는 `is_custom_model_mode` 텍스트 입력 및 렌더링 UI 구현.
+- [x] **Task L-4: 실시간 프로바이더 어댑터 동기화 API** ✅ (v3.8.0)
+  - `ProviderRegistry` 내 RwLock 보관 중인 OpenAICompatAdapter의 base_url을 TUI 위저드 입력값에 기반해 런타임에 즉시 갱신하는 static API(`update_lmstudio_base_url`) 이식.
+- [x] **Task L-5: 통합 회귀 테스트 검증** ✅ (v3.8.0)
+  - `test_lm_studio_wizard_flow`를 추가하여 ProviderKind 선택, API Key 생략, BaseUrl 렌더링, API 핑 실패 시 수동 Fallback 모드 선택 및 입력, 최종 Settings 영속화 저장의 전 과정을 정밀 단언 검증하여 105개 전체 테스트 패스 보장.

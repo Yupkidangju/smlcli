@@ -13,7 +13,7 @@
 
 ### 주요 기능
 - **터미널 중심 TUI**: 마우스 없이 모든 동작을 3단계 이내에 키보드로 처리.
-- **다중 공급자 지원**: OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini) 지원.
+- **다중 공급자 지원**: OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini) 및 LM Studio 로컬 프로바이더 지원 (API Key 스킵 및 Base URL 입력 분기).
 - **강력한 보안 및 검증**: 파일 쓰기, 쉘 실행 검사, API 키의 로컬 파일 기반 암호화 보관 (`~/.smlcli/config.toml`, ChaCha20Poly1305). 심볼릭 링크를 방어하는 엄격한 샌드박스와 Linux `bwrap` 기반 실제 셸 샌드박스, 프로세스 그룹 소멸 및 환경 변수 격리 기능 제공. 스트리밍 마스킹을 통한 API 키 유출 원천 차단.
 - **극한 상황 강건성**: 설정 파일 마이그레이션 실패 시 자동 롤백 및 백업 기능. 디스크 용량 한계(`ENOSPC`) 도달 시 패닉을 방지하는 그레이스풀 폴백, API 네트워크 타임아웃 래핑 및 지수 백오프 기반 재시도, `unicode-width` 기반의 터미널 렌더링 안정성 확보. 대용량 파일/로그 출력의 OOM을 막는 메모리 캡핑(Size Capping) 및 터미널 제목/작업표시줄 진행률(OSC) 동기화 지원. `smlcli doctor` 시스템 진단.
 - **Inspect 패널과 Diff 플로우**: 작업 승인 전에 변경될 항목 가시성 확보.
@@ -26,6 +26,7 @@
 - **SSE 스트리밍**: AI 응답을 토큰 단위로 실시간 표시 (OpenRouter/Gemini 대응).
 - **JSONL 세션 로그**: 대화 내용을 `~/.smlcli/sessions/`에 자동 기록하여 세션 복원 지원.
 - **에이전트 자율성 (Agentic Autonomy)**: 파괴적인 동작 전후 Git 자동 체크포인트와 자가 복구 루프(Self-healing)를 통해 안전한 AI 코드 작성을 보장. `ListDir`, `GrepSearch`, `FetchURL` 등 고급 탐색 도구를 기본 제공.
+- **오프라인 수동 Fallback**: 로컬/오프라인 환경 및 API 핑 실패 시에도 마법사에서 `"✏ 직접 입력..."` 모드를 제공하여 모델명을 수동으로 임의 지정할 수 있어 연결 차단 없이 onboarding 완수 가능.
 - **Tree-sitter Repo Map**: AST 파싱 기반 저장소 요약 맵을 통해 AI가 전체 프로젝트 구조를 맥락으로 주입받아 정확한 코드를 수정.
 - **플랫폼 지원**: Linux (bash/zsh) 및 Windows (PowerShell/WSL) 동시 지원.
 
@@ -46,6 +47,9 @@
 ### 설정 및 권한
 - `smlcli`는 파일 쓰기, 쉘 실행 등에 대해 PLAN과 RUN 모드를 제공하며, 설정 마법사에서 권한 정책(Safe Starter, Balanced, Strict)을 사전에 정의할 수 있습니다.
 
+### 트러블슈팅 (Troubleshooting)
+- **가상/헤드리스 터미널 크기 인지 지연**: CI 환경이나 무인 헤드리스 환경에서 가상 터미널 크기가 오인식되어 마우스 스크롤이나 타겟 인식이 어긋나던 버그는 `[v3.7.2]` 이후 완전 조치되었습니다. 테스트 빌드 및 자동 CI 검증 과정에서 규격 크기 `(100, 30)`이 무결하게 자동 격리 모킹되므로 별도의 추가 조치가 필요치 않습니다.
+
 ---
 
 ## English
@@ -55,7 +59,7 @@
 
 ### Key Features
 - **Keyboard-first TUI**: Reach any primary action within 3 steps without a mouse.
-- **Multi-provider**: Supports OpenAI, Anthropic, xAI, OpenRouter, and Google (Gemini).
+- **Multi-provider**: Supports OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini), and LM Studio local provider (skips API Key, supports Base URL customization).
 - **Security-focused**: Local file-based encrypted storage for API keys (~/.smlcli/config.toml), explicit approval flows for file writing and shell execution, strict symlink sandbox protection, real `bwrap`-backed shell sandbox on Linux, process group extermination, and environment variable isolation. Ensures zero API key leakage via stateful streaming masking.
 - **Extreme Robustness**: Automatic rollback and backup on configuration migration failures. Graceful fallback on storage full (`ENOSPC`) to prevent panics, `tokio::time::timeout` wrapping and exponential backoff for API network timeouts, safe UTF-8 terminal rendering via `unicode-width`, memory size capping for massive standard outputs to prevent OOM, and terminal title/taskbar progress synchronization via OSC sequences. Includes `smlcli doctor` for system diagnostics.
 - **Inspect & Diff Flows**: Guaranteed visibility into upcoming changes before you hit "Approve".
@@ -68,6 +72,7 @@
 - **SSE Streaming**: See AI responses token-by-token in real-time (OpenRouter/Gemini compatible).
 - **JSONL Session Logging**: Automatic session logs in `~/.smlcli/sessions/` for restoring prior conversations.
 - **Agentic Autonomy**: Guarantees safe AI code generation via automated Git checkpoints and self-healing loops before/after destructive actions. Includes advanced tools like `ListDir`, `GrepSearch`, and `FetchURL`.
+- **Offline Manual Fallback**: Always provides `"✏ 직접 입력..."` (Manual Input) mode during setup even if the local server is offline or the models API ping fails, enabling seamless wizard completion.
 - **Tree-sitter Repo Map**: Injects AST-parsed repository summary maps into the AI context for accurate code modifications.
 - **Cross-platform**: Full support for Linux and Windows.
 
@@ -84,6 +89,9 @@
    cargo run --release
    ```
 
+### Troubleshooting
+- **Virtual/Headless Terminal Dimension Misrecognition**: A bug where mouse routing was broken in headless or CI environments due to misrecognized terminal window dimensions has been fully resolved as of `[v3.7.2]`. The test suite automatically mocks standard dimensions `(100, 30)` in testing contexts, requiring no manual override.
+
 ---
 
 ## 日本語
@@ -93,7 +101,7 @@
 
 ### 主な機能
 - **ターミナルファースト TUI**: 全ての操作をキーボードだけで迅速に行えます。
-- **マルチプロバイダー対応**: OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini) をサポート。
+- **マルチプロバイダー対応**: OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini) および LM Studio ローカルプロバイダーをサポート（APIキーのスキップ、Base URLのカスタム入力を提供）。
 - **堅牢なセキュリティ**: APIキーのローカル暗号化ファイル保存 (~/.smlcli/config.toml)、安全なコマンド実行ポリシー設定、シンボリックリンク保護のサンドボックス、Linuxでの `bwrap` 実サンドボックス実行、プロセスグループ消滅および環境変数の隔離をサポート。ストリーミング中のAPIキー漏洩を完全に防ぐステートフルマスキング。
 - **極限環境での安定性**: ディスク容量不足 (`ENOSPC`) 時のパニック防止、LLM APIタイムアウト時の指数バックオフ再試行、`unicode-width` ベースの安全なUTF-8レンダリング、大規模出力時のメモリキャッピング (OOM防止)、およびOSCシーケンスを用いたターミナルタイトル/タスクバー進捗状況の同期。
 - **インテリジェント コンテキスト圧縮**: 長期セッション保護のためのバックグラウンド LLM 要約と `/tokens` トークン監視。
@@ -103,6 +111,7 @@
 - **SSE ストリーミング**: AIの回答をトークン単位でリアルタイム表示。
 - **JSONL セッションログ**: 会話を自動記録し、セッション復元をサポート。
 - **エージェント自律性 (Agentic Autonomy)**: 破壊的な操作の前後で自動化されたGitチェックポイントと自己修復ループにより、安全なAIコード生成を保証します。`ListDir`, `GrepSearch`, `FetchURL` などの高度なツールを内蔵。
+- **オフラインでの手動フォールバック**: ローカル/オフライン環境やAPIの疎通確認（PING）が失敗した場合でも、設定ウィザードで「✏ 直接入力...」モードを提供し、モデル名を手動で任意に入力して接続を中断することなくオンボーディングを完了できます。
 - **Tree-sitter Repo Map**: AST解析ベースのリポジトリ概要マップをAIコンテキストに注入し、正確なコード修正を実現します。
 
 ### クイックスタート
@@ -118,6 +127,9 @@
    cargo run --release
    ```
 
+### トラブルシューティング
+- **仮想/ヘッドレス環境でのターミナルサイズ誤認**: CIなどのヘッドレス環境でターミナルサイズが誤認識され、マウス入力のルーティングが失敗する問題は `[v3.7.2]` 以降で完全に解決されました。テスト環境下では標準の仮想サイズ `(100, 30)` が自動でモッキングされるため、追加の設定は不要です。
+
 ---
 
 ## 繁體中文
@@ -127,7 +139,7 @@
 
 ### 核心功能
 - **全鍵盤 TUI**: 告別滑鼠，快速進行所有主要指令操作。
-- **多平台模型**: 支援 OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini) 等平台。
+- **多平台模型**: 支援 OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini) 及 LM Studio 本地提供者（提供 API Key 跳過與自訂 Base URL 輸入分流）。
 - **高規格安全**: 使用本地檔案加密 (~/.smlcli/config.toml) 保護 API 密鑰。提供完整變更預覽與權限驗證流程，支援防範符號連結 (Symlink) 沙箱機制，在 Linux 使用 `bwrap` 實體 Shell 沙箱，並具備進程組銷毀與環境變數隔離能力。透過串流遮罩技術徹底杜絕 API 密鑰外洩。
 - **極端環境穩定性**: 在磁碟空間不足 (`ENOSPC`) 時自動防護崩潰、API 網路超時的指數退避重試，基於 `unicode-width` 的安全終端渲染，防範 OOM 的大規模輸出記憶體封頂限制，以及支援 OSC 序列的終端機標題與任務欄進度同步。
 - **智能上下文壓縮**: 透過後台 LLM 摘要保護長對話串並支持動態代幣(Token)管理。
@@ -137,6 +149,7 @@
 - **SSE 串流**: 逐字符即時顯示 AI 回應。
 - **JSONL 對話記錄**: 自動記錄對話內容並支援工作階段還原。
 - **代理自主性 (Agentic Autonomy)**: 透過破壞性操作前後的自動 Git 檢查點與自我修復循環，確保 AI 程式碼生成的安全性。內建 `ListDir`, `GrepSearch`, `FetchURL` 等進階工具。
+- **離線手動 Fallback**: 在本地/離線環境或 API Ping 失敗時，設定精靈仍提供「✏ 離線手動輸入...」模式，允許手動指定模型名稱，確保在無連線狀態下也能順利完成 Onboarding。
 - **Tree-sitter Repo Map**: 將基於 AST 解析的儲存庫摘要地圖注入 AI 上下文中，實現精確的程式碼修改。
 
 ### 快速開始
@@ -152,6 +165,9 @@
    cargo run --release
    ```
 
+### 疑難排解
+- **虛擬/無外接螢幕環境下的終端機尺寸識別問題**: 在 CI 或無外接螢幕的 Headless 環境下，終端機寬高被誤判導致滑鼠滑動與面板點擊對焦失效的異常，已於 `[v3.7.2]` 版本中完全修復。測試架構已預設為會自動劫持並模擬標準解析度 `(100, 30)`，您無需進行額外調整。
+
 ---
 
 ## 简体中文
@@ -161,7 +177,7 @@
 
 ### 核心功能
 - **纯键盘 TUI**: 所有核心操作可通过键盘在3步内完成。
-- **多供应商支持**: 兼容 OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini)。
+- **多供应商支持**: 兼容 OpenAI, Anthropic, xAI, OpenRouter, Google (Gemini) 以及 LM Studio 本地供应商（支持跳过 API 密钥并分流输入 Base URL）。
 - **安全性优先**: 在执行写入和 Shell 执行前自动生成 Diff，并要求显式权限授权；密钥存入本地加密文件 (~/.smlcli/config.toml)。支持防止符号链接攻击的沙箱，在 Linux 下使用 `bwrap` 提供真实 Shell 沙箱，同时具备进程组销毁与环境变量隔离功能。通过流式掩码彻底防止 API 密钥泄露。
 - **极限环境稳定性**: 在磁盘空间不足 (`ENOSPC`) 时自动防护崩溃、API 网络超时提供指数退避重试，基于 `unicode-width` 的安全终端渲染，防止 OOM 的大规模输出内存封顶限制，以及基于 OSC 序列的终端标题与任务栏进度同步功能。
 - **智能上下文压缩**: 通过后台 LLM 摘要引擎保护长期会话防止记忆丢失，包含动态 Token 管理。
@@ -171,6 +187,7 @@
 - **SSE 流式传输**: 逐令牌实时显示 AI 回复。
 - **JSONL 会话日志**: 自动记录对话内容并支持会话恢复。
 - **代理自主性 (Agentic Autonomy)**: 通过破坏性操作前后的自动 Git 检查点与自我修复循环，确保 AI 代码生成的安全性。内置 `ListDir`, `GrepSearch`, `FetchURL` 等高级探索工具。
+- **离线手动 Fallback**: 在本地/离线环境或 API Ping 失败时，配置向导中仍提供“✏ 直接输入...”模式，支持手动指定任意模型名称，确保在无网络连接状态下也能顺利完成 Onboarding。
 - **Tree-sitter Repo Map**: 将基于 AST 解析的仓库摘要地图注入 AI 上下文中，实现精确的代码修改。
 
 ### 快速开始
@@ -185,3 +202,6 @@
    # 或者
    cargo run --release
    ```
+
+### 疑难解答
+- **虚拟/无头环境下的终端尺寸识别异常**: 在 CI 或无头（Headless）环境下，由于无法正确识别终端行列数导致鼠标滚动与面板聚焦失效的异常，已于 `[v3.7.2]` 版本中得到彻底修复。测试套件现已支持在测试上下文中自动劫持并模拟标准尺寸 `(100, 30)`，无需额外手动配置。

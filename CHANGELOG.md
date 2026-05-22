@@ -3,6 +3,22 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [3.8.0] - 2026-05-22 (LM Studio Provider Support & Wizard Fallback Integration)
+
+### Added
+- **LM Studio 공식 프로바이더 지원**: `ProviderKind::LmStudio` 신규 추가 및 기본 URL (`http://localhost:1234/v1`) 영속화 지원.
+- **설정 위저드 내 LM Studio 전용 Base URL 입력 단계 탑재**: LmStudio 선택 시 API Key 수집 단계를 건너뛰고 `BaseUrlInput` 단계로 전환되어 실시간 API 핑(`/models`)을 검증하는 분기 로직 구현.
+- **오프라인 모델 수동 직접 입력 Fallback 모드**: API 통신 실패 혹은 특수 로컬 환경 시 위저드를 중단하지 않고 목록 하단의 `"✏ 직접 입력..."`을 통해 사용자가 모델명을 임의 타이핑할 수 있는 `is_custom_model_mode` 텍스트 입력 및 렌더링 UI 구현.
+- **LM Studio 설정 위저드 E2E 통합 테스트 검증**: `test_lm_studio_wizard_flow`를 추가하여 ProviderKind 선택, API Key 생략, BaseUrl 렌더링, API 핑 실패 시 수동 Fallback 모드 선택 및 입력, 최종 Settings 영속화 저장의 전 과정을 정밀 단언 검증하여 105개 전체 테스트 패스 보장.
+
+### Changed
+- **실시간 프로바이더 어댑터 동기화**: `ProviderRegistry` 내 RwLock 보관 중인 OpenAICompatAdapter의 base_url을 TUI 위저드 입력값에 기반해 런타임에 즉시 갱신하는 static API(`update_lmstudio_base_url`) 이식.
+
+## [3.7.2] - 2026-05-22 (Headless Test Suite Isolation & TUI Mouse Routing Patch)
+
+### Fixed
+- **[Finding 8] 헤드리스 가상 터미널 TUI 마우스 이벤트 라우팅 테스트 격리**: CI 및 가상 터미널 환경에서 `crossterm::terminal::size()`가 `(0, 0)` 또는 `(94, 35)` 등을 임의 반환하여 `test_mouse_wheel_routing` 통합 테스트 검증 시 클릭/스크롤 좌표 단언문이 엇갈려 실패하던 현상을 해결. `cfg!(test)` 플래그를 도입하여 테스트 빌드 환경일 경우에는 강제로 규격 `(100, 30)`을 하이재킹 모킹(Mocking)하도록 격리 안전 가드를 이식 완료.
+
 ## [3.7.1] - 2026-04-25 (Security & Stability Hotfix)
 
 ### Fixed

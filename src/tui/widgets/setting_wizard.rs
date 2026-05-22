@@ -27,12 +27,14 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
     let content = match state.ui.wizard.step {
         WizardStep::ProviderSelection => {
             let mut list = "[Step 1] Select Provider\n\n".to_string();
+            // [v3.7.2] LM Studio 로컬 프로바이더 선택 옵션 추가
             let providers = [
                 "OpenAI",
                 "Anthropic",
                 "xAI",
                 "OpenRouter",
                 "Google (Gemini)",
+                "LM Studio",
             ];
             for (i, prov) in providers.iter().enumerate() {
                 if i == state.ui.wizard.cursor_index {
@@ -48,6 +50,35 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
             }
             list.push_str("\n(Use Up/Down to navigate, Enter to select)");
             list
+        }
+        // [v3.7.2] LmStudio의 base_url을 입력받기 위한 신규 위저드 단계 UI 렌더링 로직 추가
+        WizardStep::BaseUrlInput => {
+            let rendered =
+                crate::tui::widgets::input_field::InputField::new(&state.ui.wizard.base_url_input)
+                    .with_password(false)
+                    .render();
+            if state.ui.wizard.is_loading_models {
+                format!(
+                    "[Step 2] Validating Base URL...\n\
+                Current URL: {}\n\n\
+                Please wait.",
+                    rendered
+                )
+            } else {
+                let err_str = state.ui.wizard.err_msg.as_deref().unwrap_or("");
+                let err_disp = if err_str.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n\n!! [Validation Error] !!\n{}", err_str)
+                };
+
+                format!(
+                    "[Step 2] Enter LM Studio Base URL\n\
+                Current Base URL: {}\n\n\
+                Press Enter to validate URL and fetch available models.{}",
+                    rendered, err_disp
+                )
+            }
         }
         WizardStep::ApiKeyInput => {
             let masked =
@@ -78,7 +109,25 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
             }
         }
         WizardStep::ModelSelection => {
-            if state.ui.wizard.is_loading_models {
+            if state.ui.wizard.is_custom_model_mode {
+                // [v3.7.2] 모델 수동 직접 입력 모드 텍스트 박스 렌더링
+                let rendered =
+                    crate::tui::widgets::input_field::InputField::new(&state.ui.wizard.custom_model_input)
+                        .with_password(false)
+                        .render();
+                let err_str = state.ui.wizard.err_msg.as_deref().unwrap_or("");
+                let err_disp = if err_str.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n\n!! [Input Error] !!\n{}", err_str)
+                };
+                format!(
+                    "[Step 3] Enter Custom Model Name (직접 수동 입력)\n\
+                Current Model Name: {}\n\n\
+                Press Enter to submit and proceed to save.{}",
+                    rendered, err_disp
+                )
+            } else if state.ui.wizard.is_loading_models {
                 "[Step 3] Loading Available Models...\nPlease wait.".to_string()
             } else if let Some(e) = &state.ui.wizard.err_msg {
                 format!(
@@ -86,7 +135,7 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
                     e
                 )
             } else if state.ui.wizard.available_models.is_empty() {
-                "[Error Loading Models]\nNo models found. Please check API Key and Restart."
+                "[Error Loading Models]\nNo models found. Please check API Key/Base URL and Restart."
                     .to_string()
             } else {
                 let mut list = "[Step 3] Select Model\n\n".to_string();

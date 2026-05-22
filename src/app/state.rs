@@ -152,6 +152,9 @@ impl DomainState {
 
         if let Some(settings) = &loaded_settings {
             crate::providers::registry::update_custom_providers(&settings.custom_providers);
+            if let Some(base_url) = &settings.lmstudio_base_url {
+                crate::providers::registry::update_lmstudio_base_url(base_url);
+            }
         }
 
         // [v3.6.0] Phase 46: 워크스페이스 기반 세션 생성
@@ -722,6 +725,7 @@ impl FuzzyFinderState {
 #[derive(Debug, PartialEq)]
 pub enum WizardStep {
     ProviderSelection,
+    BaseUrlInput,
     ApiKeyInput,
     ModelSelection,
     Saving,
@@ -731,9 +735,15 @@ pub struct WizardState {
     pub step: WizardStep,
     pub cursor_index: usize,
     pub selected_provider: Option<crate::domain::provider::ProviderKind>,
+    // [v3.7.2] LM Studio 연결용 기본 base_url 입력 버퍼
+    pub base_url_input: String,
     pub api_key_input: String,
     pub available_models: Vec<String>,
     pub selected_model: String,
+    // [v3.7.2] 수동 직접 지정 모델 입력 유무 필드 ("✏ 직접 입력...")
+    pub is_custom_model_mode: bool,
+    // [v3.7.2] 수동 직접 입력 모델명 텍스트 버퍼
+    pub custom_model_input: String,
     pub is_loading_models: bool,
     pub err_msg: Option<String>,
 }
@@ -744,9 +754,12 @@ impl WizardState {
             step: WizardStep::ProviderSelection,
             cursor_index: 0,
             selected_provider: None,
+            base_url_input: String::new(),
             api_key_input: String::new(),
             available_models: Vec::new(),
             selected_model: String::new(),
+            is_custom_model_mode: false,
+            custom_model_input: String::new(),
             is_loading_models: false,
             err_msg: None,
         }

@@ -1815,13 +1815,18 @@ impl App {
             action::FetchSource::Wizard => {
                 self.state.ui.wizard.is_loading_models = false;
                 match res {
-                    Ok(models) => {
+                    Ok(mut models) => {
+                        // [v3.7.2] Q2 추천안: 모델 조회 성공 시 목록 끝에 "✏ 직접 입력..." 추가
+                        models.push("✏ 직접 입력...".to_string());
                         self.state.ui.wizard.available_models = models;
                         self.state.ui.wizard.cursor_index = 0;
                         self.state.ui.wizard.err_msg = None;
                     }
                     Err(e) => {
-                        self.state.ui.wizard.err_msg = Some(e.to_string());
+                        // [v3.7.2] Q2 추천안: 모델 조회 실패(오프라인 등) 시에도 수동 지정을 위해 "✏ 직접 입력..."을 제공
+                        self.state.ui.wizard.available_models = vec!["✏ 직접 입력...".to_string()];
+                        self.state.ui.wizard.cursor_index = 0;
+                        self.state.ui.wizard.err_msg = Some(format!("모델 목록 조회 실패: {}. 수동 입력을 진행할 수 있습니다.", e));
                     }
                 }
             }
@@ -1877,12 +1882,16 @@ impl App {
                 });
             }
             Err(e) => {
-                // 검증 실패: ApiKeyInput 단계로 복귀하고 에러 표시
+                // 검증 실패: LmStudio일 경우 BaseUrlInput 단계로 복귀하고 그 외에는 ApiKeyInput으로 복귀
                 self.state.ui.wizard.is_loading_models = false;
-                self.state.ui.wizard.step = state::WizardStep::ApiKeyInput;
-                self.state.ui.wizard.err_msg = Some(format!("API 키 검증 실패: {}", e));
-                // [v1.0.0] State 누수 방지: 인증 실패 시 입력 버퍼 초기화 (ClearBuffer)
-                self.state.ui.wizard.api_key_input.clear();
+                if self.state.ui.wizard.selected_provider == Some(crate::domain::provider::ProviderKind::LmStudio) {
+                    self.state.ui.wizard.step = state::WizardStep::BaseUrlInput;
+                } else {
+                    self.state.ui.wizard.step = state::WizardStep::ApiKeyInput;
+                    // [v1.0.0] State 누수 방지: 인증 실패 시 입력 버퍼 초기화 (ClearBuffer)
+                    self.state.ui.wizard.api_key_input.clear();
+                }
+                self.state.ui.wizard.err_msg = Some(format!("API 연결 실패: {}", e));
             }
         }
     }
@@ -2020,6 +2029,10 @@ impl App {
                     self.state.ui.wizard.step = state::WizardStep::ProviderSelection;
                     self.state.ui.wizard.err_msg = None;
                     self.state.ui.wizard.api_key_input.clear();
+                    // [v3.7.2] LM Studio 관련 입력 버퍼 및 직접 입력 모드 복구 초기화
+                    self.state.ui.wizard.base_url_input.clear();
+                    self.state.ui.wizard.custom_model_input.clear();
+                    self.state.ui.wizard.is_custom_model_mode = false;
                     self.state.ui.wizard.cursor_index = 0;
                 } else if !self.state.runtime.active_tool_cancel_tokens.is_empty() {
                     for token in self.state.runtime.active_tool_cancel_tokens.values() {
@@ -2067,12 +2080,24 @@ impl App {
                     // Provider -> ApiKey -> Model -> SaveButton
                     let reverse =
                         key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
+                    let is_lmstudio = self.state.ui.wizard.selected_provider == Some(crate::domain::provider::ProviderKind::LmStudio);
                     self.state.ui.wizard.step = match self.state.ui.wizard.step {
                         state::WizardStep::ProviderSelection => {
                             if reverse {
                                 state::WizardStep::Saving
+                            } else if is_lmstudio {
+                                // [v3.7.2] LM Studio는 API Key 대신 Base URL 입력으로 직행
+                                state::WizardStep::BaseUrlInput
                             } else {
                                 state::WizardStep::ApiKeyInput
+                            }
+                        }
+                        state::WizardStep::BaseUrlInput => {
+                            // [v3.7.2] Base URL 입력 단계에서의 Tab/Shift+Tab 탐색 지원
+                            if reverse {
+                                state::WizardStep::ProviderSelection
+                            } else {
+                                state::WizardStep::ModelSelection
                             }
                         }
                         state::WizardStep::ApiKeyInput => {
@@ -2084,7 +2109,11 @@ impl App {
                         }
                         state::WizardStep::ModelSelection => {
                             if reverse {
-                                state::WizardStep::ApiKeyInput
+                                if is_lmstudio {
+                                    state::WizardStep::BaseUrlInput
+                                } else {
+                                    state::WizardStep::ApiKeyInput
+                                }
                             } else {
                                 state::WizardStep::Saving
                             }
@@ -2159,6 +2188,14 @@ impl App {
                 // [v1.0.0] 에러 잔류 방지: 첫 입력 시 에러 메시지 초기화
                 self.state.ui.wizard.err_msg = None;
                 self.state.ui.wizard.api_key_input.push(c);
+            } else if self.state.ui.wizard.step == state::WizardStep::BaseUrlInput {
+                // [v3.7.2] Base URL 입력 시 에러 초기화 및 입력 버퍼 누적
+                self.state.ui.wizard.err_msg = None;
+                self.state.ui.wizard.base_url_input.push(c);
+            } else if self.state.ui.wizard.step == state::WizardStep::ModelSelection && self.state.ui.wizard.is_custom_model_mode {
+                // [v3.7.2] 모델 직접 수동 입력 시 에러 초기화 및 버퍼 누적
+                self.state.ui.wizard.err_msg = None;
+                self.state.ui.wizard.custom_model_input.push(c);
             }
         } else if self.state.ui.palette.is_open {
             self.state.ui.palette.query.push(c);
@@ -2349,14 +2386,20 @@ impl App {
             }
         } else if self.state.ui.is_wizard_open {
             let max = match self.state.ui.wizard.step {
-                state::WizardStep::ProviderSelection => 4,
-                state::WizardStep::ModelSelection => self
-                    .state
-                    .ui
-                    .wizard
-                    .available_models
-                    .len()
-                    .saturating_sub(1),
+                state::WizardStep::ProviderSelection => 5, // [v3.7.2] LM Studio가 추가되어 프로바이더가 6개(최대 인덱스 5)가 됨
+                state::WizardStep::ModelSelection => {
+                    if self.state.ui.wizard.is_custom_model_mode {
+                        // [v3.7.2] 모델 수동 직접 입력 시에는 리스트 이동 제한
+                        0
+                    } else {
+                        self.state
+                            .ui
+                            .wizard
+                            .available_models
+                            .len()
+                            .saturating_sub(1)
+                    }
+                }
                 _ => 0,
             };
             if self.state.ui.wizard.cursor_index < max {
@@ -2417,6 +2460,14 @@ impl App {
                 // [v1.0.0] 에러 잔류 방지: 첫 백스페이스 시 에러 메시지 초기화
                 self.state.ui.wizard.err_msg = None;
                 self.state.ui.wizard.api_key_input.pop();
+            } else if self.state.ui.wizard.step == state::WizardStep::BaseUrlInput {
+                // [v3.7.2] Base URL 입력 상태에서 백스페이스 처리 및 에러 초기화
+                self.state.ui.wizard.err_msg = None;
+                self.state.ui.wizard.base_url_input.pop();
+            } else if self.state.ui.wizard.step == state::WizardStep::ModelSelection && self.state.ui.wizard.is_custom_model_mode {
+                // [v3.7.2] 모델명 수동 입력 상태에서 백스페이스 처리 및 에러 초기화
+                self.state.ui.wizard.err_msg = None;
+                self.state.ui.wizard.custom_model_input.pop();
             }
         } else {
             self.state.ui.composer.input_buffer.pop();
@@ -2431,7 +2482,17 @@ impl App {
 
         use crossterm::event::{MouseButton, MouseEventKind};
 
-        let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((100, 30));
+        // [v3.7.2] 헤드리스 가상 터미널 환경(예: CI/CD 환경)에서 crossterm::terminal::size()가 Ok((0, 0)) 또는 실제 TTY의 환경 변수(예: (94, 35))를 반환할 때 발생하는 테스트 불결정성 문제를 종식시키기 위해 안전 격리 로직을 구현함.
+        // 테스트 스위트 빌드 환경(cfg!(test))일 경우, 마우스 클릭/스크롤 라우팅의 단언문 검증이 정밀하게 고정 좌표(100, 30 기준)를 기반으로 작성되어 있으므로 강제로 (100, 30)을 하이재킹 모킹하도록 처리하고, 실제 프로덕션 런타임 시에는 실시간 TTY 크기를 정상적으로 반영하도록 이중 가드 장치를 탑재함.
+        let (mut term_cols, mut term_rows) = if cfg!(test) {
+            (100, 30)
+        } else {
+            crossterm::terminal::size().unwrap_or((100, 30))
+        };
+        if term_cols == 0 || term_rows == 0 {
+            term_cols = 100;
+            term_rows = 30;
+        }
         let target = self.mouse_target(mouse, term_cols, term_rows);
 
         match mouse.kind {

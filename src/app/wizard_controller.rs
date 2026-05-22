@@ -32,15 +32,69 @@ impl App {
     pub(crate) fn handle_wizard_enter(&mut self) {
         match self.state.ui.wizard.step {
             state::WizardStep::ProviderSelection => {
-                self.state.ui.wizard.selected_provider = match self.state.ui.wizard.cursor_index {
-                    0 => Some(crate::domain::provider::ProviderKind::OpenAI),
-                    1 => Some(crate::domain::provider::ProviderKind::Anthropic),
-                    2 => Some(crate::domain::provider::ProviderKind::Xai),
-                    3 => Some(crate::domain::provider::ProviderKind::OpenRouter),
-                    _ => Some(crate::domain::provider::ProviderKind::Google),
+                let provider = match self.state.ui.wizard.cursor_index {
+                    0 => crate::domain::provider::ProviderKind::OpenAI,
+                    1 => crate::domain::provider::ProviderKind::Anthropic,
+                    2 => crate::domain::provider::ProviderKind::Xai,
+                    3 => crate::domain::provider::ProviderKind::OpenRouter,
+                    4 => crate::domain::provider::ProviderKind::Google,
+                    _ => crate::domain::provider::ProviderKind::LmStudio,
                 };
-                self.state.ui.wizard.step = state::WizardStep::ApiKeyInput;
+                self.state.ui.wizard.selected_provider = Some(provider.clone());
+                if provider == crate::domain::provider::ProviderKind::LmStudio {
+                    self.state.ui.wizard.base_url_input = "http://localhost:1234/v1".to_string();
+                    self.state.ui.wizard.step = state::WizardStep::BaseUrlInput;
+                } else {
+                    self.state.ui.wizard.step = state::WizardStep::ApiKeyInput;
+                }
                 self.state.ui.wizard.cursor_index = 0;
+            }
+            state::WizardStep::BaseUrlInput => {
+                let url = self.state.ui.wizard.base_url_input.trim().to_string();
+                if url.is_empty() {
+                    self.state.ui.wizard.err_msg = Some("Base URL is required.".to_string());
+                    return;
+                }
+
+                // [v3.7.2] 입력한 base_url을 레지스트리에 업데이트하여 핑 테스트 및 모델 리스트 조회가 올바른 서버를 바라보게 함
+                crate::providers::registry::update_lmstudio_base_url(&url);
+
+                self.state.ui.wizard.is_loading_models = true;
+                self.state.ui.wizard.err_msg = None;
+
+                let tx = self.action_tx.clone();
+                let provider = self
+                    .state
+                    .ui
+                    .wizard
+                    .selected_provider
+                    .clone()
+                    .unwrap_or(crate::domain::provider::ProviderKind::LmStudio);
+                let api_key = String::new(); // LM Studio는 API Key 불필요
+
+                tokio::spawn(async move {
+                    let adapter = crate::providers::registry::get_adapter(&provider);
+                    match adapter.validate_credentials(&api_key).await {
+                        Ok(()) => {
+                            let _ = tx
+                                .send(event_loop::Event::Action(
+                                    action::Action::CredentialValidated(Ok(())),
+                                ))
+                                .await;
+                        }
+                        Err(e) => {
+                            let _ = tx
+                                .send(event_loop::Event::Action(
+                                    action::Action::CredentialValidated(Err(
+                                        crate::domain::error::ProviderError::AuthenticationFailed(
+                                            e.to_string(),
+                                        ),
+                                    )),
+                                ))
+                                .await;
+                        }
+                    }
+                });
             }
             state::WizardStep::ApiKeyInput => {
                 // [v1.0.0] 필수 필드 검증 누락 시 상태 유지 및 에러 표출, 버퍼 초기화 (ClearBuffer)
@@ -92,12 +146,27 @@ impl App {
                 });
             }
             state::WizardStep::ModelSelection => {
-                if !self.state.ui.wizard.available_models.is_empty() {
-                    self.state.ui.wizard.selected_model = self.state.ui.wizard.available_models
-                        [self.state.ui.wizard.cursor_index]
-                        .clone();
+                if self.state.ui.wizard.is_custom_model_mode {
+                    // 수동 입력 모드인 경우 입력된 텍스트를 선택된 모델로 최종 지정
+                    let val = self.state.ui.wizard.custom_model_input.trim().to_string();
+                    if val.is_empty() {
+                        self.state.ui.wizard.err_msg = Some("Model name cannot be empty.".to_string());
+                        return;
+                    }
+                    self.state.ui.wizard.selected_model = val;
+                    self.state.ui.wizard.step = state::WizardStep::Saving;
+                } else if !self.state.ui.wizard.available_models.is_empty() {
+                    let selected = self.state.ui.wizard.available_models[self.state.ui.wizard.cursor_index].clone();
+                    if selected == "✏ 직접 입력..." {
+                        // 수동 직접 입력 모드 활성화
+                        self.state.ui.wizard.is_custom_model_mode = true;
+                        self.state.ui.wizard.custom_model_input = String::new();
+                        self.state.ui.wizard.err_msg = None;
+                    } else {
+                        self.state.ui.wizard.selected_model = selected;
+                        self.state.ui.wizard.step = state::WizardStep::Saving;
+                    }
                 }
-                self.state.ui.wizard.step = state::WizardStep::Saving;
             }
             state::WizardStep::Saving => {
                 if !self.state.ui.wizard.is_loading_models {
@@ -120,6 +189,7 @@ impl App {
             Some(crate::domain::provider::ProviderKind::Anthropic) => "Anthropic".to_string(),
             Some(crate::domain::provider::ProviderKind::Xai) => "xAI".to_string(),
             Some(crate::domain::provider::ProviderKind::Google) => "Google".to_string(),
+            Some(crate::domain::provider::ProviderKind::LmStudio) => "LmStudio".to_string(),
             _ => "OpenRouter".to_string(),
         };
         // [v0.1.0-beta.14] encrypted_keys 필드 추가, keyring 제거
@@ -134,6 +204,11 @@ impl App {
             safe_commands: None,
             encrypted_keys: std::collections::HashMap::new(),
             theme: "default".to_string(),
+            lmstudio_base_url: if !self.state.ui.wizard.base_url_input.is_empty() {
+                Some(self.state.ui.wizard.base_url_input.clone())
+            } else {
+                Some("http://localhost:1234/v1".to_string())
+            },
             ..Default::default()
         };
 

@@ -8,6 +8,7 @@ pub enum ProviderKind {
     Xai,
     OpenRouter,
     Google,
+    LmStudio,
     // [v3.1.0] Phase 41: 커스텀 Provider 지원 (Ollama, LMStudio, VLLM 등 API 호환 백엔드)
     Custom(String),
 }
