@@ -53,7 +53,7 @@ impl McpClient {
         // MCP 서버가 stderr에 많은 출력을 쓰면 OS 파이프 버퍼가 차서
         // stdout 읽기가 블로킹될 수 있으므로, 별도 태스크에서 소비.
         if let Some(stderr) = child.stderr.take() {
-            let server_name = name.to_string();
+            let _server_name = name.to_string();
             tokio::spawn(async move {
                 let mut reader = BufReader::new(stderr);
                 let mut line = String::new();
@@ -63,7 +63,7 @@ impl McpClient {
                         Ok(_) => {
                             // stderr 출력은 디버그 로그로만 소비 (릴리스에서는 무시)
                             #[cfg(debug_assertions)]
-                            eprintln!("[MCP:{}:stderr] {}", server_name, line.trim());
+                            eprintln!("[MCP:{}:stderr] {}", _server_name, line.trim());
                             line.clear();
                         }
                         Err(_) => break,
