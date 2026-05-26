@@ -1947,26 +1947,6 @@ impl App {
             return;
         }
 
-        // [v3.9.0] Alt+1 ~ Alt+6 단축키로 우측 인스펙터 탭 전환 및 포커스 바인딩 구현
-        if key.modifiers.contains(KeyModifiers::ALT) {
-            let tab_to_switch = match key.code {
-                KeyCode::Char('1') => Some(crate::app::state::InspectorTab::Preview),
-                KeyCode::Char('2') => Some(crate::app::state::InspectorTab::Diff),
-                KeyCode::Char('3') => Some(crate::app::state::InspectorTab::Search),
-                KeyCode::Char('4') => Some(crate::app::state::InspectorTab::Logs),
-                KeyCode::Char('5') => Some(crate::app::state::InspectorTab::Recent),
-                KeyCode::Char('6') => Some(crate::app::state::InspectorTab::Git),
-                _ => None,
-            };
-            if let Some(tab) = tab_to_switch {
-                self.state.ui.show_inspector = true;
-                self.state.ui.focused_pane = crate::app::state::FocusedPane::Inspector;
-                self.state.ui.active_inspector_tab = tab;
-                self.state.ui.inspector_scroll.set(0);
-                return;
-            }
-        }
-
         if key.code == KeyCode::F(1)
             || (key.code == KeyCode::Char('?')
                 && self.state.ui.focused_pane != crate::app::state::FocusedPane::Composer)
@@ -2152,6 +2132,12 @@ impl App {
                             }
                         }
                     };
+                } else if self.state.ui.show_inspector
+                    && self.state.ui.focused_pane == crate::app::state::FocusedPane::Inspector
+                {
+                    let reverse =
+                        key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
+                    self.cycle_inspector_tab(reverse);
                 } else {
                     use crate::domain::session::AppMode;
                     self.state.domain.session.mode = match self.state.domain.session.mode {
@@ -2229,19 +2215,26 @@ impl App {
             self.state.ui.palette.query.push(c);
             self.update_palette_matches();
         } else if self.state.ui.slash_menu.is_open {
-            // [v0.1.0-beta.16] 슬래시 메뉴 활성 상태: 필터 문자 추가
-            self.state.ui.slash_menu.filter.push(c);
-            self.state.ui.slash_menu.update_matches();
+            // [v3.9.1] 슬래시 메뉴는 입력을 가로채지 않고 Composer 버퍼를 기준으로 후보만 갱신한다.
+            self.state.ui.composer.input_buffer.push(c);
+            self.state
+                .ui
+                .slash_menu
+                .update_matches_for_input(&self.state.ui.composer.input_buffer);
         } else if self.state.ui.fuzzy.is_open {
             self.state.ui.fuzzy.input.push(c);
             self.update_fuzzy_matches();
         } else {
             if c == '/' && self.state.ui.composer.input_buffer.is_empty() {
-                // [v0.1.0-beta.16] 빈 Composer에서 / 입력 시 슬래시 메뉴 활성화
+                // [v3.9.1] 빈 Composer에서 / 입력 시에도 실제 입력 버퍼에 보존한다.
+                self.state.ui.composer.input_buffer.push(c);
                 self.state.ui.slash_menu.is_open = true;
                 self.state.ui.slash_menu.filter.clear();
                 self.state.ui.slash_menu.cursor = 0;
-                self.state.ui.slash_menu.update_matches();
+                self.state
+                    .ui
+                    .slash_menu
+                    .update_matches_for_input(&self.state.ui.composer.input_buffer);
             } else if c == '@' {
                 self.state.ui.fuzzy.is_open = true;
                 self.state.ui.fuzzy.mode = crate::app::state::FuzzyMode::Files;
@@ -2458,6 +2451,105 @@ impl App {
         }
     }
 
+    /// 인스펙터 포커스 상태에서 Tab/Shift+Tab으로 탭을 순환한다.
+    fn cycle_inspector_tab(&mut self, reverse: bool) {
+        use crate::app::state::InspectorTab;
+
+        let tabs = [
+            InspectorTab::Preview,
+            InspectorTab::Diff,
+            InspectorTab::Search,
+            InspectorTab::Logs,
+            InspectorTab::Recent,
+            InspectorTab::Git,
+        ];
+        let current = tabs
+            .iter()
+            .position(|tab| *tab == self.state.ui.active_inspector_tab)
+            .unwrap_or(0);
+        let next = if reverse {
+            current.checked_sub(1).unwrap_or(tabs.len() - 1)
+        } else {
+            (current + 1) % tabs.len()
+        };
+        self.state.ui.active_inspector_tab = tabs[next];
+        self.state.ui.inspector_scroll.set(0);
+    }
+
+    fn handle_slash_menu_enter(&mut self) {
+        if self.state.ui.slash_menu.matches.is_empty() {
+            self.state.ui.slash_menu.is_open = false;
+            return;
+        }
+
+        let (candidate, _) = self.state.ui.slash_menu.matches[self.state.ui.slash_menu.cursor];
+        let candidate = candidate.to_string();
+        let input = self.state.ui.composer.input_buffer.clone();
+        let trimmed = input.trim();
+        let ends_with_space = input.chars().last().is_some_and(char::is_whitespace);
+
+        if candidate.starts_with('/') {
+            if trimmed == candidate {
+                if candidate == "/workspace" {
+                    self.state.ui.composer.input_buffer = "/workspace ".to_string();
+                    self.state.ui.slash_menu.cursor = 0;
+                    self.state
+                        .ui
+                        .slash_menu
+                        .update_matches_for_input(&self.state.ui.composer.input_buffer);
+                    return;
+                }
+                self.state.ui.slash_menu.is_open = false;
+                self.state.ui.slash_menu.filter.clear();
+                self.handle_slash_command(&candidate);
+                self.state.ui.composer.input_buffer.clear();
+                return;
+            }
+
+            if candidate == "/workspace" {
+                self.state.ui.composer.input_buffer = "/workspace ".to_string();
+                self.state.ui.slash_menu.cursor = 0;
+                self.state
+                    .ui
+                    .slash_menu
+                    .update_matches_for_input(&self.state.ui.composer.input_buffer);
+            } else {
+                self.state.ui.composer.input_buffer = candidate;
+                self.state.ui.slash_menu.is_open = false;
+                self.state.ui.slash_menu.filter.clear();
+            }
+            return;
+        }
+
+        let mut parts = input.split_whitespace();
+        let root = parts.next().unwrap_or_default();
+        let sub = parts.next().unwrap_or_default();
+        if root == "/workspace" && sub == candidate && !ends_with_space {
+            let command = format!("/workspace {}", candidate);
+            self.state.ui.slash_menu.is_open = false;
+            self.state.ui.slash_menu.filter.clear();
+            self.state.ui.composer.input_buffer.clear();
+            self.handle_slash_command(&command);
+            return;
+        }
+
+        self.state.ui.composer.input_buffer = if input.trim_end() == "/workspace" {
+            format!("/workspace {}", candidate)
+        } else if ends_with_space {
+            format!("{}{}", input, candidate)
+        } else {
+            let prefix = input
+                .char_indices()
+                .rev()
+                .find(|(_, ch)| ch.is_whitespace())
+                .map(|(idx, ch)| input[..idx + ch.len_utf8()].to_string())
+                .unwrap_or_default();
+            format!("{prefix}{candidate}")
+        };
+        self.state.ui.slash_menu.is_open = false;
+        self.state.ui.slash_menu.filter.clear();
+    }
+
     /// Backspace 키 처리: Slash Menu, Fuzzy Finder, Wizard API 키, Composer 각각의 버퍼 삭제.
     fn handle_backspace(&mut self) {
         if self.state.ui.palette.is_open {
@@ -2469,12 +2561,23 @@ impl App {
                 self.update_palette_matches();
             }
         } else if self.state.ui.slash_menu.is_open {
-            // [v0.1.0-beta.16] 필터가 비면 메뉴 닫기, 아니면 필터 문자 삭제
-            if self.state.ui.slash_menu.filter.is_empty() {
+            self.state.ui.composer.input_buffer.pop();
+            if self.state.ui.composer.input_buffer.is_empty()
+                || !self
+                    .state
+                    .ui
+                    .composer
+                    .input_buffer
+                    .trim_start()
+                    .starts_with('/')
+            {
                 self.state.ui.slash_menu.is_open = false;
+                self.state.ui.slash_menu.filter.clear();
             } else {
-                self.state.ui.slash_menu.filter.pop();
-                self.state.ui.slash_menu.update_matches();
+                self.state
+                    .ui
+                    .slash_menu
+                    .update_matches_for_input(&self.state.ui.composer.input_buffer);
             }
         } else if self.state.ui.fuzzy.is_open {
             if self.state.ui.fuzzy.input.is_empty() {
@@ -2641,16 +2744,7 @@ impl App {
                 self.state.ui.focused_pane = crate::app::state::FocusedPane::Composer;
             }
         } else if self.state.ui.slash_menu.is_open {
-            // [v0.1.0-beta.16] 슬래시 메뉴에서 명령어 선택 → 바로 실행
-            if !self.state.ui.slash_menu.matches.is_empty() {
-                let (cmd, _) = self.state.ui.slash_menu.matches[self.state.ui.slash_menu.cursor];
-                let cmd_str = cmd.to_string();
-                self.state.ui.slash_menu.is_open = false;
-                self.state.ui.slash_menu.filter.clear();
-                self.handle_slash_command(&cmd_str);
-            } else {
-                self.state.ui.slash_menu.is_open = false;
-            }
+            self.handle_slash_menu_enter();
         } else if self.state.ui.fuzzy.is_open {
             if !self.state.ui.fuzzy.matches.is_empty() {
                 let selected = &self.state.ui.fuzzy.matches[self.state.ui.fuzzy.cursor];

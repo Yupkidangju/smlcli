@@ -12,10 +12,12 @@
 
 ### Changed
 - **Timeline Block-based Layout 개편 및 반응형 구조화 (`src/tui/layout.rs`)**: `unicode-width` 기반의 풀위드 텍스트 래핑 및 `Borders::LEFT` 2px 세로바(`┃`) 기호, Tree of Thoughts 깊이 들여쓰기 융합 브랜치(`└─ ⚙️`) 트리 드로잉 개편 완료.
-- **다중 뷰포트 레이아웃 & 단축키 바인딩 인스펙터 탭바 연동**: `Alt+1` ~ `Alt+6` 단축키 바인딩과 thread_local 기반 5000라인 가속 디프 라인 캐싱(`DIFF_RENDER_CACHE`) 구현 완료.
+- **다중 뷰포트 레이아웃 & 인스펙터 탭바 연동**: Linux 터미널 기본 기능과 충돌하지 않도록 인스펙터 포커스 상태의 `Tab`/`Shift+Tab` 탭 순환으로 전환하고 thread_local 기반 5000라인 가속 디프 라인 캐싱(`DIFF_RENDER_CACHE`) 구현 완료.
 - **Composer Inset 및 Fuzzy Command Palette 개선**: `draw_composer`에 `bg_lowest` 배경 및 보라색 `❯` 프롬프트 적용, `draw_command_palette` 오버레이에 `bg_panel` 단색 패널 스타일과 `Clear` 소거 연동. `tick_count`를 활용한 500ms 주기 깜빡임 `█` 네이티브 커서 점멸 연동 완료.
 
 ### Fixed
+- **Slash Command 입력 보존 및 하위 명령 자동완성 수정**: `/` 입력 시 메뉴가 Composer 입력을 가로채 `/workspace show` 같은 하위 명령을 이어 타이핑할 수 없던 문제를 수정. Slash 메뉴는 후보 미리보기/완성만 수행하고, 실행은 Composer의 최종 Enter에서 처리되도록 조정.
+- **명령/선택 UI 입력 회귀 수정**: `/tokens` 명령 결과를 실제 렌더링 타임라인 Notice 블록으로 출력하도록 수정하고, Slash Command Menu 및 Command Palette가 커서 위치 기준으로 렌더링 윈도우를 이동해 긴 목록에서도 선택 항목이 화면 밖으로 사라지지 않도록 보정.
 - **Clippy 경고 일소 및 빌드 무결성 확보**: `std::cell::RefCell::new(None)`을 const 블록으로 초기화하여 `missing-const-for-thread-local` 경고 해결. stable/unstable let_chains 호환성을 우회하기 위해 `#[allow(clippy::collapsible_if)]` 속성을 `src/tui/widgets/inspector_tabs.rs` 및 `src/tui/i18n.rs`에 적절히 배치하여 Clippy 경고 0건 완전 통과 및 빌드 무결성 보장.
 - **TimelineBlock 및 App 구조 정리**: `src/app/state.rs` 내 TimelineBlock 구조체 컬렉션 마이그레이션 및 미사용 variants `Reverted`, `Questionnaire`에 `#[allow(dead_code)]` 속성 적용. `src/app/mod.rs` 내 `BlockStatus` 및 `BlockDisplayMode` 복사 가능 타입에 대한 불필요한 `.clone()` 호출 제거.
 

@@ -1796,6 +1796,123 @@ fn test_f2_inspector_toggle() {
 }
 
 #[test]
+fn test_inspector_tab_cycles_with_tab_keys() {
+    use crate::app::App;
+    use crate::app::state::{AppState, FocusedPane, InspectorTab};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+
+    app.state.ui.show_inspector = true;
+    app.state.ui.focused_pane = FocusedPane::Inspector;
+    app.state.ui.active_inspector_tab = InspectorTab::Preview;
+    app.state.ui.inspector_scroll.set(12);
+
+    app.handle_input(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.state.ui.active_inspector_tab, InspectorTab::Diff);
+    assert_eq!(
+        app.state.ui.inspector_scroll.get(),
+        0,
+        "인스펙터 탭 전환 시 스크롤 위치를 초기화해야 함"
+    );
+
+    app.handle_input(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    assert_eq!(app.state.ui.active_inspector_tab, InspectorTab::Preview);
+
+    app.handle_input(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+    assert_eq!(
+        app.state.ui.active_inspector_tab,
+        InspectorTab::Git,
+        "Shift+Tab은 첫 탭에서 마지막 탭으로 순환해야 함"
+    );
+}
+
+#[test]
+fn test_tokens_command_pushes_visible_timeline_notice() {
+    use crate::app::App;
+    use crate::app::state::{AppState, BlockSection, BlockStatus, TimelineBlockKind};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+    app.state.ui.timeline.clear();
+
+    app.handle_slash_command("/tokens");
+
+    let block = app
+        .state
+        .ui
+        .timeline
+        .last()
+        .expect("/tokens는 화면에 보이는 타임라인 블록을 추가해야 함");
+    assert_eq!(block.kind, TimelineBlockKind::Notice);
+    assert_eq!(block.status, BlockStatus::Done);
+    assert_eq!(block.title, "토큰 사용량");
+    assert!(
+        matches!(
+            block.body.first(),
+            Some(BlockSection::Markdown(text)) if text.contains("[Tokens Insight]")
+        ),
+        "/tokens 결과 본문은 토큰 사용량 마크다운을 포함해야 함"
+    );
+}
+
+#[test]
+fn test_help_command_lists_current_keyboard_shortcuts() {
+    use crate::app::App;
+    use crate::app::state::{AppState, BlockSection, TimelineBlockKind};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+    app.state.ui.timeline.clear();
+
+    app.handle_slash_command("/help");
+
+    let block = app
+        .state
+        .ui
+        .timeline
+        .last()
+        .expect("/help는 도움말 타임라인 블록을 추가해야 함");
+    assert_eq!(block.kind, TimelineBlockKind::Help);
+
+    let tables: Vec<&Vec<(String, String)>> = block
+        .body
+        .iter()
+        .filter_map(|section| match section {
+            BlockSection::KeyValueTable(entries) => Some(entries),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        tables.len() >= 2,
+        "/help는 명령 목록과 키보드 단축키 목록을 모두 포함해야 함"
+    );
+    let key_table = tables.last().expect("키보드 단축키 테이블이 필요함");
+    assert!(
+        key_table
+            .iter()
+            .any(|(key, desc)| key == "Inspector: Tab" && desc.contains("Preview")),
+        "Inspector Tab 전환 키가 /help에 안내되어야 함"
+    );
+    assert!(
+        key_table
+            .iter()
+            .any(|(key, desc)| key == "Inspector: Shift+Tab" && desc.contains("역방향")),
+        "Inspector Shift+Tab 전환 키가 /help에 안내되어야 함"
+    );
+}
+
+#[test]
 fn test_ctrl_k_command_palette() {
     use crate::app::App;
     use crate::app::state::{AppState, FocusedPane};
@@ -1830,6 +1947,118 @@ fn test_ctrl_k_command_palette() {
         app.state.ui.focused_pane,
         FocusedPane::Composer,
         "팔레트가 닫히면 포커스가 Composer로 복귀해야 함"
+    );
+}
+
+#[test]
+fn test_slash_menu_keeps_command_text_in_composer() {
+    use crate::app::App;
+    use crate::app::state::AppState;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+
+    app.handle_input(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+
+    assert!(app.state.ui.slash_menu.is_open);
+    assert_eq!(
+        app.state.ui.composer.input_buffer, "/",
+        "슬래시 메뉴가 열려도 '/' 문자는 Composer에 남아야 함"
+    );
+
+    for ch in "workspace".chars() {
+        app.handle_input(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    assert_eq!(app.state.ui.composer.input_buffer, "/workspace");
+
+    app.handle_input(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));
+    assert_eq!(
+        app.state.ui.composer.input_buffer, "/workspace ",
+        "/workspace 뒤 Space 입력이 Composer에 보존되어야 함"
+    );
+    assert!(
+        app.state
+            .ui
+            .slash_menu
+            .matches
+            .iter()
+            .any(|(cmd, _)| *cmd == "show"),
+        "/workspace 뒤에서는 show 하위 명령 후보가 표시되어야 함"
+    );
+}
+
+#[test]
+fn test_slash_menu_selection_completes_without_immediate_execution() {
+    use crate::app::App;
+    use crate::app::state::AppState;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+    let initial_messages = app.state.domain.session.messages.len();
+
+    for ch in "/wor".chars() {
+        app.handle_input(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.handle_input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert_eq!(
+        app.state.ui.composer.input_buffer, "/workspace ",
+        "하위 명령이 있는 후보 선택은 실행하지 않고 Composer에 접두어를 완성해야 함"
+    );
+    assert!(app.state.ui.slash_menu.is_open);
+    assert!(
+        app.state
+            .ui
+            .slash_menu
+            .matches
+            .iter()
+            .any(|(cmd, _)| *cmd == "show"),
+        "완성 직후 /workspace 하위 명령 후보가 이어서 표시되어야 함"
+    );
+    assert!(
+        app.state.domain.session.messages.len() == initial_messages,
+        "자동완성 선택만으로 /workspace Usage 메시지를 추가하면 안 됨"
+    );
+}
+
+#[test]
+fn test_workspace_subcommand_can_be_typed_and_executed_from_slash_menu() {
+    use crate::app::App;
+    use crate::app::state::AppState;
+    use crate::domain::settings::PersistedSettings;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let mut app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+    app.state.domain.settings = Some(PersistedSettings::default());
+
+    for ch in "/workspace show".chars() {
+        app.handle_input(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+    }
+    app.handle_input(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    assert!(
+        app.state.ui.composer.input_buffer.is_empty(),
+        "완성된 /workspace show 실행 후 Composer는 비워져야 함"
+    );
+    assert!(
+        app.state.domain.session.messages.iter().any(|msg| {
+            msg.content
+                .as_deref()
+                .is_some_and(|content| content.contains("Workspace:"))
+        }),
+        "/workspace show는 실제 workspace 상태 메시지를 생성해야 함"
     );
 }
 

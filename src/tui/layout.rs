@@ -38,6 +38,15 @@ fn truncate_middle(s: &str, max_len: usize) -> String {
     format!("{}…{}", start, end)
 }
 
+/// 선택 커서가 항상 보이는 마지막 줄 안에 들어오도록 리스트 렌더링 시작점을 계산한다.
+fn visible_window_start(cursor: usize, visible_count: usize) -> usize {
+    if visible_count == 0 {
+        0
+    } else {
+        cursor.saturating_sub(visible_count.saturating_sub(1))
+    }
+}
+
 pub fn draw(f: &mut Frame, state: &AppState) {
     let size = f.area();
 
@@ -524,10 +533,18 @@ fn draw_timeline(f: &mut Frame, state: &AppState, area: Rect) {
                 crate::app::state::TimelineBlockKind::Help => {
                     block_body_lines.push("Available Commands:".to_string());
                     for section in &block.body {
-                        if let crate::app::state::BlockSection::KeyValueTable(entries) = section {
-                            for (cmd, desc) in entries {
-                                block_body_lines.push(format!("{:<14} {}", cmd, desc));
+                        match section {
+                            crate::app::state::BlockSection::Markdown(msg) => {
+                                for line in msg.lines() {
+                                    block_body_lines.push(line.to_string());
+                                }
                             }
+                            crate::app::state::BlockSection::KeyValueTable(entries) => {
+                                for (cmd, desc) in entries {
+                                    block_body_lines.push(format!("{:<24} {}", cmd, desc));
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -1159,11 +1176,11 @@ fn draw_composer(f: &mut Frame, state: &AppState, area: Rect) {
 
     // [v0.1.0-beta.16] 슬래시 커맨드 자동완성 메뉴: Composer 위에 팝업으로 표시
     if state.ui.slash_menu.is_open {
-        let menu_height = (state.ui.slash_menu.matches.len() as u16 + 2).min(13);
+        let menu_height = (state.ui.slash_menu.matches.len() as u16 + 2).clamp(3, 13);
         let menu_area = ratatui::layout::Rect {
             x: area.x + 2,
             y: area.y.saturating_sub(menu_height),
-            width: 35,
+            width: 48,
             height: menu_height,
         };
         let menu_block = crate::tui::widgets::block_with_borders(
@@ -1179,15 +1196,33 @@ fn draw_composer(f: &mut Frame, state: &AppState, area: Rect) {
         .border_style(Style::default().fg(p.text_primary));
 
         let mut lines = Vec::new();
-        for (i, (cmd, desc)) in state.ui.slash_menu.matches.iter().enumerate() {
-            let line_text = format!("{:<12} {}", cmd, desc);
-            if i == state.ui.slash_menu.cursor {
-                lines.push(Line::from(vec![Span::styled(
-                    format!("▶ {}", line_text),
-                    Style::default().fg(p.accent),
-                )]));
-            } else {
-                lines.push(Line::from(vec![Span::raw(format!("  {}", line_text))]));
+        if state.ui.slash_menu.matches.is_empty() {
+            lines.push(Line::from(vec![Span::styled(
+                "  No command matches",
+                Style::default().fg(p.muted),
+            )]));
+        } else {
+            let visible_count = (menu_height as usize).saturating_sub(2);
+            let start = visible_window_start(state.ui.slash_menu.cursor, visible_count);
+            for (visible_idx, (cmd, desc)) in state
+                .ui
+                .slash_menu
+                .matches
+                .iter()
+                .skip(start)
+                .take(visible_count)
+                .enumerate()
+            {
+                let i = start + visible_idx;
+                let line_text = format!("{:<16} {}", cmd, desc);
+                if i == state.ui.slash_menu.cursor {
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("▶ {}", line_text),
+                        Style::default().fg(p.accent),
+                    )]));
+                } else {
+                    lines.push(Line::from(vec![Span::raw(format!("  {}", line_text))]));
+                }
             }
         }
         let menu_para = Paragraph::new(lines).block(menu_block);
@@ -1251,14 +1286,18 @@ fn draw_command_palette(f: &mut Frame, state: &AppState) {
         ]));
     } else {
         // [v3.9.0] 가용 높이에 맞춘 뷰포트 제한 렌더링
-        for (idx, cmd) in state
+        let visible_count = (height as usize).saturating_sub(5);
+        let start = visible_window_start(state.ui.palette.cursor, visible_count);
+        for (visible_idx, cmd) in state
             .ui
             .palette
             .results
             .iter()
+            .skip(start)
+            .take(visible_count)
             .enumerate()
-            .take((height as usize).saturating_sub(5))
         {
+            let idx = start + visible_idx;
             let prefix = if idx == state.ui.palette.cursor {
                 " ▶ "
             } else {
@@ -1397,4 +1436,19 @@ fn draw_trust_gate(f: &mut Frame, state: &AppState) {
         .alignment(ratatui::layout::Alignment::Left);
 
     f.render_widget(paragraph, popup_area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::visible_window_start;
+
+    #[test]
+    fn test_visible_window_start_keeps_cursor_in_view() {
+        assert_eq!(visible_window_start(0, 10), 0);
+        assert_eq!(visible_window_start(9, 10), 0);
+        assert_eq!(visible_window_start(10, 10), 1);
+        assert_eq!(visible_window_start(49, 10), 40);
+        assert_eq!(visible_window_start(7, 1), 7);
+        assert_eq!(visible_window_start(7, 0), 0);
+    }
 }

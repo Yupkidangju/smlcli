@@ -341,19 +341,18 @@ impl App {
                 let budget = self.state.domain.session.get_context_load_percentage();
                 let estimated = self.state.domain.session.estimate_current_tokens();
                 let cap = self.state.domain.session.max_token_budget;
-                self.state
-                    .domain
-                    .session
-                    .add_message(crate::providers::types::ChatMessage {
-                        role: crate::providers::types::Role::System,
-                        content: Some(format!(
-                            "[Tokens Insight]\nEstimated tokens in context: {} / {} ({}%)",
-                            estimated, cap, budget
-                        )),
-                        tool_calls: None,
-                        tool_call_id: None,
-                        pinned: false,
-                    });
+                let mut block = crate::app::state::TimelineBlock::new(
+                    crate::app::state::TimelineBlockKind::Notice,
+                    "토큰 사용량",
+                );
+                block.status = crate::app::state::BlockStatus::Done;
+                block
+                    .body
+                    .push(crate::app::state::BlockSection::Markdown(format!(
+                        "[Tokens Insight]\nEstimated tokens in context: {} / {} ({}%)",
+                        estimated, cap, budget
+                    )));
+                self.state.ui.timeline.push(block);
             }
             "/help" => {
                 let help_entries = vec![
@@ -389,7 +388,7 @@ impl App {
                     ("/theme".to_string(), "테마 전환 (Toggle Theme)".to_string()),
                     (
                         "/workspace".to_string(),
-                        "워크스페이스 신뢰 관리 (Manage Workspace Trust)".to_string(),
+                        "워크스페이스 신뢰 관리: show/trust/deny/clear".to_string(),
                     ),
                     (
                         "/mcp".to_string(),
@@ -412,6 +411,54 @@ impl App {
                     ("/help".to_string(), "도움말 (Help)".to_string()),
                     ("/quit".to_string(), "종료 (Exit)".to_string()),
                 ];
+                let key_entries = vec![
+                    ("F1 / ?".to_string(), "도움말 오버레이 열기".to_string()),
+                    (
+                        "F2".to_string(),
+                        "Inspector 패널 열기/닫기 및 포커스 이동".to_string(),
+                    ),
+                    (
+                        "Inspector: Tab".to_string(),
+                        "Preview → Diff → Search → Logs → Recent → Git 순서로 탭 전환".to_string(),
+                    ),
+                    (
+                        "Inspector: Shift+Tab".to_string(),
+                        "Git → Recent → Logs → Search → Diff → Preview 순서로 역방향 탭 전환"
+                            .to_string(),
+                    ),
+                    (
+                        "일반: Tab / Shift+Tab".to_string(),
+                        "PLAN ↔ RUN 모드 전환".to_string(),
+                    ),
+                    (
+                        "Ctrl+K".to_string(),
+                        "Command Palette 열기/닫기".to_string(),
+                    ),
+                    (
+                        "/".to_string(),
+                        "Slash Command Menu 열기, Composer에 후보 완성 후 Enter로 실행".to_string(),
+                    ),
+                    (
+                        "Up / Down".to_string(),
+                        "현재 열린 목록 또는 포커스 영역 탐색".to_string(),
+                    ),
+                    (
+                        "PageUp / PageDown".to_string(),
+                        "Timeline 또는 Inspector 내용 스크롤".to_string(),
+                    ),
+                    (
+                        "Enter".to_string(),
+                        "메시지 전송 또는 선택 항목 실행".to_string(),
+                    ),
+                    (
+                        "Shift+Enter".to_string(),
+                        "Composer에서 줄바꿈 입력".to_string(),
+                    ),
+                    (
+                        "Esc".to_string(),
+                        "열린 팝업 닫기 또는 실행 중 도구 취소".to_string(),
+                    ),
+                ];
                 let mut block = crate::app::state::TimelineBlock::new(
                     crate::app::state::TimelineBlockKind::Help,
                     "도움말",
@@ -419,6 +466,12 @@ impl App {
                 block
                     .body
                     .push(crate::app::state::BlockSection::KeyValueTable(help_entries));
+                block.body.push(crate::app::state::BlockSection::Markdown(
+                    "Keyboard Shortcuts:".to_string(),
+                ));
+                block
+                    .body
+                    .push(crate::app::state::BlockSection::KeyValueTable(key_entries));
                 self.state.ui.timeline.push(block);
             }
             "/quit" => {

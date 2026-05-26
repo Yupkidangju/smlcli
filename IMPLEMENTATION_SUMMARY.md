@@ -82,13 +82,14 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
 
 - [2026-05-23] : **[Implemented - Phase 52 TUI Modernization & Responsive Multi-viewport Redesign (v3.9.0)]**
   - ✅ **반응형 3분할 뷰포트 레이아웃 개편**: 터미널 너비/높이에 맞춰 타임라인, Composer, Inspector 영역을 정밀 배치하며 극소 터미널 화면(100x30 이하)에서도 UI 깨짐을 방지하는 정밀 그리드 렌더링 시스템 탑재.
-  - ✅ **단축키 기반 고속 탭 전환**: `Alt+1` ~ `Alt+6` 전역 핫키 바인딩을 통해 Inspector 패널 내 6대 탭(Preview, Diff, Logs, Search, Recent, Settings)을 마우스 클릭 없이 실시간으로 토글 전환하는 고속 탐색 흐름 구현.
+  - ✅ **단축키 기반 고속 탭 전환**: Linux 터미널 기본 기능과 충돌하지 않도록 Inspector 포커스 상태의 `Tab`/`Shift+Tab`으로 6대 탭(Preview, Diff, Search, Logs, Recent, Git)을 순환 전환하는 고속 탐색 흐름 구현.
   - ✅ **Composer 내 500ms 점멸 블록 커서**: 텍스트 입력의 가독성을 높이기 위해 `tick_count`를 활용한 500ms 주기 점멸 커서 애니메이션을 적용하여 실시간 터미널 반응성 증진.
   - ✅ **수학적 모달 중앙 정렬 공식 정립**: `centered_rect` 산출 로직을 가로 60% x 세로 45% 비율 기반으로 개편하고, 좁은 터미널 경계 조건에서 오버플로우를 원천 방지하도록 수학적 최소/최대 클램핑 공식 탑재.
   - ✅ **i18n 5대 언어 사전 완전 매핑 및 검증**: `src/tui/i18n.rs` 내 5개 국어 사전의 key completeness를 대칭 검증하는 단위 테스트(`test_v3_9_0_i18n_key_completeness`)를 구축하여 단 하나의 누락 키도 없음(1:1 매핑 정합)을 100% 무결 검증 성공.
   - ✅ **DIFF_RENDER_CACHE thread-local 캐시 무효화 정비**: 타임라인 내 디프 성능 최적화를 위한 `DIFF_RENDER_CACHE` 무효화/갱신 트리거 로직을 보강하고, 테스트(`test_diff_render_cache_invalidation`)로 데이터 정합 단언 확인.
   - ✅ **ExecShell.safe_to_auto_run 신뢰 권한 경계 제한**: LLM이 도구 호출 시 임의로 `safe_to_auto_run: true`를 주장하여 보안을 우회하려는 취약점을 방어하기 위해, 런타임(`src/tools/shell.rs`) 내부 안전 목록(`is_builtin_safe`) 및 사용자 설정 목록(`is_custom_safe`)에 매칭되는 셸 명령어만 자동 승인 실행을 인정하도록 권한의 boundary를 완전 한정 제한.
-  - ✅ **108개 종합 품질 회귀 테스트 패스**: 회귀 테스트 3종 추가를 완료하여 TUI 회귀, i18n 무결성, 보안 권한 경계 등을 전사적으로 검증하고 총 108개 테스트 100% 패스 달성.
+  - ✅ **Slash Command 입력 보존 UX 수정**: `/` 자동완성 메뉴가 Composer 입력을 가로채던 문제를 수정하여 `/workspace show` 같은 하위 명령을 자연스럽게 이어 타이핑하고 최종 Enter로 실행할 수 있도록 개선.
+  - ✅ **115개 종합 품질 회귀 테스트 패스**: Slash Command 입력 보존 회귀 테스트를 포함하여 TUI 회귀, i18n 무결성, 보안 권한 경계 등을 전사적으로 검증하고 총 115개 테스트 100% 패스 달성.
 
 - [2026-05-22] : **[Implemented - Phase 50 LM Studio Support & Wizard Fallback]**
   - ✅ **LM Studio 공식 프로바이더 지원**: `ProviderKind::LmStudio` 신규 추가 및 기본 URL (`http://localhost:1234/v1`) 영속화 지원.

@@ -905,6 +905,12 @@ impl SlashMenuState {
         ("/help", "Show Help"),
         ("/quit", "Exit"),
     ];
+    const WORKSPACE_COMMANDS: [(&'static str, &'static str); 4] = [
+        ("show", "Show trust state"),
+        ("trust", "Trust current workspace"),
+        ("deny", "Restrict current workspace"),
+        ("clear", "Clear trust state"),
+    ];
 
     pub fn new() -> Self {
         Self {
@@ -915,10 +921,42 @@ impl SlashMenuState {
         }
     }
 
-    pub fn update_matches(&mut self) {
-        self.matches = Self::ALL_COMMANDS
+    /// Composer 입력 버퍼를 기준으로 슬래시 명령 후보를 갱신한다.
+    pub fn update_matches_for_input(&mut self, input: &str) {
+        let input = input.trim_start();
+        if !input.starts_with('/') {
+            self.matches.clear();
+            self.cursor = 0;
+            self.filter.clear();
+            return;
+        }
+
+        let ends_with_space = input.chars().last().is_some_and(char::is_whitespace);
+        let parts: Vec<&str> = input.split_whitespace().collect();
+        let (filter, source): (&str, &[(&'static str, &'static str)]) =
+            if parts.first() == Some(&"/workspace") && (ends_with_space || parts.len() >= 2) {
+                let filter = if ends_with_space {
+                    ""
+                } else {
+                    parts.get(1).copied().unwrap_or("")
+                };
+                (filter, &Self::WORKSPACE_COMMANDS)
+            } else {
+                let filter = parts.first().copied().unwrap_or("/");
+                (filter, &Self::ALL_COMMANDS)
+            };
+
+        self.filter = filter.to_string();
+        let filter_lower = filter.to_lowercase();
+        self.matches = source
             .iter()
-            .filter(|(cmd, _)| cmd.starts_with(&self.filter) || cmd[1..].starts_with(&self.filter))
+            .filter(|(cmd, _)| {
+                let cmd_lower = cmd.to_lowercase();
+                cmd_lower.starts_with(&filter_lower)
+                    || cmd_lower
+                        .strip_prefix('/')
+                        .is_some_and(|stripped| stripped.starts_with(&filter_lower))
+            })
             .cloned()
             .collect();
         if self.cursor >= self.matches.len() {

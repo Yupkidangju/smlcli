@@ -146,6 +146,7 @@ smlcli · anthropic/claude-sonnet-4 · ~/project · RUN · Shell Ask · 84% ctx 
 - `Tab`/`Shift+Tab`: PLAN ↔ RUN 모드 전환
 - `Ctrl+R`: permissions 보기
 - `F2`: Inspector 토글 (※ `Ctrl+I`는 터미널에서 Tab과 동일한 0x09이므로 사용 불가)
+- Inspector 포커스 상태의 `Tab`/`Shift+Tab`: Inspector 탭 순환 (Preview/Diff/Search/Logs/Recent/Git)
 
 ---
 
@@ -381,11 +382,11 @@ Composer는 단순 입력 박스가 아니다. `smlcli`의 주된 명령 인터�
 ### `/`
 slash command 자동완성 시작
 
-**[v0.1.0-beta.20 갱신]** 빈 Composer에서 `/` 입력 시 Composer 위에 자동완성 팝업이 활성화됨.
-- 12개 내장 명령어 목록이 표시됨: `/config`, `/setting`, `/provider`, `/model`, `/status`, `/mode`, `/tokens`, `/compact`, `/theme`, `/clear`, `/help`, `/quit`
-- 키보드 입력으로 부분 일치 필터링
-- `↑`/`↓` 방향키로 커서 이동, `Enter`로 선택 즉시 실행
-- `Esc` 또는 필터를 모두 지운 후 `Backspace`로 메뉴 닫기
+**[v3.9.1 갱신]** 빈 Composer에서 `/` 입력 시 Composer 위에 자동완성 팝업이 활성화되며, 입력 문자는 항상 Composer에 보존됨.
+- 루트 명령어 목록이 표시됨: `/config`, `/setting`, `/provider`, `/model`, `/workspace`, `/status`, `/mode`, `/tokens`, `/compact`, `/theme`, `/new`, `/resume`, `/session`, `/clear`, `/help`, `/quit`
+- 키보드 입력으로 부분 일치 필터링하며 `/workspace ` 뒤에서는 `show`, `trust`, `deny`, `clear` 하위 명령 후보를 표시
+- `↑`/`↓` 방향키로 커서 이동, `Enter`로 선택 후보를 Composer에 완성하고 완성된 명령은 Composer Enter로 실행
+- `Esc` 또는 입력을 모두 지운 후 `Backspace`로 메뉴 닫기
 
 ### `@`
 파일 fuzzy finder 진입
@@ -632,6 +633,8 @@ PLAN
 - 상위 5개만 먼저 노출
 - 현재 상태에서 쓸 수 없는 명령은 흐리게 표시
 - 오른쪽에 짧은 설명 제공
+- 후보 선택은 즉시 실행하지 않고 Composer 입력을 완성한다.
+- `/workspace `처럼 공백 뒤 컨텍스트가 생기면 하위 명령 후보를 표시한다.
 
 예:
 ```text
@@ -1150,6 +1153,7 @@ UiState
 | 키 | 기능 | 비고 |
 |----|------|------|
 | `Tab` / `Shift+Tab` | PLAN ↔ RUN 모드 전환 | |
+| Inspector 포커스 `Tab` / `Shift+Tab` | 인스펙터 탭 순환 | Linux 터미널 기능과 충돌하는 Alt+숫자 바인딩은 사용하지 않음 |
 | `F2` | 인스펙터 토글 | Ctrl+I는 터미널에서 Tab(0x09)과 동일하므로 사용 불가 |
 | `Ctrl+C` | 종료 | |
 | `Esc` | 팝업 닫기 / 종료 | 계층적 라우팅 |
@@ -1169,7 +1173,7 @@ UiState
 
 ### 23.5 /help 구조화 렌더링
 
-`/help` 출력은 `TimelineBlockKind::Help` 와 `BlockSection::KeyValueTable(Vec<(String, String)>)`로 구조화.
+`/help` 출력은 `TimelineBlockKind::Help` 와 `BlockSection::KeyValueTable(Vec<(String, String)>)`로 명령 목록과 키보드 단축키 목록을 함께 구조화.
 
 ```text
 렌더링 구조:
@@ -1177,6 +1181,9 @@ UiState
      /config    설명...          ← cmd: accent 고정 11칸, desc: text_secondary
      /setting   설명...
      ...
+     Keyboard Shortcuts:
+     F2                       Inspector 토글
+     Inspector: Tab           다음 인스펙터 탭
 ```
 
 - 명령어 Span(고정 11칸, accent 색상)과 설명 Span(text_secondary)이 분리된 `Line`으로 렌더링.

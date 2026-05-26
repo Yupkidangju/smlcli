@@ -29,7 +29,7 @@
 - **오프라인 수동 Fallback**: 로컬/오프라인 환경 및 API 핑 실패 시에도 마법사에서 `"✏ 직접 입력..."` 모드를 제공하여 모델명을 수동으로 임의 지정할 수 있어 연결 차단 없이 onboarding 완수 가능.
 - **Tree-sitter Repo Map**: AST 파싱 기반 저장소 요약 맵을 통해 AI가 전체 프로젝트 구조를 맥락으로 주입받아 정확한 코드를 수정.
 - **플랫폼 지원**: Linux (bash/zsh) 및 Windows (PowerShell/WSL) 동시 지원.
-- **v3.9.0 TUI 현대화 개편**: 반응형 3분할 뷰포트 레이아웃, `Alt+1`~`Alt+6` 단축키 기반 탭 전환, 500ms 점멸 커서 애니메이션, 극소 화면에서도 깨지지 않는 수학적 모달 중앙 정렬 공식을 탑재하여 극상의 TUI 사용자 경험 제공.
+- **v3.9.0 TUI 현대화 개편**: 반응형 3분할 뷰포트 레이아웃, 인스펙터 포커스 상태의 `Tab`/`Shift+Tab` 탭 전환, 500ms 점멸 커서 애니메이션, 극소 화면에서도 깨지지 않는 수학적 모달 중앙 정렬 공식을 탑재하여 극상의 TUI 사용자 경험 제공.
 
 ### 빠른 시작
 1. 저장소를 클론합니다.
@@ -50,6 +50,7 @@
 
 ### 트러블슈팅 (Troubleshooting)
 - **가상/헤드리스 터미널 크기 인지 지연**: CI 환경이나 무인 헤드리스 환경에서 가상 터미널 크기가 오인식되어 마우스 스크롤이나 타겟 인식이 어긋나던 버그는 `[v3.7.2]` 이후 완전 조치되었습니다. 테스트 빌드 및 자동 CI 검증 과정에서 규격 크기 `(100, 30)`이 무결하게 자동 격리 모킹되므로 별도의 추가 조치가 필요치 않습니다.
+- **Slash Command 하위 명령 입력**: `/` 입력 후 자동완성 메뉴가 떠도 입력 문자는 Composer에 그대로 남습니다. `/workspace ` 뒤에서는 `show`, `trust`, `deny`, `clear` 후보를 이어서 선택하거나 직접 타이핑한 뒤 Enter로 실행합니다.
 
 ---
 
@@ -76,7 +77,7 @@
 - **Offline Manual Fallback**: Always provides `"✏ 직접 입력..."` (Manual Input) mode during setup even if the local server is offline or the models API ping fails, enabling seamless wizard completion.
 - **Tree-sitter Repo Map**: Injects AST-parsed repository summary maps into the AI context for accurate code modifications.
 - **Cross-platform**: Full support for Linux and Windows.
-- **v3.9.0 TUI Modernization**: Provides a premium terminal experience featuring a responsive 3-viewport layout, instant tab-switching via `Alt+1` to `Alt+6` hotkeys, a smooth 500ms blinking cursor animation, and a robust mathematical modal auto-centering formula that never breaks even on extremely small terminal dimensions.
+- **v3.9.0 TUI Modernization**: Provides a premium terminal experience featuring a responsive 3-viewport layout, inspector tab switching via focused `Tab`/`Shift+Tab`, a smooth 500ms blinking cursor animation, and a robust mathematical modal auto-centering formula that never breaks even on extremely small terminal dimensions.
 
 ### Quick Start
 1. Clone the repository.
@@ -93,6 +94,7 @@
 
 ### Troubleshooting
 - **Virtual/Headless Terminal Dimension Misrecognition**: A bug where mouse routing was broken in headless or CI environments due to misrecognized terminal window dimensions has been fully resolved as of `[v3.7.2]`. The test suite automatically mocks standard dimensions `(100, 30)` in testing contexts, requiring no manual override.
+- **Slash Command subcommands**: When `/` opens autocomplete, typed text stays in the Composer. After `/workspace `, choose or type `show`, `trust`, `deny`, or `clear`, then press Enter to run the completed command.
 
 ---
 
@@ -115,7 +117,7 @@
 - **エージェント自律性 (Agentic Autonomy)**: 破壊的な操作の前後で自動化されたGitチェックポイントと自己修復ループにより、安全なAIコード生成を保証します。`ListDir`, `GrepSearch`, `FetchURL` などの高度なツールを内蔵。
 - **オフラインでの手動フォールバック**: ローカル/オフライン環境やAPIの疎通確認（PING）が失敗した場合でも、設定ウィザードで「✏ 直接入力...」モードを提供し、モデル名を手動で任意に入力して接続を中断することなくオンボーディングを完了できます。
 - **Tree-sitter Repo Map**: AST解析ベースのリポジトリ概要マップをAIコンテキストに注入し、正確なコード修正を実現します。
-- **v3.9.0 TUI近代化改修**: レスポンシブな3分割ビューポートレイアウト、`Alt+1`〜`Alt+6`のショートカットキーによる瞬時のタブ切り替え、500ms周期の点滅カーソルアニメーション、極小画面でも崩れない数学的なモーダル中央配置公式を搭載し、極上のTUIユーザー体験を提供。
+- **v3.9.0 TUI近代化改修**: レスポンシブな3分割ビューポートレイアウト、インスペクターフォーカス時の`Tab`/`Shift+Tab`によるタブ切り替え、500ms周期の点滅カーソルアニメーション、極小画面でも崩れない数学的なモーダル中央配置公式を搭載し、極上のTUIユーザー体験を提供。
 
 ### クイックスタート
 1. リポジトリをクローンします。
@@ -132,6 +134,7 @@
 
 ### トラブルシューティング
 - **仮想/ヘッドレス環境でのターミナルサイズ誤認**: CIなどのヘッドレス環境でターミナルサイズが誤認識され、マウス入力のルーティングが失敗する問題は `[v3.7.2]` 以降で完全に解決されました。テスト環境下では標準の仮想サイズ `(100, 30)` が自動でモッキングされるため、追加の設定は不要です。
+- **Slash Command のサブコマンド入力**: `/` で自動補完メニューが開いても、入力した文字は Composer に残ります。`/workspace ` の後は `show`, `trust`, `deny`, `clear` を選択または直接入力し、Enter で実行できます。
 
 ---
 
@@ -154,7 +157,7 @@
 - **代理自主性 (Agentic Autonomy)**: 透過破壞性操作前後的自動 Git 檢查點與自我修復循環，確保 AI 程式碼生成的安全性。內建 `ListDir`, `GrepSearch`, `FetchURL` 等進階工具。
 - **離線手動 Fallback**: 在本地/離線環境或 API Ping 失敗時，設定精靈仍提供「✏ 離線手動輸入...」模式，允許手動指定模型名稱，確保在無連線狀態下也能順利完成 Onboarding。
 - **Tree-sitter Repo Map**: 將基於 AST 解析的儲存庫摘要地圖注入 AI 上下文中，實現精確的程式碼修改。
-- **v3.9.0 TUI 現代化改編**: 提供響應式 3 分割視埠版面配置、基於 `Alt+1` 到 `Alt+6` 快捷鍵的即時分頁切換、500ms 游標閃爍動畫，以及在極小終端解析度下也絕不崩潰的數學式視窗自動置中公式，打造極致的 TUI 使用者體驗。
+- **v3.9.0 TUI 現代化改編**: 提供響應式 3 分割視埠版面配置、Inspector 聚焦狀態下以 `Tab`/`Shift+Tab` 切換分頁、500ms 游標閃爍動畫，以及在極小終端解析度下也絕不崩潰的數學式視窗自動置中公式，打造極致的 TUI 使用者體驗。
 
 ### 快速開始
 1. 複製專案:
@@ -171,6 +174,7 @@
 
 ### 疑難排解
 - **虛擬/無外接螢幕環境下的終端機尺寸識別問題**: 在 CI 或無外接螢幕的 Headless 環境下，終端機寬高被誤判導致滑鼠滑動與面板點擊對焦失效的異常，已於 `[v3.7.2]` 版本中完全修復。測試架構已預設為會自動劫持並模擬標準解析度 `(100, 30)`，您無需進行額外調整。
+- **Slash Command 子指令輸入**: `/` 開啟自動完成選單時，輸入文字仍會保留在 Composer。輸入 `/workspace ` 後可選擇或直接輸入 `show`, `trust`, `deny`, `clear`，再按 Enter 執行完整指令。
 
 ---
 
@@ -193,7 +197,7 @@
 - **代理自主性 (Agentic Autonomy)**: 通过破坏性操作前后的自动 Git 检查点与自我修复循环，确保 AI 代码生成的安全性。内置 `ListDir`, `GrepSearch`, `FetchURL` 等高级探索工具。
 - **离线手动 Fallback**: 在本地/离线环境或 API Ping 失败时，配置向导中仍提供“✏ 直接输入...”模式，支持手动指定任意模型名称，确保在无网络连接状态下也能顺利完成 Onboarding。
 - **Tree-sitter Repo Map**: 将基于 AST 解析的仓库摘要地图注入 AI 上下文中，实现精确的代码修改。
-- **v3.9.0 TUI 现代化改编**: 配备响应式 3 分割视口布局、基于 `Alt+1` 至 `Alt+6` 键的即时标签页切换、500ms 光标闪烁动画，以及在极小终端分辨率下也绝不崩溃的数学化窗口自动居中公式，提供极致的 TUI 用户体验。
+- **v3.9.0 TUI 现代化改编**: 配备响应式 3 分割视口布局、Inspector 聚焦状态下通过 `Tab`/`Shift+Tab` 切换标签页、500ms 光标闪烁动画，以及在极小终端分辨率下也绝不崩溃的数学化窗口自动居中公式，提供极致的 TUI 用户体验。
 
 ### 快速开始
 1. 克隆项目
@@ -210,3 +214,4 @@
 
 ### 疑难解答
 - **虚拟/无头环境下的终端尺寸识别异常**: 在 CI 或无头（Headless）环境下，由于无法正确识别终端行列数导致鼠标滚动与面板聚焦失效的异常，已于 `[v3.7.2]` 版本中得到彻底修复。测试套件现已支持在测试上下文中自动劫持并模拟标准尺寸 `(100, 30)`，无需额外手动配置。
+- **Slash Command 子命令输入**: `/` 打开自动补全菜单时，输入文字仍会保留在 Composer 中。输入 `/workspace ` 后可选择或直接输入 `show`, `trust`, `deny`, `clear`，再按 Enter 执行完整命令。

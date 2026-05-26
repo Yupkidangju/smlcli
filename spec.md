@@ -637,6 +637,7 @@ pub struct RuntimeWorkspaceState {
    - `/workspace remove <path>`: 추가 workspace dir 해제 **(미구현 — v3.0 계획)**
    - `/workspace deny add <path>` / `/workspace deny remove <path>` / `/workspace deny list` **(미구현 — v3.0 계획)**
    - `/config`와 `/setting`에서도 동일 정보를 읽고 수정할 수 있게 연결
+   - Slash Command 자동완성은 `/workspace ` 뒤에서 `show/trust/deny/clear` 하위 후보를 표시하고, 선택 후보를 Composer에 완성한 뒤 Enter로 실행
 
 7. **Task 7: 상태바/툴바/Doctor 반영**
    - Host shell, exec shell, trust state를 상태바와 `/status` 또는 doctor 출력에 노출
@@ -655,6 +656,7 @@ pub struct RuntimeWorkspaceState {
   - trust record 저장/복원 테스트
   - denied roots 저장/복원 테스트
   - `/workspace show/trust/deny/clear` 명령 테스트 (v3.7.1 구현분)
+  - `/workspace ` 하위 명령 자동완성 및 Composer 입력 보존 테스트
   - `/workspace add/remove` 명령 테스트 → **v3.0 구현 후 추가 예정**
   - Restricted 상태 permission deny 테스트
   - denied root permission deny 테스트
@@ -1488,9 +1490,10 @@ Linux QA / Windows QA / release gate
 
 **구현 사양**:
 - `Ctrl+I` 바인딩 제거. 인스펙터 토글: `F2`. PLAN/RUN 전환: `Tab`/`Shift+Tab` 유지.
+- 인스펙터가 열려 있고 포커스된 상태에서는 `Tab`/`Shift+Tab`을 PLAN/RUN 전환이 아니라 Preview/Diff/Search/Logs/Recent/Git 탭 순환으로 라우팅한다.
 - 상태 바 안내 문구 동기화.
 
-**완료 기준**: `Ctrl+I` 입력 시 모드 불변. `F2`로만 인스펙터 토글. 안내 문구 일치.
+**완료 기준**: `Ctrl+I` 입력 시 모드 불변. `F2`로만 인스펙터 토글. 인스펙터 포커스 상태의 `Tab`/`Shift+Tab` 탭 순환과 `/help` 및 `?` 안내 문구 일치.
 
 #### 14-D: 반응형 레이아웃
 
@@ -2902,4 +2905,3 @@ LM Studio 프로바이더 연동 및 모델 설정 완료 시 `smlcli` 설정 �
   - `assert_eq!(settings.active_provider, ProviderKind::LmStudio)`로 영속 저장 정합성 통과.
   - `assert_eq!(credentials.needs_key, false)` 단언문 통과를 통한 크레덴셜 해소 예외 우회 보증.
   - `assert_eq!(wizard_state.selected_index(), 5)`를 통한 TUI 팝업 인덱스 매칭 성공 검증.
-
