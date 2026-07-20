@@ -80,6 +80,18 @@
 ## 최근 구현 요약
 _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니다.)_
 
+- [2026-05-26] : **[Implemented - Phase 54 Workspace Harness Enforcement & Model Grounding]**
+  - ✅ **Prompt Grounding 구현**: `WorkspaceHarnessSnapshot`을 system prompt에 12줄 이하 harness block으로 주입하여 모델이 OS/root/sandbox/trust 전제를 매 턴 확인하도록 연결.
+  - ✅ **Tool Preflight 구현**: `ExecShell` 및 쓰기 도구 실행 직전에 canonical root, trust/deny, sandbox 상태, requested cwd/path 이탈 여부를 검사하는 `HarnessPreflightDecision` 추가.
+  - ✅ **Session Audit 구현**: 세션 시작 시 snapshot을 JSONL 하네스 레코드로 기록하고, 메시지 복원 시 해당 메타 레코드를 오류 없이 건너뛰도록 처리.
+  - ✅ **OS Mismatch 구현**: Linux/Windows shell 전용 명령 혼동을 v1 명시 패턴으로 감지해 Notice/Ask 경로로 승격.
+
+- [2026-05-26] : **[Implemented - Workspace Harness 정합화 로드맵 및 1차 구현]**
+  - ✅ **WorkspaceHarnessSnapshot 계약 추가**: OS, 아키텍처, Host Shell, Exec Shell, canonical workspace root, trust/deny 상태, extra workspace dirs, sandbox backend/mount/network 정책을 하나의 런타임 snapshot으로 통합.
+  - ✅ **Linux bwrap guest root 표준화**: 실제 `ExecShell` sandbox 내부 작업 경로를 `/workspace`로 고정하여 문서, `/workspace` 명령, doctor 출력의 mental model을 일치시킴.
+  - ✅ **진단 surface 확장**: `smlcli doctor`, `/workspace show`, `/status`가 동일 snapshot을 사용하여 현재 작업 운영체제와 하네싱 상태를 보고하도록 로드맵을 확정.
+  - ✅ **검증 기준 확장**: `/workspace show` 출력, sandbox 내부 `pwd == /workspace`, canonical root 기반 trust snapshot을 회귀 테스트 기준으로 추가.
+
 - [2026-05-23] : **[Implemented - Phase 52 TUI Modernization & Responsive Multi-viewport Redesign (v3.9.0)]**
   - ✅ **반응형 3분할 뷰포트 레이아웃 개편**: 터미널 너비/높이에 맞춰 타임라인, Composer, Inspector 영역을 정밀 배치하며 극소 터미널 화면(100x30 이하)에서도 UI 깨짐을 방지하는 정밀 그리드 렌더링 시스템 탑재.
   - ✅ **단축키 기반 고속 탭 전환**: Linux 터미널 기본 기능과 충돌하지 않도록 Inspector 포커스 상태의 `Tab`/`Shift+Tab`으로 6대 탭(Preview, Diff, Search, Logs, Recent, Git)을 순환 전환하는 고속 탐색 흐름 구현.

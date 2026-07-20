@@ -3,6 +3,15 @@
 모든 중요한 변경 사항은 이 문서에 기록됩니다.
 이 프로젝트는 [Semantic Versioning](https://semver.org/) 기준을 따릅니다.
 
+## [Unreleased]
+
+### Added
+- **Workspace Harness 표준화 로드맵 및 구현 착수**: `AI_IMPLEMENTATION_DOC_STANDARD.md` 기준으로 OS/셸/workspace trust/sandbox mount 상태를 하나의 `WorkspaceHarnessSnapshot` 계약으로 동결하고, `doctor`와 `/workspace show`에서 동일 하네싱 정보를 노출하도록 확장.
+- **Workspace Harness Enforcement 구현**: Phase 54로 system prompt 주입, tool preflight, session snapshot 기록, OS mismatch 감지, sandbox 비활성 문구 구분을 구현하고 `AI_IMPLEMENTATION_DOC_STANDARD.md` 기준 문서를 동기화.
+
+### Changed
+- **Linux ExecShell sandbox mount 정합화**: 문서상 `/workspace` 모델과 실제 `bwrap` 실행 경로가 어긋나던 문제를 해소하기 위해 sandbox 내부 작업 경로를 `/workspace`로 표준화.
+
 ## [3.9.0] - 2026-05-23 (TUI Modernization & Responsive Multi-viewport Redesign)
 
 ### Added

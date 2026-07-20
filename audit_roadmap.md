@@ -630,3 +630,94 @@ cargo test
 * **100 cols 미만의 반응형 탭 전환 오인 리스크**:
   - **내용**: 화면 폭이 좁은 가상 터미널 환경에서 인스펙터 서브 드로어가 닫혔을 때, 탭 단축키(`Alt+1`~`Alt+6`) 입력 시 탭 상태 전이가 제대로 동작하지 않는 것처럼 오해할 수 있습니다.
   - **대응책**: 탭 상태는 내부적으로 항상 동기화되어 인스펙터 활성화 시 즉각 반영되도록 설계되었으며, Composer 하단 도움말에 탭 상태 인디케이터가 명확히 명시되도록 보강 조치했습니다.
+
+---
+
+## Phase 53: v3.9.1 Workspace Harness Snapshot & OS/Sandbox 정합화 감사 기준
+
+### 53.1 감사 항목 및 합격 검증 기준표
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| Snapshot 단일 계약 | `src/infra/workspace_harness.rs` 확인 | OS, arch, host_shell, exec_shell, canonical_root, trust_state, denied, extra_workspace_dirs, sandbox 필드가 하나의 구조체로 닫힘 |
+| canonical trust key | `src/domain/permissions.rs`, `/workspace` 라우터 확인 | raw `current_dir()` 대신 canonical workspace root 문자열로 trust/deny를 조회 |
+| Linux guest root | `src/infra/sandbox.rs` 및 테스트 확인 | `bwrap`가 host cwd를 `/workspace`에 bind하고 `--chdir /workspace`로 실행 |
+| doctor 하네싱 진단 | `cargo run --quiet -- doctor` | `Workspace Harness 상태` 섹션에 OS, shell, root, trust, sandbox backend, guest root, network 정책 출력 |
+| `/workspace show` 진단 | TUI 명령 테스트 또는 슬래시 명령 실행 | 출력에 `Workspace Harness`와 `Sandbox Guest Root: /workspace` 포함 |
+
+### 53.2 감사 검증 명령어 및 출력 결과 샘플 (Execution Path)
+```bash
+cargo test workspace --all-targets --no-fail-fast
+cargo test sandbox --all-targets --no-fail-fast
+cargo run --quiet -- doctor
+cargo fmt --check
+cargo check --all-targets
+cargo test --all-targets --no-fail-fast
+cargo clippy --all-targets --all-features -- -D warnings
+git diff --check
+```
+
+#### 정상 출력 샘플
+```text
+--- Workspace Harness 상태 ---
+OS: linux (x86_64)
+Host Shell: /bin/bash
+Exec Shell: sh (bwrap:/workspace)
+Workspace Root: /mnt/Projects_SSD/rust/smlcli
+Trust Level: Trusted
+Denied: false
+Sandbox Enabled: true
+Sandbox Backend: bubblewrap
+Sandbox Guest Root: /workspace
+Sandbox Network: isolated
+```
+
+### 53.3 잔여 리스크 (Residual Risks)
+* **비-Linux 파일시스템 격리 parity 리스크**:
+  - **내용**: Windows/macOS에서는 Linux `bwrap`와 같은 mount namespace 기반 격리가 아직 없다.
+  - **대응책**: 이번 Phase에서는 doctor가 backend `none`을 명시적으로 표시하고, Windows AppContainer/Job Object 파일시스템 격리는 별도 Phase로 분리한다.
+
+---
+
+## Phase 54: v3.9.2 Workspace Harness Enforcement & Model Grounding 감사 기준 (완료)
+
+### 54.1 감사 항목 및 합격 검증 기준표
+| 항목 | 검증 방법 | 합격 기준 |
+|------|-----------|-----------|
+| Prompt harness 주입 | chat request system prompt 확인 | OS, arch, host shell, exec shell, canonical root, trust, sandbox 정보가 12줄 이하 block으로 중복 없이 1회 포함 |
+| Tool preflight | `ExecShell`/쓰기 도구 실행 전 decision 테스트 | workspace 밖 `cwd`/path, denied root, Unknown/Restricted trust가 `Deny` 또는 `Ask`로 승격 |
+| Session snapshot 기록 | 새 세션 JSONL 또는 metadata 확인 | session id와 함께 OS/root/trust/sandbox snapshot이 첫 메타 블록에 저장 |
+| Sandbox 비활성 문구 구분 | `smlcli doctor`, `/workspace show` 출력 확인 | `Sandbox Enabled=false`일 때 `/workspace`가 현재 mount가 아니라 정책상 guest root임을 명시 |
+| OS mismatch 감지 | Linux/Windows 명령 패턴 테스트 | Linux에서 PowerShell 전용 명령, Windows에서 POSIX-only 명령이 즉시 자동 실행되지 않고 Notice/Ask로 승격 |
+
+### 54.2 감사 검증 명령어 및 출력 결과 샘플 (Execution Path)
+```bash
+cargo test harness_prompt --all-targets --no-fail-fast
+cargo test harness_preflight --all-targets --no-fail-fast
+cargo test session_harness --all-targets --no-fail-fast
+cargo test workspace --all-targets --no-fail-fast
+cargo run --quiet -- doctor
+cargo fmt --check
+cargo check --all-targets
+cargo test --all-targets --no-fail-fast
+cargo clippy --all-targets --all-features -- -D warnings
+git diff --check
+```
+
+#### 정상 출력 샘플
+```text
+[Workspace Harness]
+OS=linux arch=x86_64
+HostShell=/bin/bash ExecShell=sh
+WorkspaceRoot=/mnt/Projects_SSD/rust/smlcli
+Trust=Trusted Denied=false
+SandboxEnabled=false Backend=bubblewrap GuestRoot=/workspace Network=allowed
+Rule: host paths are for local file APIs; sandbox shell cwd is /workspace only when sandbox is enabled.
+```
+
+### 54.3 잔여 리스크 (Residual Risks)
+* **명령 패턴 오탐 리스크**:
+  - **내용**: OS mismatch validator가 일부 합법적인 cross-shell 명령을 Ask로 승격할 수 있다.
+  - **대응책**: v1에서는 자동 Deny 대신 Ask를 기본으로 사용하고, 명시적으로 위험한 cwd/path 이탈만 Deny한다.
+* **Prompt 중복 리스크**:
+  - **내용**: system prompt dedupe 실패 시 harness block이 누적되어 context budget을 낭비할 수 있다.
+  - **대응책**: block header `[Workspace Harness]` 기준으로 기존 block을 교체하는 dedupe 테스트를 필수로 둔다.

@@ -48,7 +48,7 @@ pub fn wrap_command_bwrap(
         .arg("/tmp")
         .arg("--bind")
         .arg(cwd)
-        .arg(cwd) // 워크스페이스 디렉터리 바인드
+        .arg(crate::infra::workspace_harness::WORKSPACE_GUEST_ROOT)
         .arg("--dir")
         .arg("/run/user");
 
@@ -70,7 +70,9 @@ pub fn wrap_command_bwrap(
     // [v3.3.2] 감사 HIGH-1 수정: bash -c 로 셸 명령 실행.
     // 이전: `bash <raw_cmd_string>` → 파일 경로로 해석되어 실패.
     // 수정: `bash -c <raw_cmd_string>` → 셸 명령으로 정상 해석.
-    bwrap_cmd.arg("--chdir").arg(cwd);
+    bwrap_cmd
+        .arg("--chdir")
+        .arg(crate::infra::workspace_harness::WORKSPACE_GUEST_ROOT);
     bwrap_cmd.arg("bash").arg("-c").arg(cmd);
 
     bwrap_cmd

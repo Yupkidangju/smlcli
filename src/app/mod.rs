@@ -304,10 +304,7 @@ impl App {
         if self.state.ui.is_wizard_open {
             return;
         }
-        let Ok(cwd) = std::env::current_dir() else {
-            return;
-        };
-        let root = cwd.to_string_lossy().to_string();
+        let root = crate::infra::workspace_harness::canonical_workspace_root();
 
         if let Some(settings) = &self.state.domain.settings {
             if settings.denied_roots.contains(&root) {
@@ -2684,6 +2681,7 @@ impl App {
                 // Trust & Remember
                 if let Some(settings) = &mut self.state.domain.settings {
                     settings.set_workspace_trust(&root, trust_state.clone(), true);
+                    self.state.runtime.workspace.refresh(Some(settings));
                     let settings_clone = settings.clone();
                     let tx = self.action_tx.clone();
                     tokio::spawn(async move {
@@ -2701,7 +2699,10 @@ impl App {
                 // Restricted
                 if let Some(settings) = &mut self.state.domain.settings {
                     settings.set_workspace_trust(&root, trust_state.clone(), true);
-                    settings.denied_roots.push(root.clone());
+                    if !settings.denied_roots.contains(&root) {
+                        settings.denied_roots.push(root.clone());
+                    }
+                    self.state.runtime.workspace.refresh(Some(settings));
                     let settings_clone = settings.clone();
                     let tx = self.action_tx.clone();
                     tokio::spawn(async move {
@@ -2719,6 +2720,7 @@ impl App {
                 // Trust Once
                 if let Some(settings) = &mut self.state.domain.settings {
                     settings.set_workspace_trust(&root, trust_state.clone(), false);
+                    self.state.runtime.workspace.refresh(Some(settings));
                 }
             }
 

@@ -164,6 +164,25 @@ impl SessionLogger {
         Ok(())
     }
 
+    pub fn append_harness_record(
+        &self,
+        record: &crate::infra::workspace_harness::SessionHarnessRecord,
+    ) -> Result<(), SmlError> {
+        let json_line = serde_json::to_string(record)
+            .map_err(|e| SmlError::InfraError(format!("하네스 레코드 직렬화 실패: {}", e)))?;
+
+        let mut w = self
+            .writer
+            .lock()
+            .map_err(|_| SmlError::InfraError("로거 락 획득 실패".into()))?;
+        self.rotate_if_needed(&mut w)?;
+        writeln!(w, "{}", json_line)
+            .map_err(|e| SmlError::InfraError(format!("세션 하네스 로그 쓰기 실패: {}", e)))?;
+        w.flush()
+            .map_err(|e| SmlError::InfraError(format!("세션 하네스 로그 flush 실패: {}", e)))?;
+        Ok(())
+    }
+
     /// 메시지를 JSONL 한 줄로 추가 저장. (비동기 — 런타임 호출 경로용)
     #[allow(dead_code)] // [v3.7.0] 대용량 로그 시나리오 대비 비동기 API 예비
     pub async fn append_message_async(&self, message: &ChatMessage) -> Result<(), SmlError> {
@@ -220,6 +239,18 @@ impl SessionLogger {
             };
             let trimmed = line.trim();
             if trimmed.is_empty() {
+                continue;
+            }
+            if serde_json::from_str::<serde_json::Value>(trimmed)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("kind")
+                        .and_then(|kind| kind.as_str())
+                        .map(|kind| kind == "session_harness")
+                })
+                .unwrap_or(false)
+            {
                 continue;
             }
             match serde_json::from_str::<ChatMessage>(trimmed) {

@@ -1699,6 +1699,186 @@ fn test_approval_timeout_promotes_queue() {
 
 #[cfg(target_os = "linux")]
 #[tokio::test]
+async fn test_bwrap_mounts_workspace_as_canonical_guest_root() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let output = crate::infra::sandbox::wrap_command_bwrap(
+        dir.path().to_string_lossy().as_ref(),
+        "pwd",
+        true,
+        &[],
+    )
+    .output()
+    .await
+    .expect("bwrap 명령은 실행 가능해야 함");
+
+    assert!(
+        output.status.success(),
+        "bwrap pwd 실행은 성공해야 함: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        crate::infra::workspace_harness::WORKSPACE_GUEST_ROOT,
+        "sandbox 내부 작업 경로는 /workspace로 표준화되어야 함"
+    );
+}
+
+#[test]
+fn test_workspace_harness_snapshot_uses_canonical_root_and_settings() {
+    let root = crate::infra::workspace_harness::canonical_workspace_root();
+    let mut settings = PersistedSettings::default();
+    settings.set_workspace_trust(
+        &root,
+        crate::domain::settings::WorkspaceTrustState::Trusted,
+        true,
+    );
+    settings.sandbox.enabled = true;
+    settings.sandbox.allow_network = false;
+    settings.extra_workspace_dirs.push("/tmp/extra".to_string());
+
+    let snapshot =
+        crate::infra::workspace_harness::WorkspaceHarnessSnapshot::collect(Some(&settings));
+
+    assert_eq!(snapshot.canonical_root, root);
+    assert_eq!(
+        snapshot.trust_state,
+        crate::domain::settings::WorkspaceTrustState::Trusted
+    );
+    assert!(snapshot.sandbox_enabled);
+    assert!(!snapshot.sandbox_allow_network);
+    assert_eq!(snapshot.sandbox_guest_root, "/workspace");
+    assert_eq!(snapshot.extra_workspace_dirs, vec!["/tmp/extra"]);
+}
+
+#[test]
+fn test_harness_prompt_is_injected_once() {
+    use crate::app::App;
+    use crate::app::state::AppState;
+    use crate::providers::types::{ChatMessage, Role};
+
+    let (tx, _rx) = tokio::sync::mpsc::channel(8);
+    let app = App {
+        state: AppState::new_for_test(),
+        action_tx: tx,
+    };
+
+    let req = app.build_streaming_chat_request(
+        &crate::domain::provider::ProviderKind::OpenRouter,
+        "gpt-5".to_string(),
+        vec![
+            ChatMessage {
+                role: Role::System,
+                content: Some("base system".to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+                pinned: true,
+            },
+            ChatMessage {
+                role: Role::System,
+                content: Some("[Workspace Harness]\nstale".to_string()),
+                tool_calls: None,
+                tool_call_id: None,
+                pinned: true,
+            },
+        ],
+    );
+
+    let harness_count = req
+        .messages
+        .iter()
+        .filter(|msg| {
+            msg.content
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("[Workspace Harness]")
+        })
+        .count();
+    assert_eq!(harness_count, 1, "harness prompt는 중복 없이 1회만 주입");
+    assert!(
+        req.messages.iter().any(|msg| {
+            msg.content
+                .as_deref()
+                .unwrap_or_default()
+                .contains("WorkspaceRoot=")
+        }),
+        "harness prompt에는 현재 workspace root가 포함되어야 함"
+    );
+}
+
+#[test]
+fn test_harness_preflight_denies_cwd_outside_workspace() {
+    let root = crate::infra::workspace_harness::canonical_workspace_root();
+    let mut settings = PersistedSettings::default();
+    settings.set_workspace_trust(
+        &root,
+        crate::domain::settings::WorkspaceTrustState::Trusted,
+        true,
+    );
+    let call = ToolCall {
+        name: "ExecShell".to_string(),
+        args: serde_json::json!({
+            "command": "pwd",
+            "cwd": "/tmp"
+        }),
+    };
+    let input = crate::infra::workspace_harness::HarnessPreflightInput::from_tool_call(
+        &call,
+        Some(&settings),
+    );
+    let decision = crate::infra::workspace_harness::evaluate_preflight(&input);
+    assert!(
+        matches!(
+            decision,
+            crate::infra::workspace_harness::HarnessPreflightDecision::Deny { .. }
+        ),
+        "workspace 밖 cwd는 preflight에서 Deny되어야 함"
+    );
+}
+
+#[test]
+fn test_harness_os_mismatch_promotes_to_ask() {
+    assert!(
+        crate::infra::workspace_harness::detect_command_os_mismatch("linux", "Get-ChildItem")
+            .is_some(),
+        "Linux 환경에서 PowerShell 전용 명령은 mismatch로 감지되어야 함"
+    );
+    assert!(
+        crate::infra::workspace_harness::detect_command_os_mismatch("windows", "sudo apt update")
+            .is_some(),
+        "Windows 환경에서 POSIX 전용 명령은 mismatch로 감지되어야 함"
+    );
+}
+
+#[test]
+fn test_session_harness_record_is_skipped_on_restore() {
+    let (logger, metadata) =
+        crate::infra::session_log::SessionLogger::new_workspace_session("harness-test").unwrap();
+    let snapshot = crate::infra::workspace_harness::WorkspaceHarnessSnapshot::collect(None);
+    let record =
+        crate::infra::workspace_harness::SessionHarnessRecord::new(metadata.session_id, snapshot);
+    logger.append_harness_record(&record).unwrap();
+    logger
+        .append_message(&crate::providers::types::ChatMessage {
+            role: crate::providers::types::Role::User,
+            content: Some("hello".to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            pinned: false,
+        })
+        .unwrap();
+
+    let (messages, errors) = logger.restore_messages().unwrap();
+    assert_eq!(errors, 0, "harness record는 복원 오류로 집계되면 안 됨");
+    assert_eq!(
+        messages.len(),
+        1,
+        "harness record는 ChatMessage 복원에서 제외"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
 async fn test_execute_shell_sandbox_blocks_etc_writes() {
     let res = crate::tools::shell::execute_shell(
         "touch /etc/smlcli_should_fail",
@@ -2054,11 +2234,12 @@ fn test_workspace_subcommand_can_be_typed_and_executed_from_slash_menu() {
     );
     assert!(
         app.state.domain.session.messages.iter().any(|msg| {
-            msg.content
-                .as_deref()
-                .is_some_and(|content| content.contains("Workspace:"))
+            msg.content.as_deref().is_some_and(|content| {
+                content.contains("Workspace Harness")
+                    && content.contains("Sandbox Guest Root: /workspace")
+            })
         }),
-        "/workspace show는 실제 workspace 상태 메시지를 생성해야 함"
+        "/workspace show는 실제 workspace 하네싱 상태를 생성해야 함"
     );
 }
 

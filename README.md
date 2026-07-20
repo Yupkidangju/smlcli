@@ -30,6 +30,8 @@
 - **Tree-sitter Repo Map**: AST 파싱 기반 저장소 요약 맵을 통해 AI가 전체 프로젝트 구조를 맥락으로 주입받아 정확한 코드를 수정.
 - **플랫폼 지원**: Linux (bash/zsh) 및 Windows (PowerShell/WSL) 동시 지원.
 - **v3.9.0 TUI 현대화 개편**: 반응형 3분할 뷰포트 레이아웃, 인스펙터 포커스 상태의 `Tab`/`Shift+Tab` 탭 전환, 500ms 점멸 커서 애니메이션, 극소 화면에서도 깨지지 않는 수학적 모달 중앙 정렬 공식을 탑재하여 극상의 TUI 사용자 경험 제공.
+- **Workspace Harness 진단**: `smlcli doctor`, `/workspace show`, `/status`가 동일한 snapshot 기준으로 OS, Host Shell, Exec Shell, canonical workspace root, trust/deny 상태, Linux `/workspace` sandbox mount 정책을 표시합니다.
+- **Workspace Harness 강제 적용**: 현재 OS/root/shell/sandbox/trust snapshot을 system prompt, 도구 실행 전 preflight, 세션 로그에 연결하여 환경 오해로 인한 잘못된 명령 실행을 줄입니다.
 
 ### 빠른 시작
 1. 저장소를 클론합니다.
@@ -51,6 +53,8 @@
 ### 트러블슈팅 (Troubleshooting)
 - **가상/헤드리스 터미널 크기 인지 지연**: CI 환경이나 무인 헤드리스 환경에서 가상 터미널 크기가 오인식되어 마우스 스크롤이나 타겟 인식이 어긋나던 버그는 `[v3.7.2]` 이후 완전 조치되었습니다. 테스트 빌드 및 자동 CI 검증 과정에서 규격 크기 `(100, 30)`이 무결하게 자동 격리 모킹되므로 별도의 추가 조치가 필요치 않습니다.
 - **Slash Command 하위 명령 입력**: `/` 입력 후 자동완성 메뉴가 떠도 입력 문자는 Composer에 그대로 남습니다. `/workspace ` 뒤에서는 `show`, `trust`, `deny`, `clear` 후보를 이어서 선택하거나 직접 타이핑한 뒤 Enter로 실행합니다.
+- **Workspace Harness 확인**: Linux에서 sandbox가 활성화된 경우 `ExecShell` 내부 작업 경로는 `/workspace`로 표준화됩니다. `smlcli doctor`의 `Workspace Harness 상태` 섹션에서 실제 OS/셸/root/trust/sandbox 값을 확인하세요.
+- **환경 mismatch 방지**: Linux/Windows 전용 셸 명령 혼동은 즉시 자동 실행하지 않고 Notice/Ask 경로로 승격됩니다.
 
 ---
 
@@ -78,6 +82,8 @@
 - **Tree-sitter Repo Map**: Injects AST-parsed repository summary maps into the AI context for accurate code modifications.
 - **Cross-platform**: Full support for Linux and Windows.
 - **v3.9.0 TUI Modernization**: Provides a premium terminal experience featuring a responsive 3-viewport layout, inspector tab switching via focused `Tab`/`Shift+Tab`, a smooth 500ms blinking cursor animation, and a robust mathematical modal auto-centering formula that never breaks even on extremely small terminal dimensions.
+- **Workspace Harness Diagnostics**: `smlcli doctor`, `/workspace show`, and `/status` share one snapshot for OS, host shell, exec shell, canonical workspace root, trust/deny state, and Linux `/workspace` sandbox mount policy.
+- **Workspace Harness Enforcement**: The live OS/root/shell/sandbox/trust snapshot is connected to the system prompt, tool preflight, and session logs to reduce wrong-environment command execution.
 
 ### Quick Start
 1. Clone the repository.
@@ -95,6 +101,8 @@
 ### Troubleshooting
 - **Virtual/Headless Terminal Dimension Misrecognition**: A bug where mouse routing was broken in headless or CI environments due to misrecognized terminal window dimensions has been fully resolved as of `[v3.7.2]`. The test suite automatically mocks standard dimensions `(100, 30)` in testing contexts, requiring no manual override.
 - **Slash Command subcommands**: When `/` opens autocomplete, typed text stays in the Composer. After `/workspace `, choose or type `show`, `trust`, `deny`, or `clear`, then press Enter to run the completed command.
+- **Workspace Harness checks**: When Linux sandboxing is enabled, the `ExecShell` guest working directory is standardized as `/workspace`. Check the `Workspace Harness` section in `smlcli doctor` for the live OS/shell/root/trust/sandbox values.
+- **Environment mismatch guard**: Linux/Windows-specific shell command confusion is promoted to Notice/Ask instead of immediate automatic execution.
 
 ---
 
@@ -118,6 +126,8 @@
 - **オフラインでの手動フォールバック**: ローカル/オフライン環境やAPIの疎通確認（PING）が失敗した場合でも、設定ウィザードで「✏ 直接入力...」モードを提供し、モデル名を手動で任意に入力して接続を中断することなくオンボーディングを完了できます。
 - **Tree-sitter Repo Map**: AST解析ベースのリポジトリ概要マップをAIコンテキストに注入し、正確なコード修正を実現します。
 - **v3.9.0 TUI近代化改修**: レスポンシブな3分割ビューポートレイアウト、インスペクターフォーカス時の`Tab`/`Shift+Tab`によるタブ切り替え、500ms周期の点滅カーソルアニメーション、極小画面でも崩れない数学的なモーダル中央配置公式を搭載し、極上のTUIユーザー体験を提供。
+- **Workspace Harness 診断**: `smlcli doctor`, `/workspace show`, `/status` は同じ snapshot を使い、OS、Host Shell、Exec Shell、canonical workspace root、trust/deny 状態、Linux `/workspace` sandbox mount 方針を表示します。
+- **Workspace Harness 強制適用**: 現在の OS/root/shell/sandbox/trust snapshot を system prompt、tool preflight、session log に接続し、環境誤認による誤実行を減らします。
 
 ### クイックスタート
 1. リポジトリをクローンします。
@@ -135,6 +145,8 @@
 ### トラブルシューティング
 - **仮想/ヘッドレス環境でのターミナルサイズ誤認**: CIなどのヘッドレス環境でターミナルサイズが誤認識され、マウス入力のルーティングが失敗する問題は `[v3.7.2]` 以降で完全に解決されました。テスト環境下では標準の仮想サイズ `(100, 30)` が自動でモッキングされるため、追加の設定は不要です。
 - **Slash Command のサブコマンド入力**: `/` で自動補完メニューが開いても、入力した文字は Composer に残ります。`/workspace ` の後は `show`, `trust`, `deny`, `clear` を選択または直接入力し、Enter で実行できます。
+- **Workspace Harness 確認**: Linux sandbox が有効な場合、`ExecShell` 内部の作業パスは `/workspace` に標準化されます。`smlcli doctor` の `Workspace Harness` セクションで実際の OS/shell/root/trust/sandbox 値を確認してください。
+- **環境 mismatch 防止**: Linux/Windows 専用 shell command の混同は即時自動実行せず、Notice/Ask 経路へ昇格します。
 
 ---
 
@@ -158,6 +170,8 @@
 - **離線手動 Fallback**: 在本地/離線環境或 API Ping 失敗時，設定精靈仍提供「✏ 離線手動輸入...」模式，允許手動指定模型名稱，確保在無連線狀態下也能順利完成 Onboarding。
 - **Tree-sitter Repo Map**: 將基於 AST 解析的儲存庫摘要地圖注入 AI 上下文中，實現精確的程式碼修改。
 - **v3.9.0 TUI 現代化改編**: 提供響應式 3 分割視埠版面配置、Inspector 聚焦狀態下以 `Tab`/`Shift+Tab` 切換分頁、500ms 游標閃爍動畫，以及在極小終端解析度下也絕不崩潰的數學式視窗自動置中公式，打造極致的 TUI 使用者體驗。
+- **Workspace Harness 診斷**: `smlcli doctor`、`/workspace show`、`/status` 使用同一份 snapshot 顯示 OS、Host Shell、Exec Shell、canonical workspace root、trust/deny 狀態與 Linux `/workspace` sandbox mount 政策。
+- **Workspace Harness 強制套用**: 將目前 OS/root/shell/sandbox/trust snapshot 串接到 system prompt、tool preflight 與 session log，降低環境誤判造成的錯誤執行。
 
 ### 快速開始
 1. 複製專案:
@@ -175,6 +189,8 @@
 ### 疑難排解
 - **虛擬/無外接螢幕環境下的終端機尺寸識別問題**: 在 CI 或無外接螢幕的 Headless 環境下，終端機寬高被誤判導致滑鼠滑動與面板點擊對焦失效的異常，已於 `[v3.7.2]` 版本中完全修復。測試架構已預設為會自動劫持並模擬標準解析度 `(100, 30)`，您無需進行額外調整。
 - **Slash Command 子指令輸入**: `/` 開啟自動完成選單時，輸入文字仍會保留在 Composer。輸入 `/workspace ` 後可選擇或直接輸入 `show`, `trust`, `deny`, `clear`，再按 Enter 執行完整指令。
+- **Workspace Harness 檢查**: Linux sandbox 啟用時，`ExecShell` 內部工作路徑會標準化為 `/workspace`。請在 `smlcli doctor` 的 `Workspace Harness` 區段確認實際 OS/shell/root/trust/sandbox 值。
+- **環境 mismatch 防護**: Linux/Windows 專用 shell command 混用時不會立即自動執行，而會升級到 Notice/Ask 流程。
 
 ---
 
@@ -198,6 +214,8 @@
 - **离线手动 Fallback**: 在本地/离线环境或 API Ping 失败时，配置向导中仍提供“✏ 直接输入...”模式，支持手动指定任意模型名称，确保在无网络连接状态下也能顺利完成 Onboarding。
 - **Tree-sitter Repo Map**: 将基于 AST 解析的仓库摘要地图注入 AI 上下文中，实现精确的代码修改。
 - **v3.9.0 TUI 现代化改编**: 配备响应式 3 分割视口布局、Inspector 聚焦状态下通过 `Tab`/`Shift+Tab` 切换标签页、500ms 光标闪烁动画，以及在极小终端分辨率下也绝不崩溃的数学化窗口自动居中公式，提供极致的 TUI 用户体验。
+- **Workspace Harness 诊断**: `smlcli doctor`、`/workspace show`、`/status` 使用同一份 snapshot 显示 OS、Host Shell、Exec Shell、canonical workspace root、trust/deny 状态以及 Linux `/workspace` sandbox mount 策略。
+- **Workspace Harness 强制应用**: 将当前 OS/root/shell/sandbox/trust snapshot 连接到 system prompt、tool preflight 与 session log，降低环境误判导致的错误执行。
 
 ### 快速开始
 1. 克隆项目
@@ -215,3 +233,5 @@
 ### 疑难解答
 - **虚拟/无头环境下的终端尺寸识别异常**: 在 CI 或无头（Headless）环境下，由于无法正确识别终端行列数导致鼠标滚动与面板聚焦失效的异常，已于 `[v3.7.2]` 版本中得到彻底修复。测试套件现已支持在测试上下文中自动劫持并模拟标准尺寸 `(100, 30)`，无需额外手动配置。
 - **Slash Command 子命令输入**: `/` 打开自动补全菜单时，输入文字仍会保留在 Composer 中。输入 `/workspace ` 后可选择或直接输入 `show`, `trust`, `deny`, `clear`，再按 Enter 执行完整命令。
+- **Workspace Harness 检查**: Linux sandbox 启用时，`ExecShell` 内部工作路径会标准化为 `/workspace`。请在 `smlcli doctor` 的 `Workspace Harness` 区段确认实际 OS/shell/root/trust/sandbox 值。
+- **环境 mismatch 防护**: Linux/Windows 专用 shell command 混用时不会立即自动执行，而会升级到 Notice/Ask 流程。

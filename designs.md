@@ -651,7 +651,7 @@ PLAN
 Gemini CLI의 `/permissions trust`, `/directory add/show` 계열에서 차용한 관리 구조를 적용한다.
 
 - `/workspace show` **(구현 완료)**
-  - 현재 root, trust state, extra workspace dirs, denied roots 출력
+  - 현재 root, trust state, extra workspace dirs, denied roots, OS/shell/sandbox mount 상태 출력
 - `/workspace trust [path]` **(구현 완료: 현재 root 대상)**
   - 대상 경로의 trust 상태를 바꿈
 - `/workspace deny` **(구현 완료: 현재 root 대상)**
@@ -668,6 +668,59 @@ Gemini CLI의 `/permissions trust`, `/directory add/show` 계열에서 차용한
   - 접근 금지 루트 제거
 - `/workspace deny list` **(미구현 — v3.0 계획)**
   - 현재 금지 루트 목록 표시
+
+#### Workspace Harness 진단 출력 구조
+
+```text
+┌─ Workspace Harness ─────────────────────────────┐
+│ OS: linux (x86_64)                              │
+│ Host Shell: /bin/bash                           │
+│ Exec Shell: sh (bwrap:/workspace)               │
+│ Workspace Root: /mnt/Projects_SSD/rust/smlcli   │
+│ Trust Level: Trusted                            │
+│ Denied: false                                   │
+│ Extra Workspace Dirs: (none)                    │
+│ Sandbox Enabled: true                           │
+│ Sandbox Backend: bubblewrap                     │
+│ Sandbox Guest Root: /workspace                  │
+│ Sandbox Network: isolated                       │
+│ Sandbox Extra Binds: (none)                     │
+└─────────────────────────────────────────────────┘
+```
+
+- `/workspace show`, `/status`, `smlcli doctor`는 같은 snapshot 값을 사용한다.
+- 상태바는 폭이 충분할 때 `Host`, `Exec`, Shell policy, Trust state를 계속 노출한다.
+- Linux sandbox 내부에서 모델이 실행하는 shell의 현재 경로는 `/workspace`로 고정된다.
+
+#### Workspace Harness Enforcement 구조
+
+Phase 54에서는 위 진단 정보를 단순 표시가 아니라 모델/도구/세션 경계에 강제 적용한다.
+
+```text
+┌─ Harness Prompt Block ──────────────────────────┐
+│ [Workspace Harness]                             │
+│ OS=linux arch=x86_64                            │
+│ HostShell=/bin/bash ExecShell=sh                │
+│ WorkspaceRoot=/mnt/Projects_SSD/rust/smlcli     │
+│ Trust=Trusted Denied=false                      │
+│ SandboxEnabled=false Backend=bubblewrap         │
+│ GuestRoot=/workspace Network=allowed            │
+└─────────────────────────────────────────────────┘
+```
+
+```text
+┌─ Tool Preflight Notice ─────────────────────────┐
+│ ExecShell blocked before execution              │
+│ Reason: requested cwd is outside workspace      │
+│ Workspace: /mnt/Projects_SSD/rust/smlcli        │
+│ Requested: /tmp                                 │
+└─────────────────────────────────────────────────┘
+```
+
+- system prompt에는 harness block을 중복 없이 1회만 주입한다.
+- preflight 실패는 조용히 실행하지 않고 `Deny` 또는 `Ask` 상태로 사용자에게 드러낸다.
+- 세션 로그 첫 메타 블록에는 OS/root/trust/sandbox snapshot을 기록한다.
+- sandbox가 꺼진 상태에서는 `/workspace`를 “현재 mount”가 아니라 “sandbox 활성 시 guest root 정책값”으로 표기한다.
 
 ### 10.4 Extended Prompt Commands (@ and !)
 

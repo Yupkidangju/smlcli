@@ -1348,3 +1348,69 @@ SafeOnly 모드에서 LLM은 도구 호출(`ExecShell`)을 수행할 때 `safe_t
 - LLM의 오작동이나 프롬프트 주입(Prompt Injection) 등으로 인한 우회 위협을 완전히 방어했습니다.
 - 런타임 수준에서 신뢰의 주체를 LLM이 아닌 시스템 코드와 사용자 설정으로 환원하여 에이전트의 안정성을 극대화했습니다.
 - 108개 테스트 무결 패스 상태에서 이 신뢰 경계 정합성이 보장됩니다.
+
+---
+
+## ADR-039: Workspace Harness Snapshot과 `/workspace` Sandbox Guest Root 표준화 (v3.9.1)
+
+### Status
+Implemented
+
+### Date
+2026-05-26
+
+### Context
+재점검 결과, workspace/OS/작업환경 하네싱은 권한 엔진과 `bwrap` 방어층을 갖추고 있었지만 진단 surface와 실행 경로의 단일 기준이 부족했습니다. 문서와 ADR-020은 Linux `ExecShell`이 요청 `cwd`를 `/workspace`로 bind한다고 설명했으나, 실제 사용 wrapper는 `cwd -> cwd`로 bind했습니다. 또한 `RuntimeWorkspaceState`는 `root_path`를 빈 문자열, trust state를 `Unknown`으로 초기화해 현재 작업환경을 대표하지 못했습니다.
+
+### Decision
+1. 현재 OS, 아키텍처, Host Shell, Exec Shell, canonical workspace root, trust/deny 상태, extra workspace dirs, sandbox backend/mount/network 정책은 `WorkspaceHarnessSnapshot` 단일 계약으로 계산한다.
+2. trust/deny key는 raw `current_dir()`가 아니라 canonical workspace root 문자열로 통일한다.
+3. Linux `bwrap` sandbox의 guest root는 `/workspace`로 동결한다.
+4. `doctor`, `/workspace show`, `/status`, 상태바는 동일 snapshot 또는 snapshot에서 갱신된 runtime state만 읽는다.
+5. Windows Job Object/AppContainer parity는 이번 결정의 범위가 아니며, 후속 Phase로 분리한다.
+
+### Alternatives Considered
+- **기존 `cwd -> cwd` bind 유지**
+  - 문서와 사용자 mental model이 계속 어긋나고, `/workspace` 명령 이름과 sandbox 내부 경로가 불일치하므로 기각.
+- **doctor에 `bwrap` 설치 여부만 유지**
+  - 설치 여부는 하네싱 성공을 증명하지 못한다. 현재 root, trust state, mount target, network policy가 같이 보여야 운영자가 판단할 수 있으므로 기각.
+- **RuntimeWorkspaceState를 display-only placeholder로 유지**
+  - 상태바와 명령 surface가 서로 다른 값을 보여줄 수 있으므로 기각.
+
+### Consequences
+- 사용자는 `smlcli doctor`와 `/workspace show`만으로 현재 작업 운영체제와 하네싱 상태를 검증할 수 있다.
+- Linux sandbox 내부에서 `pwd`는 `/workspace`로 표준화된다.
+- symlink/subdir 실행 환경에서도 trust record 매칭은 canonical workspace root 기준으로 일관된다.
+
+---
+
+## ADR-040: Workspace Harness를 Prompt/Tool/Session 경계에 강제 적용 (v3.9.2)
+
+### Status
+Implemented
+
+### Date
+2026-05-26
+
+### Context
+ADR-039로 `WorkspaceHarnessSnapshot`이 도입되어 doctor, `/workspace show`, `/status`는 현재 OS와 작업환경을 같은 기준으로 표시하게 되었습니다. 그러나 표시 surface만으로는 LLM이 매 턴 현재 OS, host path, sandbox guest root, trust 상태를 반드시 참고한다고 보장할 수 없습니다. 또한 도구 실행 직전에 snapshot drift나 OS mismatch를 재검증하지 않으면, 사용자가 중간에 경로/설정/sandbox 상태를 바꾼 상황에서 모델이 오래된 전제로 명령을 실행할 수 있습니다.
+
+### Decision
+1. `WorkspaceHarnessSnapshot`을 system prompt에 짧은 harness block으로 주입한다.
+2. `ExecShell`과 쓰기 도구 실행 전 `HarnessPreflightDecision`을 평가한다.
+3. 세션 시작 시 snapshot을 세션 메타데이터 또는 JSONL 첫 블록에 기록한다.
+4. Linux/Windows shell mismatch는 v1에서 명시적 패턴 기반으로 `Ask` 또는 Notice로 승격한다.
+5. doctor와 `/workspace show`는 sandbox 비활성 상태에서 `/workspace`가 현재 mount가 아니라 정책상 guest root임을 명확히 구분한다.
+
+### Alternatives Considered
+- **UI/doctor 표시만 유지**
+  - 사용자는 확인할 수 있지만 모델과 도구 런타임이 그 정보를 강제하지 않으므로 기각.
+- **LLM에게 자연어로만 주의 문구 추가**
+  - prompt drift나 중복 prompt 문제를 통제하기 어렵고 tool 실행 직전 상태 변경을 잡지 못하므로 기각.
+- **모든 명령을 OS별 parser로 완전 분석**
+  - 구현 비용이 크고 false positive가 많으므로 v1에서는 10개 이하의 명시적 mismatch 패턴으로 제한한다.
+
+### Consequences
+- 모델은 매 요청마다 현재 OS/root/sandbox/trust 경계를 명시적으로 받는다.
+- tool runtime은 오래된 snapshot 또는 workspace 밖 `cwd`를 실행 직전에 차단할 수 있다.
+- 세션 로그만으로도 당시 환경 전제를 재구성할 수 있어 사후 감사가 쉬워진다.

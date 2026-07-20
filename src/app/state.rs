@@ -163,12 +163,21 @@ impl DomainState {
         }
 
         // [v3.6.0] Phase 46: 워크스페이스 기반 세션 생성
-        let workspace_root = std::env::current_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| ".".to_string());
+        let workspace_root = crate::infra::workspace_harness::canonical_workspace_root();
         let (session_logger, session_metadata) =
             match crate::infra::session_log::SessionLogger::new_workspace_session(&workspace_root) {
-                Ok((logger, meta)) => (Some(logger), Some(meta)),
+                Ok((logger, meta)) => {
+                    let snapshot =
+                        crate::infra::workspace_harness::WorkspaceHarnessSnapshot::collect(
+                            loaded_settings.as_ref(),
+                        );
+                    let record = crate::infra::workspace_harness::SessionHarnessRecord::new(
+                        meta.session_id.clone(),
+                        snapshot,
+                    );
+                    let _ = logger.append_harness_record(&record);
+                    (Some(logger), Some(meta))
+                }
                 Err(_) => {
                     // 폴백: 기존 방식으로 로거만 생성
                     let logger = crate::infra::session_log::SessionLogger::new_session().ok();
@@ -500,47 +509,88 @@ pub enum AutoVerifyState {
     Aborted,
 }
 
-// [v3.7.0] root_path, trust_state 등은 Workspace Trust Gate UI 연동 시 활성화 예정.
-#[allow(dead_code)]
+// [v3.9.1] Workspace Harness Snapshot을 런타임 상태의 단일 기준으로 사용.
 pub struct RuntimeWorkspaceState {
     pub root_path: String,
+    pub os: String,
+    pub arch: String,
     pub host_shell: String,
     pub exec_shell: String,
     pub trust_state: crate::domain::settings::WorkspaceTrustState,
-    pub trust_prompt_visible: bool,
     pub extra_workspace_dirs: Vec<String>,
+    pub denied: bool,
+    pub sandbox_enabled: bool,
+    pub sandbox_backend: String,
+    pub sandbox_guest_root: String,
+    pub sandbox_allow_network: bool,
+    pub sandbox_extra_binds: Vec<String>,
 }
 
 impl RuntimeWorkspaceState {
     pub fn new() -> Self {
-        let host_shell = if cfg!(target_os = "windows") {
-            std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".to_string())
-        } else {
-            std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string())
-        };
+        Self::from_snapshot(
+            crate::infra::workspace_harness::WorkspaceHarnessSnapshot::collect(None),
+        )
+    }
 
-        let exec_shell = if cfg!(target_os = "windows") {
-            if crate::tools::shell::command_in_path("pwsh.exe").is_some()
-                || crate::tools::shell::command_in_path("pwsh").is_some()
-            {
-                "pwsh".to_string()
-            } else if crate::tools::shell::command_in_path("powershell.exe").is_some() {
-                "powershell.exe".to_string()
-            } else {
-                "Not Found".to_string()
-            }
-        } else {
-            "sh (bwrap)".to_string()
-        };
+    pub fn refresh(&mut self, settings: Option<&crate::domain::settings::PersistedSettings>) {
+        *self = Self::from_snapshot(
+            crate::infra::workspace_harness::WorkspaceHarnessSnapshot::collect(settings),
+        );
+    }
 
+    fn from_snapshot(snapshot: crate::infra::workspace_harness::WorkspaceHarnessSnapshot) -> Self {
         Self {
-            root_path: String::new(),
-            host_shell,
-            exec_shell,
-            trust_state: crate::domain::settings::WorkspaceTrustState::Unknown,
-            trust_prompt_visible: false,
-            extra_workspace_dirs: Vec::new(),
+            root_path: snapshot.canonical_root,
+            os: snapshot.os,
+            arch: snapshot.arch,
+            host_shell: snapshot.host_shell,
+            exec_shell: snapshot.exec_shell,
+            trust_state: snapshot.trust_state,
+            extra_workspace_dirs: snapshot.extra_workspace_dirs,
+            denied: snapshot.denied,
+            sandbox_enabled: snapshot.sandbox_enabled,
+            sandbox_backend: snapshot.sandbox_backend,
+            sandbox_guest_root: snapshot.sandbox_guest_root,
+            sandbox_allow_network: snapshot.sandbox_allow_network,
+            sandbox_extra_binds: snapshot.sandbox_extra_binds,
         }
+    }
+
+    pub fn format_report(&self) -> String {
+        let guest_root = if self.sandbox_enabled {
+            self.sandbox_guest_root.clone()
+        } else {
+            format!("{} (policy; inactive)", self.sandbox_guest_root)
+        };
+        format!(
+            "OS: {} ({})\nHost Shell: {}\nExec Shell: {}\nWorkspace Root: {}\nTrust Level: {:?}\nDenied: {}\nExtra Workspace Dirs: {}\nSandbox Enabled: {}\nSandbox Backend: {}\nSandbox Guest Root: {}\nSandbox Network: {}\nSandbox Extra Binds: {}",
+            self.os,
+            self.arch,
+            self.host_shell,
+            self.exec_shell,
+            self.root_path,
+            self.trust_state,
+            self.denied,
+            format_runtime_list(&self.extra_workspace_dirs),
+            self.sandbox_enabled,
+            self.sandbox_backend,
+            guest_root,
+            if self.sandbox_allow_network {
+                "allowed"
+            } else {
+                "isolated"
+            },
+            format_runtime_list(&self.sandbox_extra_binds)
+        )
+    }
+}
+
+fn format_runtime_list(values: &[String]) -> String {
+    if values.is_empty() {
+        "(none)".to_string()
+    } else {
+        values.join(", ")
     }
 }
 
@@ -643,7 +693,8 @@ impl AppState {
         let domain = DomainState::new_async().await;
         let is_wizard_open = domain.settings.is_none();
         let ui = UiState::new(is_wizard_open);
-        let runtime = RuntimeState::new();
+        let mut runtime = RuntimeState::new();
+        runtime.workspace.refresh(domain.settings.as_ref());
 
         // [v3.9.0] 1. 설정에 명시된 언어를 우선으로 하며, 없는 경우 환경변수(LANG, LC_ALL) 파싱.
         // 환경변수도 없는 경우 기본값 "en"으로 폴백한다.

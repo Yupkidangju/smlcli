@@ -107,10 +107,9 @@ impl PermissionEngine {
                     // [v2.5.1] 2) 절대경로 workspace 이탈 선제 차단.
                     // resolve_shell_cwd/sandbox에도 방어층이 있지만, 권한 엔진에서도
                     // 명시적으로 검사하여 이중 방어(Defense-in-Depth)를 형성.
-                    if std::path::Path::new(cwd_val).is_absolute()
-                        && let Ok(workspace) = std::env::current_dir()
-                    {
-                        let canon_ws = std::fs::canonicalize(&workspace).unwrap_or(workspace);
+                    if std::path::Path::new(cwd_val).is_absolute() {
+                        let workspace = crate::infra::workspace_harness::canonical_workspace_root();
+                        let canon_ws = std::path::PathBuf::from(workspace);
                         let path_to_check = std::fs::canonicalize(cwd_val)
                             .unwrap_or_else(|_| std::path::PathBuf::from(cwd_val));
 
@@ -146,9 +145,7 @@ impl PermissionEngine {
             call.name.as_str(),
             "WriteFile" | "ReplaceFileContent" | "DeleteFile" | "ExecShell"
         ) {
-            let root = std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default();
+            let root = crate::infra::workspace_harness::canonical_workspace_root();
             if settings.denied_roots.contains(&root) {
                 return PermissionResult::Deny(
                     "Workspace is not trusted. Modifying files or executing commands is blocked."

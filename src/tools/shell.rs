@@ -65,85 +65,20 @@ pub fn command_in_path(binary: &str) -> Option<PathBuf> {
         .find(|candidate| candidate.exists())
 }
 
-#[cfg(target_os = "linux")]
-fn build_linux_sandbox_command(cmd: &str, host_cwd: &Path) -> Result<Command> {
-    let Some(bwrap) = command_in_path("bwrap") else {
-        return Err(anyhow::anyhow!(
-            "Linux 샌드박스 백엔드 'bwrap'을 찾을 수 없습니다. bubblewrap 설치가 필요합니다."
-        ));
-    };
-
-    let workspace_mount = "/workspace";
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let cargo_home = format!("{}/.cargo", home);
-    let rustup_home = format!("{}/.rustup", home);
-
-    let mut command = Command::new(bwrap);
-    command
-        .arg("--unshare-all")
-        .arg("--share-net")
-        .arg("--die-with-parent")
-        .arg("--new-session")
-        .arg("--proc")
-        .arg("/proc")
-        .arg("--dev")
-        .arg("/dev")
-        .arg("--ro-bind")
-        .arg("/usr")
-        .arg("/usr")
-        .arg("--ro-bind")
-        .arg("/bin")
-        .arg("/bin")
-        .arg("--ro-bind-try")
-        .arg("/lib")
-        .arg("/lib")
-        .arg("--ro-bind-try")
-        .arg("/lib64")
-        .arg("/lib64")
-        .arg("--ro-bind-try")
-        .arg("/sbin")
-        .arg("/sbin")
-        .arg("--ro-bind")
-        .arg("/etc")
-        .arg("/etc")
-        .arg("--ro-bind-try")
-        .arg(&cargo_home)
-        .arg(&cargo_home)
-        .arg("--ro-bind-try")
-        .arg(&rustup_home)
-        .arg(&rustup_home)
-        .arg("--tmpfs")
-        .arg("/tmp")
-        .arg("--bind")
-        .arg(host_cwd)
-        .arg(workspace_mount)
-        .arg("--chdir")
-        .arg(workspace_mount)
-        .arg("--clearenv")
-        .arg("--setenv")
-        .arg("PATH")
-        .arg(get_native_path())
-        .arg("--setenv")
-        .arg("HOME")
-        .arg("/tmp")
-        .arg("--setenv")
-        .arg("CARGO_HOME")
-        .arg(&cargo_home)
-        .arg("--setenv")
-        .arg("RUSTUP_HOME")
-        .arg(&rustup_home)
-        .arg("sh")
-        .arg("-lc")
-        .arg(cmd);
-
-    Ok(command)
-}
-
+// [v0.x.x] Windows 빌드 시 sandbox_enabled가 Linux 전용 cfg 블록에서만 사용되므로
+// 비-Linux 플랫폼에서 unused variable 경고가 발생하지 않도록 allow 어트리뷰트를 적용
+#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
 fn build_shell_command(cmd: &str, host_cwd: &Path, sandbox_enabled: bool) -> Result<Command> {
     #[cfg(target_os = "linux")]
     {
         if sandbox_enabled {
-            build_linux_sandbox_command(cmd, host_cwd)
+            let cwd = host_cwd.to_str().unwrap_or(".");
+            Ok(crate::infra::sandbox::wrap_command_bwrap(
+                cwd,
+                cmd,
+                true,
+                &[],
+            ))
         } else {
             let mut c = Command::new("sh");
             c.arg("-c").arg(cmd);

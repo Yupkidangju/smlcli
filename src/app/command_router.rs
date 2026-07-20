@@ -293,21 +293,14 @@ impl App {
                 });
             }
             "/status" => {
-                let root = std::env::current_dir()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
                 let info = if let Some(s) = &self.state.domain.settings {
-                    let trust = s.get_workspace_trust(&root);
+                    self.state.runtime.workspace.refresh(Some(s));
                     format!(
-                        "Provider: {}\nModel: {}\nBudget Used: {} tokens\nHost Shell: {}\nExec Shell: {}\nWorkspace Trust: {:?}\nDenied: {}",
+                        "Provider: {}\nModel: {}\nBudget Used: {} tokens\n{}",
                         s.default_provider,
                         s.default_model,
                         self.state.domain.session.token_budget_used,
-                        self.state.runtime.workspace.host_shell,
-                        self.state.runtime.workspace.exec_shell,
-                        trust,
-                        s.denied_roots.contains(&root)
+                        self.state.runtime.workspace.format_report()
                     )
                 } else {
                     "Not configured.".to_string()
@@ -543,21 +536,17 @@ impl App {
                     return;
                 }
 
-                let root = std::env::current_dir()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
+                let root = crate::infra::workspace_harness::canonical_workspace_root();
                 let subcmd = parts[1];
                 let message;
 
                 if let Some(settings) = &mut self.state.domain.settings {
                     match subcmd {
                         "show" => {
-                            let trust = settings.get_workspace_trust(&root);
-                            let is_denied = settings.denied_roots.contains(&root);
+                            self.state.runtime.workspace.refresh(Some(settings));
                             message = format!(
-                                "Workspace: {}\nTrust Level: {:?}\nDenied: {}",
-                                root, trust, is_denied
+                                "Workspace Harness\n{}",
+                                self.state.runtime.workspace.format_report()
                             );
                         }
                         "trust" => {
@@ -567,6 +556,7 @@ impl App {
                                 true,
                             );
                             settings.denied_roots.retain(|x| x != &root);
+                            self.state.runtime.workspace.refresh(Some(settings));
                             message = format!("Workspace {} is now Trusted.", root);
 
                             let settings_clone = settings.clone();
@@ -591,6 +581,7 @@ impl App {
                             if !settings.denied_roots.contains(&root) {
                                 settings.denied_roots.push(root.clone());
                             }
+                            self.state.runtime.workspace.refresh(Some(settings));
                             message = format!("Workspace {} is now Denied (Restricted).", root);
 
                             let settings_clone = settings.clone();
@@ -609,6 +600,7 @@ impl App {
                         "clear" => {
                             settings.remove_workspace_trust(&root);
                             settings.denied_roots.retain(|x| x != &root);
+                            self.state.runtime.workspace.refresh(Some(settings));
                             message = format!("Workspace {} trust records cleared.", root);
 
                             let settings_clone = settings.clone();
@@ -855,14 +847,21 @@ impl App {
             // ======================================================================
             "/new" => {
                 // 현재 세션을 종료하고 새 세션을 시작합니다.
-                let workspace_root = std::env::current_dir()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| ".".to_string());
+                let workspace_root = crate::infra::workspace_harness::canonical_workspace_root();
 
                 match crate::infra::session_log::SessionLogger::new_workspace_session(
                     &workspace_root,
                 ) {
                     Ok((logger, metadata)) => {
+                        let snapshot =
+                            crate::infra::workspace_harness::WorkspaceHarnessSnapshot::collect(
+                                self.state.domain.settings.as_ref(),
+                            );
+                        let record = crate::infra::workspace_harness::SessionHarnessRecord::new(
+                            metadata.session_id.clone(),
+                            snapshot,
+                        );
+                        let _ = logger.append_harness_record(&record);
                         // 타임라인과 세션 상태 초기화
                         self.state.ui.timeline.clear();
                         self.state.domain.session = crate::domain::session::SessionState::new();

@@ -31,6 +31,7 @@ impl App {
             crate::tools::registry::apply_dialect(&mut schema, &dialect);
             schemas.push(schema);
         }
+        let messages = self.build_messages_with_harness(messages);
         let messages = self.build_messages_with_repo_map(messages);
         crate::providers::types::ChatRequest {
             model: model_name,
@@ -75,6 +76,42 @@ impl App {
             0
         };
         messages.insert(insert_at, repo_map_msg);
+        messages
+    }
+
+    fn build_messages_with_harness(
+        &self,
+        mut messages: Vec<crate::providers::types::ChatMessage>,
+    ) -> Vec<crate::providers::types::ChatMessage> {
+        let harness = crate::infra::workspace_harness::HarnessPromptContext::collect(
+            self.state.domain.settings.as_ref(),
+        );
+        messages.retain(|msg| {
+            !(msg.role == crate::providers::types::Role::System
+                && msg
+                    .content
+                    .as_deref()
+                    .unwrap_or_default()
+                    .starts_with("[Workspace Harness]"))
+        });
+
+        let harness_msg = crate::providers::types::ChatMessage {
+            role: crate::providers::types::Role::System,
+            content: Some(harness.prompt_block),
+            tool_calls: None,
+            tool_call_id: None,
+            pinned: true,
+        };
+
+        let insert_at = if messages
+            .first()
+            .is_some_and(|msg| msg.role == crate::providers::types::Role::System)
+        {
+            1
+        } else {
+            0
+        };
+        messages.insert(insert_at, harness_msg);
         messages
     }
 

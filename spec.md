@@ -2905,3 +2905,194 @@ LM Studio 프로바이더 연동 및 모델 설정 완료 시 `smlcli` 설정 �
   - `assert_eq!(settings.active_provider, ProviderKind::LmStudio)`로 영속 저장 정합성 통과.
   - `assert_eq!(credentials.needs_key, false)` 단언문 통과를 통한 크레덴셜 해소 예외 우회 보증.
   - `assert_eq!(wizard_state.selected_index(), 5)`를 통한 TUI 팝업 인덱스 매칭 성공 검증.
+
+---
+
+### Phase 53: Workspace Harness Snapshot & OS/Sandbox 정합화 (v3.9.1)
+
+#### 53.1 Scope Closure
+- **목표**: 현재 작업 운영체제, Host Shell, Exec Shell, canonical workspace root, trust/deny 상태, Linux sandbox mount 정책을 하나의 `WorkspaceHarnessSnapshot` 계약으로 통합한다.
+- **성공 기준**:
+  - `smlcli doctor`가 OS, arch, Host Shell, Exec Shell, Workspace Root, Trust Level, Denied, Sandbox Backend, Sandbox Guest Root, Sandbox Network, Extra Binds를 출력한다.
+  - `/workspace show`와 `/status`가 doctor와 같은 snapshot 기준으로 값을 표시한다.
+  - Linux `bwrap` sandbox 내부에서 `pwd` 결과가 `/workspace`다.
+  - PermissionEngine의 trust/deny 판정은 canonical workspace root 문자열을 key로 사용한다.
+- **비목표**:
+  - Windows AppContainer 또는 Job Object 파일시스템 격리 parity 구현은 이번 Phase에서 제외한다.
+  - Docker/Podman 기반 컨테이너 sandbox는 v4.0 이후 별도 검토한다.
+
+#### 53.2 Frozen Decisions
+- workspace trust key는 `workspace_utils::get_current_workspace_root()`의 canonical string으로 통일한다.
+- Linux sandbox guest root는 `/workspace`로 고정한다.
+- doctor는 단순 설치 점검이 아니라 현재 workspace harness snapshot을 출력하는 진단 surface가 된다.
+- RuntimeWorkspaceState는 placeholder가 아니라 snapshot에서 갱신되는 런타임 표시 상태다.
+
+#### 53.3 Typed Contracts
+```rust
+pub struct WorkspaceHarnessSnapshot {
+    pub os: String,
+    pub arch: String,
+    pub host_shell: String,
+    pub exec_shell: String,
+    pub canonical_root: String,
+    pub trust_state: WorkspaceTrustState,
+    pub denied: bool,
+    pub extra_workspace_dirs: Vec<String>,
+    pub sandbox_enabled: bool,
+    pub sandbox_backend: String,
+    pub sandbox_guest_root: String, // "/workspace"
+    pub sandbox_allow_network: bool,
+    pub sandbox_extra_binds: Vec<String>,
+}
+
+pub const WORKSPACE_GUEST_ROOT: &str = "/workspace";
+```
+
+#### 53.4 Concrete Numbers
+- `Sandbox Guest Root`: 정확히 `/workspace`.
+- `doctor` API 네트워크 타임아웃: 기존 5초 유지.
+- `Workspace Harness` 출력 필드: 최소 11개 (`OS`, `Host Shell`, `Exec Shell`, `Workspace Root`, `Trust Level`, `Denied`, `Extra Workspace Dirs`, `Sandbox Enabled`, `Sandbox Backend`, `Sandbox Guest Root`, `Sandbox Network`).
+
+#### 53.5 Real Data Samples
+현재 Linux 개발 환경에서 기대되는 doctor 출력 샘플:
+
+```text
+--- Workspace Harness 상태 ---
+OS: linux (x86_64)
+Host Shell: /bin/bash
+Exec Shell: sh (bwrap:/workspace)
+Workspace Root: /mnt/Projects_SSD/rust/smlcli
+Trust Level: Trusted
+Denied: false
+Extra Workspace Dirs: (none)
+Sandbox Enabled: true
+Sandbox Backend: bubblewrap
+Sandbox Guest Root: /workspace
+Sandbox Network: isolated
+Sandbox Extra Binds: (none)
+```
+
+#### 53.6 Execution Path
+1. `infra/workspace_harness.rs`에 snapshot 수집 계약을 추가한다.
+2. `RuntimeWorkspaceState`를 snapshot 기반으로 갱신한다.
+3. `infra/sandbox.rs`의 Linux `bwrap` wrapper를 `cwd -> /workspace`, `--chdir /workspace`로 통일한다.
+4. `/workspace show`, `/status`, `doctor` 출력이 같은 snapshot을 사용하도록 연결한다.
+5. PermissionEngine trust/deny key를 canonical workspace root로 교정한다.
+
+#### 53.7 Verification Path
+```bash
+cargo test workspace --all-targets --no-fail-fast
+cargo test sandbox --all-targets --no-fail-fast
+cargo run --quiet -- doctor
+cargo fmt --check
+cargo check --all-targets
+cargo test --all-targets --no-fail-fast
+cargo clippy --all-targets --all-features -- -D warnings
+git diff --check
+```
+
+필수 단언:
+- `test_bwrap_mounts_workspace_as_canonical_guest_root`: sandbox 내부 `pwd == /workspace`.
+- `test_workspace_harness_snapshot_uses_canonical_root_and_settings`: snapshot이 canonical root, trust, sandbox 설정을 반영.
+- `/workspace show` 회귀 테스트: 출력에 `Workspace Harness`와 `Sandbox Guest Root: /workspace` 포함.
+
+---
+
+### Phase 54: Workspace Harness Enforcement & Model Grounding (v3.9.2)
+
+#### 54.1 Scope Closure
+- **목표**: Phase 53에서 수집/표시한 `WorkspaceHarnessSnapshot`을 LLM 프롬프트, 도구 실행 전 preflight, 세션 메타데이터, 명령 검증에 연결하여 모델과 런타임이 현재 OS/작업환경을 항상 기준으로 삼게 한다.
+- **성공 기준**:
+  - 채팅 요청 system prompt에 현재 `WorkspaceHarnessSnapshot` 요약이 항상 포함된다.
+  - `ExecShell`/쓰기 도구 실행 직전에 snapshot drift, trust state, cwd 이탈, sandbox 상태를 검사한다.
+  - 세션 시작 시 snapshot을 세션 메타데이터 또는 JSONL 로그 첫 블록에 기록한다.
+  - 현재 OS와 맞지 않는 shell 제안 또는 `/workspace`/host path 혼동이 감지되면 Notice 또는 Ask 경로로 승격한다.
+- **비목표**:
+  - LLM 응답의 자연어 전체를 완벽히 교정하는 정적 분석기는 구현하지 않는다.
+  - Windows 파일시스템 sandbox parity 자체 구현은 Phase 54 범위에서 제외한다.
+
+#### 54.2 Frozen Decisions
+- `WorkspaceHarnessSnapshot`은 표시용 데이터가 아니라 prompt/tool/session 경계의 입력 계약이다.
+- tool preflight 실패는 조용히 무시하지 않고 `Deny` 또는 `Ask`로 명확히 승격한다.
+- sandbox 비활성 상태와 `/workspace` guest root 정책은 문구상 분리해 표기한다.
+- 비-Linux 환경에서는 `Sandbox Backend: none`을 경고성 진단 상태로 노출하되, 읽기 전용 기능은 유지한다.
+
+#### 54.3 Typed Contracts
+```rust
+pub struct HarnessPromptContext {
+    pub snapshot: WorkspaceHarnessSnapshot,
+    pub prompt_block: String,
+    pub generated_at_unix_ms: u64,
+}
+
+pub struct HarnessPreflightInput {
+    pub tool_name: String,
+    pub requested_cwd: Option<String>,
+    pub requested_paths: Vec<String>,
+    pub snapshot: WorkspaceHarnessSnapshot,
+}
+
+pub enum HarnessPreflightDecision {
+    Allow,
+    Ask { reason: String },
+    Deny { reason: String },
+}
+
+pub struct SessionHarnessRecord {
+    pub session_id: String,
+    pub snapshot: WorkspaceHarnessSnapshot,
+    pub recorded_at_unix_ms: u64,
+}
+```
+
+#### 54.4 Concrete Numbers
+- system prompt 내 harness block은 최대 12줄로 제한한다.
+- tool preflight는 모든 `ExecShell`, `WriteFile`, `ReplaceFileContent`, `DeleteFile` 실행마다 1회 수행한다.
+- snapshot drift 검사 대상 필드: `canonical_root`, `trust_state`, `denied`, `sandbox_enabled`, `sandbox_guest_root` 5개.
+- OS mismatch 감지 규칙 v1은 Linux/Windows shell command 패턴 각각 최대 10개 이하의 명시적 패턴으로 시작한다.
+
+#### 54.5 Real Data Samples
+system prompt에 주입되는 harness block 샘플:
+
+```text
+[Workspace Harness]
+OS=linux arch=x86_64
+HostShell=/bin/bash ExecShell=sh
+WorkspaceRoot=/mnt/Projects_SSD/rust/smlcli
+Trust=Trusted Denied=false
+SandboxEnabled=false Backend=bubblewrap GuestRoot=/workspace Network=allowed
+Rule: host paths are for local file APIs; sandbox shell cwd is /workspace only when sandbox is enabled.
+```
+
+preflight 실패 샘플:
+
+```text
+Harness preflight denied: requested cwd '/tmp' is outside canonical workspace '/mnt/Projects_SSD/rust/smlcli'.
+```
+
+#### 54.6 Execution Path
+1. chat request 생성 경로에 `HarnessPromptContext`를 추가하고 system prompt dedupe 정책과 충돌하지 않게 주입한다.
+2. tool runtime 진입 전 `HarnessPreflightInput`을 생성해 `ExecShell`/쓰기 도구 실행을 검사한다.
+3. 세션 생성 시 `SessionHarnessRecord`를 JSONL 첫 메타 블록 또는 세션 메타데이터에 저장한다.
+4. doctor와 `/workspace show` 문구를 보강해 `Sandbox Enabled=false`일 때 `/workspace`는 정책값이며 현재 shell mount가 아님을 명시한다.
+5. OS mismatch v1 validator를 추가해 Linux에서 PowerShell 전용 명령, Windows에서 POSIX-only 명령을 바로 실행하지 않도록 Notice/Ask로 승격한다.
+
+#### 54.7 Verification Path
+```bash
+cargo test harness_prompt --all-targets --no-fail-fast
+cargo test harness_preflight --all-targets --no-fail-fast
+cargo test session_harness --all-targets --no-fail-fast
+cargo test workspace --all-targets --no-fail-fast
+cargo run --quiet -- doctor
+cargo fmt --check
+cargo check --all-targets
+cargo test --all-targets --no-fail-fast
+cargo clippy --all-targets --all-features -- -D warnings
+git diff --check
+```
+
+필수 단언:
+- system prompt에 현재 OS/root/trust/sandbox 요약이 중복 없이 1회 포함된다.
+- workspace 밖 `cwd`를 가진 `ExecShell` preflight는 `Deny`를 반환한다.
+- sandbox 비활성 doctor 출력은 guest root를 “정책값”으로 표시하고 현재 mount로 오해되지 않는다.
+- 새 세션 JSONL 또는 metadata에 snapshot root와 OS가 기록된다.

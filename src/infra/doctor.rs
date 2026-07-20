@@ -22,6 +22,7 @@ pub struct DoctorReport {
     pub config_status: DiagnosticStatus,
     pub term_status: DiagnosticStatus,
     pub sandbox_status: DiagnosticStatus,
+    pub workspace_harness: crate::infra::workspace_harness::WorkspaceHarnessSnapshot,
 }
 
 impl DoctorReport {
@@ -30,7 +31,12 @@ impl DoctorReport {
         let api_status = Self::check_api(&config_status).await;
         let git_status = Self::check_git();
         let term_status = Self::check_terminal();
+        let settings = crate::infra::config_store::load_config()
+            .await
+            .unwrap_or(None);
         let sandbox_status = Self::check_sandbox();
+        let workspace_harness =
+            crate::infra::workspace_harness::WorkspaceHarnessSnapshot::collect(settings.as_ref());
 
         Self {
             api_status,
@@ -38,6 +44,7 @@ impl DoctorReport {
             config_status,
             term_status,
             sandbox_status,
+            workspace_harness,
         }
     }
 
@@ -179,6 +186,8 @@ impl DoctorReport {
         self.git_status.display();
         println!("\n--- 샌드박스 상태 ---");
         self.sandbox_status.display();
+        println!("\n--- Workspace Harness 상태 ---");
+        println!("{}", self.workspace_harness.format_report());
         println!("\n--- 터미널 환경 상태 ---");
         self.term_status.display();
         println!("\n진단 완료.");

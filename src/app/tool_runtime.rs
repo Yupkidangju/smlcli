@@ -101,7 +101,30 @@ impl App {
     ) {
         let settings = self.state.domain.settings.clone().unwrap_or_default();
         let tool_name = Self::format_tool_name(&tool_call);
-        let perm = crate::domain::permissions::PermissionEngine::check(&tool_call, &settings);
+        let preflight = crate::infra::workspace_harness::evaluate_preflight(
+            &crate::infra::workspace_harness::HarnessPreflightInput::from_tool_call(
+                &tool_call,
+                Some(&settings),
+            ),
+        );
+        let perm = match preflight {
+            crate::infra::workspace_harness::HarnessPreflightDecision::Allow => {
+                crate::domain::permissions::PermissionEngine::check(&tool_call, &settings)
+            }
+            crate::infra::workspace_harness::HarnessPreflightDecision::Ask { reason } => {
+                self.state
+                    .runtime
+                    .logs_buffer
+                    .push(format!("[Harness Preflight] {}", reason));
+                crate::domain::permissions::PermissionResult::Ask
+            }
+            crate::infra::workspace_harness::HarnessPreflightDecision::Deny { reason } => {
+                crate::domain::permissions::PermissionResult::Deny(format!(
+                    "Harness preflight denied: {}",
+                    reason
+                ))
+            }
+        };
 
         match perm {
             crate::domain::permissions::PermissionResult::Allow => {
@@ -482,6 +505,39 @@ impl App {
         self.state.runtime.approval.pending_since_ms = None;
 
         if approved {
+            let settings = self.state.domain.settings.clone().unwrap_or_default();
+            let preflight = crate::infra::workspace_harness::evaluate_preflight(
+                &crate::infra::workspace_harness::HarnessPreflightInput::from_tool_call(
+                    &tool,
+                    Some(&settings),
+                ),
+            );
+            if let crate::infra::workspace_harness::HarnessPreflightDecision::Deny { reason } =
+                preflight
+            {
+                let res = crate::domain::tool_result::ToolResult {
+                    tool_name: tool.name.clone(),
+                    stdout: String::new(),
+                    stderr: format!("[Security Block] Harness preflight denied: {}", reason),
+                    exit_code: 1,
+                    is_error: true,
+                    tool_call_id: tool_call_id.clone(),
+                    is_truncated: false,
+                    original_size_bytes: None,
+                    affected_paths: vec![],
+                };
+                let tx = self.action_tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx
+                        .send(event_loop::Event::Action(action::Action::ToolFinished(
+                            Box::new(res),
+                            tool_index,
+                        )))
+                        .await;
+                });
+                return;
+            }
+
             let tool_name = Self::format_tool_name(&tool);
             let mut block = crate::app::state::TimelineBlock::new(
                 crate::app::state::TimelineBlockKind::ToolRun,
