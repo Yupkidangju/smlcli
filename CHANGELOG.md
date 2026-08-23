@@ -24,7 +24,7 @@
 - **TUI·i18n·공개 계약**: command registry, visible timeline mutation, pane/Inspector 접근, shared layout hit-test, Unicode width, overlay/terminal cleanup, 5-locale 선택·렌더 경로와 CLI/provider 문서를 실제 구현에 맞춤.
 
 ### Security
-- RustSec advisory가 있던 `crossbeam-epoch`, `quinn-proto`, `anyhow`를 안전 버전으로 갱신하고 불필요한 `shadow-rs`/`git2` 및 GPL runtime dependency를 제거. `cargo audit`와 `cargo deny`를 CI/release gate로 추가.
+- RustSec advisory가 있던 `crossbeam-epoch`, `quinn-proto`, `h2`, `anyhow`를 안전 버전으로 갱신하고 불필요한 `shadow-rs`/`git2` 및 GPL runtime dependency를 제거. `cargo audit`와 `cargo deny`를 CI/release gate로 추가.
 
 ## [3.9.0] - 2026-05-23 (TUI Modernization & Responsive Multi-viewport Redesign)
 

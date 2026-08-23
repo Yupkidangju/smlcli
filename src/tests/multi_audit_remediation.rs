@@ -1535,6 +1535,7 @@ fn fin_f023_lockfile_contains_patched_advisory_versions() {
     for (name, version) in [
         ("anyhow", "1.0.103"),
         ("crossbeam-epoch", "0.9.20"),
+        ("h2", "0.4.16"),
         ("quinn-proto", "0.11.15"),
     ] {
         let package = format!("name = \"{name}\"\nversion = \"{version}\"");
