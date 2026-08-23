@@ -231,6 +231,16 @@
 - **Required before PASS:** 현재 변경을 review/commit한 뒤 CI와 tag/release workflow에서 두 target build+smoke, checksum/SBOM, attestation publication을 성공시키고 run URL과 attestation을 후속 재감사에 기록한다.
 - **Residual risk:** canonical 지원 artifact의 실제 생성·실행 증거가 없으므로 release readiness는 HOLD다.
 
+### [FIN-F024] Re-audit #2 — hosted cross-target/provenance execution
+
+- **Re-audit date:** 2026-08-24 (Asia/Seoul)
+- **Status:** **In Progress**
+- **Hosted attempt:** commit `a518a99e65eee20c722b5c05240ea46d4b83d5ea`, [Release run 32648622100](https://github.com/Yupkidangju/smlcli/actions/runs/32648622100), [CI run 32648622085](https://github.com/Yupkidangju/smlcli/actions/runs/32648622085).
+- **Verified partial evidence:** CI와 pre-release quality gate는 성공했다. [Linux musl job 97217553725](https://github.com/Yupkidangju/smlcli/actions/runs/32648622100/job/97217553725)는 build, `--version`/`--help` smoke, checksum/SPDX 2.3, Sigstore provenance/SBOM 생성·검증 및 artifact upload를 모두 통과했다.
+- **Fail-closed evidence:** [Windows MSVC job 97217553777](https://github.com/Yupkidangju/smlcli/actions/runs/32648622100/job/97217553777)는 release build에서 실패해 이후 smoke/checksum/SBOM/attestation이 모두 skipped 되었다. `RUSTFLAGS='-D warnings' cargo build --release --locked --target x86_64-pc-windows-gnu`로 동일 Windows cfg 경고 4건을 재현했다.
+- **Root cause / corrective plan:** `src/infra/secure_fs.rs`의 Unix 전용 parameter 사용과 `OpenOptions` mutation이 non-Unix compile에서 unused/unused-mut 경고가 되고 workflow의 `-D warnings`로 오류 승격된다. cfg별 구조를 분리해 경고를 제거하고 같은 local Windows cross-build와 hosted MSVC 전체 gate를 재실행한다.
+- **Interim verdict:** Windows 실행 증거가 완성될 때까지 FIN-F024와 전체 판정은 `Hold`를 유지한다.
+
 ## 6. Pass 3: Security Re-audit
 
 ### [FIN-F002] Re-audit #1 — MCP environment secret isolation

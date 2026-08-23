@@ -26,20 +26,23 @@ pub fn ensure_private_dir(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn verify_owner(metadata: &std::fs::Metadata, path: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.uid() != unsafe { libc::geteuid() } {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                format!(
-                    "현재 사용자가 소유하지 않은 private path입니다: {}",
-                    path.display()
-                ),
-            ));
-        }
+    use std::os::unix::fs::MetadataExt;
+    if metadata.uid() != unsafe { libc::geteuid() } {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            format!(
+                "현재 사용자가 소유하지 않은 private path입니다: {}",
+                path.display()
+            ),
+        ));
     }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn verify_owner(_metadata: &std::fs::Metadata, _path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
@@ -60,16 +63,19 @@ fn validate_existing_regular(path: &Path) -> std::io::Result<Option<std::fs::Met
     }
 }
 
+#[cfg(unix)]
 fn private_options() -> OpenOptions {
     let mut options = OpenOptions::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    }
+    use std::os::unix::fs::OpenOptionsExt;
     options
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    options
+}
+
+#[cfg(not(unix))]
+fn private_options() -> OpenOptions {
+    OpenOptions::new()
 }
 
 pub fn create_private_new(path: &Path) -> std::io::Result<File> {
@@ -180,11 +186,14 @@ pub fn atomic_write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     result
 }
 
+#[cfg(unix)]
 pub fn set_private_file_permissions(path: &Path) -> std::io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn set_private_file_permissions(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
