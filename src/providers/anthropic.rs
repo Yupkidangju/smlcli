@@ -4,6 +4,81 @@ use reqwest::Client;
 use std::future::Future;
 use std::pin::Pin;
 
+fn process_anthropic_sse_line(
+    line: &str,
+    full_content: &mut String,
+    tool_calls: &mut std::collections::HashMap<usize, crate::providers::types::ToolCallRequest>,
+    current_tool_idx: &mut usize,
+) -> Result<(Option<String>, bool), ProviderError> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with(':') {
+        return Ok((None, false));
+    }
+    let Some(data) = line.strip_prefix("data: ") else {
+        return Ok((None, false));
+    };
+    let parsed: serde_json::Value = serde_json::from_str(data).map_err(|error| {
+        ProviderError::NetworkFailure(format!("Anthropic SSE JSON parse 실패: {error}"))
+    })?;
+    match parsed["type"].as_str().unwrap_or("") {
+        "content_block_delta" => {
+            let delta = &parsed["delta"];
+            if delta["type"] == "text_delta" {
+                if let Some(text) = delta["text"].as_str() {
+                    if full_content.len().saturating_add(text.len())
+                        > crate::providers::streaming::MAX_PROVIDER_CONTENT_BYTES
+                    {
+                        return Err(ProviderError::NetworkFailure(
+                            "Anthropic content size limit 초과".to_string(),
+                        ));
+                    }
+                    full_content.push_str(text);
+                    return Ok((Some(text.to_string()), false));
+                }
+            } else if delta["type"] == "input_json_delta"
+                && let Some(partial_json) = delta["partial_json"].as_str()
+            {
+                let index = parsed["index"].as_u64().unwrap_or(*current_tool_idx as u64) as usize;
+                if let Some(call) = tool_calls.get_mut(&index) {
+                    if call
+                        .function
+                        .arguments
+                        .len()
+                        .saturating_add(partial_json.len())
+                        > crate::providers::streaming::MAX_TOOL_ARGUMENT_BYTES
+                    {
+                        return Err(ProviderError::NetworkFailure(
+                            "Anthropic tool arguments size limit 초과".to_string(),
+                        ));
+                    }
+                    call.function.arguments.push_str(partial_json);
+                }
+            }
+        }
+        "content_block_start" => {
+            let block = &parsed["content_block"];
+            if block["type"] == "tool_use" {
+                let index = parsed["index"].as_u64().unwrap_or(*current_tool_idx as u64) as usize;
+                *current_tool_idx = index;
+                tool_calls.insert(
+                    index,
+                    crate::providers::types::ToolCallRequest {
+                        id: block["id"].as_str().unwrap_or_default().to_string(),
+                        r#type: "function".to_string(),
+                        function: crate::providers::types::FunctionCall {
+                            name: block["name"].as_str().unwrap_or_default().to_string(),
+                            arguments: String::new(),
+                        },
+                    },
+                );
+            }
+        }
+        "message_stop" => return Ok((None, true)),
+        _ => {}
+    }
+    Ok((None, false))
+}
+
 pub struct AnthropicAdapter {
     client: Client,
     base_url: String,
@@ -12,7 +87,12 @@ pub struct AnthropicAdapter {
 impl AnthropicAdapter {
     pub fn new(base_url: String) -> Self {
         Self {
-            client: Client::new(),
+            // Credential-bearing provider requests never follow redirects to a
+            // different destination implicitly.
+            client: Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("reqwest client with redirect disabled"),
             base_url,
         }
     }
@@ -174,17 +254,16 @@ impl ProviderAdapter for AnthropicAdapter {
 
             if !response.status().is_success() {
                 let code = response.status().as_u16();
-                let err_text = response.text().await.unwrap_or_default();
+                let err_text =
+                    crate::providers::streaming::bounded_error_body(response, &[api_key]).await;
                 return Err(ProviderError::ApiResponse {
                     code,
                     message: format!("Anthropic Error: {}", err_text),
                 });
             }
 
-            let parsed: serde_json::Value = response
-                .json()
-                .await
-                .map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
+            let parsed: serde_json::Value =
+                crate::providers::streaming::bounded_json_response(response).await?;
             let mut full_content = String::new();
             let mut tool_calls = Vec::new();
 
@@ -365,7 +444,8 @@ impl ProviderAdapter for AnthropicAdapter {
 
             if !response.status().is_success() {
                 let code = response.status().as_u16();
-                let err_text = response.text().await.unwrap_or_default();
+                let err_text =
+                    crate::providers::streaming::bounded_error_body(response, &[api_key]).await;
                 return Err(ProviderError::ApiResponse {
                     code,
                     message: format!("Anthropic Error: {}", err_text),
@@ -379,65 +459,43 @@ impl ProviderAdapter for AnthropicAdapter {
             > = std::collections::HashMap::new();
             let mut current_tool_idx = 0;
 
-            let body = response
-                .text()
+            let mut response = response;
+            let mut decoder = crate::providers::streaming::SseDecoder::new();
+            let mut stopped = false;
+            while let Some(chunk) = response
+                .chunk()
                 .await
-                .map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
-            for line in body.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with(':') {
-                    continue;
+                .map_err(|error| ProviderError::NetworkFailure(error.to_string()))?
+            {
+                for line in decoder.push(&chunk)? {
+                    let (delta, stop) = process_anthropic_sse_line(
+                        &line,
+                        &mut full_content,
+                        &mut tool_calls_map,
+                        &mut current_tool_idx,
+                    )?;
+                    if let Some(delta) = delta {
+                        let _ = delta_tx.send(delta).await;
+                    }
+                    if stop {
+                        stopped = true;
+                        break;
+                    }
                 }
-                if let Some(data) = line.strip_prefix("data: ")
-                    && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
-                {
-                    let event_type = parsed["type"].as_str().unwrap_or("");
-                    match event_type {
-                        "content_block_delta" => {
-                            let delta = &parsed["delta"];
-                            if delta["type"] == "text_delta" {
-                                if let Some(text) = delta["text"].as_str() {
-                                    full_content.push_str(text);
-                                    let _ = delta_tx.send(text.to_string()).await;
-                                }
-                            } else if delta["type"] == "input_json_delta"
-                                && let Some(partial_json) = delta["partial_json"].as_str()
-                            {
-                                let idx =
-                                    parsed["index"].as_u64().unwrap_or(current_tool_idx as u64)
-                                        as usize;
-                                if let Some(tc) = tool_calls_map.get_mut(&idx) {
-                                    tc.function.arguments.push_str(partial_json);
-                                }
-                            }
-                        }
-                        "content_block_start" => {
-                            let cb = &parsed["content_block"];
-                            if cb["type"] == "tool_use" {
-                                let idx =
-                                    parsed["index"].as_u64().unwrap_or(current_tool_idx as u64)
-                                        as usize;
-                                current_tool_idx = idx;
-                                tool_calls_map.insert(
-                                    idx,
-                                    crate::providers::types::ToolCallRequest {
-                                        id: cb["id"].as_str().unwrap_or_default().to_string(),
-                                        r#type: "function".to_string(),
-                                        function: crate::providers::types::FunctionCall {
-                                            name: cb["name"]
-                                                .as_str()
-                                                .unwrap_or_default()
-                                                .to_string(),
-                                            arguments: String::new(),
-                                        },
-                                    },
-                                );
-                            }
-                        }
-                        "message_stop" => {
-                            break;
-                        }
-                        _ => {}
+                if stopped {
+                    break;
+                }
+            }
+            if !stopped {
+                for line in decoder.finish()? {
+                    let (delta, _) = process_anthropic_sse_line(
+                        &line,
+                        &mut full_content,
+                        &mut tool_calls_map,
+                        &mut current_tool_idx,
+                    )?;
+                    if let Some(delta) = delta {
+                        let _ = delta_tx.send(delta).await;
                     }
                 }
             }

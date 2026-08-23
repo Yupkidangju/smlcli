@@ -5,6 +5,20 @@
 
 ---
 
+## ADR Authority Index
+
+| ADR | Current authority |
+| --- | --- |
+| ADR-002 | Superseded by ADR-007 |
+| ADR-014 | Agentic tool registry와 Git checkpoint의 historical decision |
+| ADR-039 | Implemented in working tree; Unreleased planned 3.9.1 lineage |
+| ADR-040 | Implemented in working tree; Unreleased planned 3.9.2 lineage |
+| ADR-041 | Active remediation authority for final multi-audit Turn 1 |
+
+ADR 번호는 재사용하지 않는다. supersede 관계는 기존 ADR을 삭제하지 않고 이 표와 각 Status에 기록한다.
+
+---
+
 ## ADR-001: UI 프레임워크로 Ratatui 채택
 
 ### Status
@@ -498,7 +512,7 @@ Accepted
 - 에러 발생 시 `Role::Tool` 로 즉각 피드백이 가므로 자가 치유(Auto-healing) 확률 비약적 상승.
 ---
 
-## [ADR-013] Agentic Autonomy via Polymorphic Tool Registry & Git Checkpoints
+## ADR-014: Agentic Autonomy via Polymorphic Tool Registry & Git Checkpoints
 
 - **Date:** 2026-04-18
 - **Context:**
@@ -1351,10 +1365,10 @@ SafeOnly 모드에서 LLM은 도구 호출(`ExecShell`)을 수행할 때 `safe_t
 
 ---
 
-## ADR-039: Workspace Harness Snapshot과 `/workspace` Sandbox Guest Root 표준화 (v3.9.1)
+## ADR-039: Workspace Harness Snapshot과 `/workspace` Sandbox Guest Root 표준화 (Unreleased, planned v3.9.1)
 
 ### Status
-Implemented
+Implemented in working tree; Unreleased
 
 ### Date
 2026-05-26
@@ -1384,10 +1398,10 @@ Implemented
 
 ---
 
-## ADR-040: Workspace Harness를 Prompt/Tool/Session 경계에 강제 적용 (v3.9.2)
+## ADR-040: Workspace Harness를 Prompt/Tool/Session 경계에 강제 적용 (Unreleased, planned v3.9.2)
 
 ### Status
-Implemented
+Implemented in working tree; Unreleased
 
 ### Date
 2026-05-26
@@ -1414,3 +1428,35 @@ ADR-039로 `WorkspaceHarnessSnapshot`이 도입되어 doctor, `/workspace show`,
 - 모델은 매 요청마다 현재 OS/root/sandbox/trust 경계를 명시적으로 받는다.
 - tool runtime은 오래된 snapshot 또는 workspace 밖 `cwd`를 실행 직전에 차단할 수 있다.
 - 세션 로그만으로도 당시 환경 전제를 재구성할 수 있어 사후 감사가 쉬워진다.
+
+---
+
+## ADR-041: Final Multi-Audit Turn 1 안전 경계 우선 복구
+
+### Status
+Accepted for implementation
+
+### Date
+2026-08-23
+
+### Context
+`docs/multi_audit/1/final_audit_report_1.md`는 Git 자동 복구, MCP environment, `@file`, atomic write, custom provider에서 5개 Critical을 확인했고 storage, lifecycle, TUI, test, release 전반에서 19개 Major를 확인했다. 기존 문서는 자동화 편의와 완료 주장을 실제 hard boundary보다 강하게 표현했고, 일부 공개 계약은 모호했다.
+
+### Decision
+1. release identity는 `smlcli 3.9.0`으로 고정하고 Phase 53/54는 Unreleased로 분류한다.
+2. 데이터 손상 또는 credential egress 가능성이 있는 자동화는 안전한 transaction이 증명될 때까지 fail-closed 또는 disabled 상태로 격리한다.
+3. workspace path, network destination, provider adapter, MCP environment, local storage는 각각 독립된 validation boundary와 mutation-sensitive test를 갖는다.
+4. 모호한 file mutation 계약은 create-only/explicit overwrite/exact-one replace의 보수적 의미로 고정한다.
+5. 플랫폼 release target은 musl/MSVC로 단일화하고 GNU/MinGW는 비공식 개발 경로로 내린다.
+6. remediation 완료는 기존 121-test 숫자가 아니라 production path 회귀 테스트, locked build gates, finding별 재감사 ledger로 판정한다.
+
+### Alternatives Considered
+- **기존 자동 Git rollback/commit 유지 후 부분 보강**: concurrent WIP와 pre-staged index를 보존하는 transaction type이 없어 즉시 안전을 증명할 수 없으므로 기각했다.
+- **Custom provider missing adapter를 OpenAI/OpenRouter로 fallback**: credential destination이 바뀌므로 기각했다.
+- **Fetch `AllowAll`을 private/metadata endpoint까지 포함**: agent 입력으로 내부 자원에 접근하는 SSRF 경계를 열기 때문에 기각했다.
+- **문서 주장만 축소하고 runtime defect를 유지**: current user request가 실제 수정과 검증을 요구하므로 기각했다.
+
+### Consequences
+- 일부 opt-in 자동화와 ambiguous mutation 요청은 이전보다 일찍 오류를 반환한다.
+- 사용자 WIP, local files, API credentials의 안전 경계가 편의 기능보다 우선한다.
+- Phase 55 동안 문서, 코드, tests, CI/release가 함께 변경되며 release 판정은 재감사 종료 전까지 HOLD다.

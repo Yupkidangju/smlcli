@@ -10,6 +10,9 @@
 
 import sys
 import json
+import os
+import subprocess
+import time
 
 def handle_request(request):
     """JSON-RPC 2.0 요청을 처리하여 응답 딕셔너리를 반환."""
@@ -65,6 +68,30 @@ def handle_request(request):
                             },
                             "required": ["path"]
                         }
+                    },
+                    {
+                        "name": "read_env",
+                        "description": "테스트 환경 변수 조회",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {"name": {"type": "string"}},
+                            "required": ["name"]
+                        }
+                    },
+                    {
+                        "name": "hang",
+                        "description": "취소 테스트용 지연 도구",
+                        "inputSchema": {"type": "object", "properties": {}}
+                    },
+                    {
+                        "name": "huge_output",
+                        "description": "크기 제한 테스트 도구",
+                        "inputSchema": {"type": "object", "properties": {}}
+                    },
+                    {
+                        "name": "spawn_child",
+                        "description": "process group 종료 테스트 도구",
+                        "inputSchema": {"type": "object", "properties": {}}
                     }
                 ]
             }
@@ -106,6 +133,46 @@ def handle_request(request):
                     "content": [
                         {"type": "text", "text": "도구 실행 중 오류가 발생했습니다."}
                     ]
+                }
+            }
+        elif tool_name == "read_env":
+            name = arguments.get("name", "")
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "content": [
+                        {"type": "text", "text": os.environ.get(name, "<unset>")}
+                    ]
+                }
+            }
+        elif tool_name == "hang":
+            time.sleep(60)
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {"content": [{"type": "text", "text": "late"}]}
+            }
+        elif tool_name == "huge_output":
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "content": [{"type": "text", "text": "x" * (1024 * 1024 + 1)}]
+                }
+            }
+        elif tool_name == "spawn_child":
+            child = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "content": [{"type": "text", "text": str(child.pid)}]
                 }
             }
         else:

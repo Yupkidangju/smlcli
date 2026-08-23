@@ -466,12 +466,12 @@ Composer 우측 끝에는 현재 실행 맥락이 보인다.
 │ [Provider Settings]                                    │
 │  ► Select Provider ───────────────────────────────────┐│
 │    ┌────────────────────────────────────────────────┐ ││
-│    │ 0. OpenRouter                                  │ ││
-│    │ 1. Google (Gemini)                             │ ││
-│    │ 2. OpenAI                                      │ ││
-│    │ 3. Anthropic                                   │ ││
-│    │ 4. Ollama                                      │ ││
-│    │ 5. LM Studio     ◄── [v3.8.1 추가] (인덱스: 5)  │ ││
+│    │ 0. OpenAI                                      │ ││
+│    │ 1. Anthropic                                   │ ││
+│    │ 2. xAI                                         │ ││
+│    │ 3. OpenRouter                                  │ ││
+│    │ 4. Google (Gemini)                             │ ││
+│    │ 5. LM Studio                                   │ ││
 │    │ 6. Custom...                                   │ ││
 │    └────────────────────────────────────────────────┘ ││
 │                                                       ││
@@ -495,7 +495,8 @@ Composer 우측 끝에는 현재 실행 맥락이 보인다.
 
 ### Step 1. Provider 선택
 - 방향키(`↑`, `↓`)를 이용해 리스트에서 커서로 선택
-- 지원 항목: `OpenRouter`, `Google (Gemini)`, `OpenAI`, `Anthropic`, `Ollama`, `LM Studio` [v3.8.0 추가]
+- built-in 지원 항목: `OpenAI`, `Anthropic`, `xAI`, `OpenRouter`, `Google (Gemini)`, `LM Studio`
+- Ollama/vLLM은 `/provider add`로 등록하는 OpenAI-compatible Custom provider다.
 - `Enter` 시 즉시 다음 단계로 전환. (LM Studio 선택 시 API Key 단계를 완전히 건너뛰고 `Base URL 입력` 단계로 분기하며, 그 외 프로바이더는 `API Key 입력` 단계로 전환)
 - Workspace Trust Gate가 끝난 뒤에만 진입한다.
 
@@ -524,8 +525,8 @@ Composer 우측 끝에는 현재 실행 맥락이 보인다.
 - `Safe Starter`
   - shell: Ask
   - write: AlwaysAsk
-  - network: AllowAll
-  - **AllowAll 선택 근거**: FetchURL은 상태 변이(State Mutation) 없는 **읽기 전용 그라운딩 도구**이며, 파일 시스템이나 프로세스에 영향을 주지 않는다. 초보 사용자가 AI의 웹 문서 참조 능력을 즉시 활용할 수 있도록 AllowAll을 기본값으로 채택한다. 외부 URL 접근을 제한하려면 `ProviderOnly`(FetchURL 자동 차단) 또는 `Deny`(전체 네트워크 차단)로 전환할 수 있다.
+  - network: ProviderOnly
+  - FetchURL은 사용자가 명시적으로 `AllowAll`을 선택한 경우에도 public Internet destination만 허용한다.
 
 - `Balanced`
   - shell: SafeOnly

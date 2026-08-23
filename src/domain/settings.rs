@@ -86,6 +86,10 @@ pub struct McpServerConfig {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// MCP child에 추가로 전달할 non-secret parent environment 변수 이름.
+    /// 기본 environment는 McpClient의 고정 allowlist가 소유한다.
+    #[serde(default)]
+    pub allowed_env_vars: Vec<String>,
 }
 
 /// [v3.0.0] Git 통합 설정
@@ -141,7 +145,7 @@ fn default_theme() -> String {
 
 /// [v3.9.0] lang 필드의 기본값: "en"
 fn default_lang() -> String {
-    "en".to_string()
+    crate::tui::i18n::preferred_language_from_env()
 }
 
 /// LM Studio 로컬 base_url의 기본값: "http://localhost:1234/v1"

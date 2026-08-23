@@ -11,6 +11,9 @@ pub struct ToolContext<'a> {
     #[allow(dead_code)] // [v3.7.0] PermissionToken 검증 강화 시 활성화 예정
     pub token: &'a crate::domain::permissions::PermissionToken,
     pub cancel_token: tokio_util::sync::CancellationToken,
+    /// 승인/dispatch 시점의 immutable settings snapshot.
+    pub settings: &'a PersistedSettings,
+    pub event_tx: Option<tokio::sync::mpsc::Sender<crate::app::event_loop::Event>>,
 }
 
 /// [v0.1.0-beta.23] Phase 13: Agentic Autonomy

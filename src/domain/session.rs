@@ -47,6 +47,12 @@ pub struct SessionState {
     pub token_budget_used: u32,
     pub max_token_budget: u32,
     pub needs_auto_compaction: bool,
+    pending_compaction: Option<PendingCompaction>,
+}
+
+struct PendingCompaction {
+    original_messages: Vec<ChatMessage>,
+    compacted_messages: Vec<ChatMessage>,
 }
 
 impl SessionState {
@@ -111,6 +117,7 @@ impl SessionState {
             token_budget_used: 0,
             max_token_budget: 128_000,
             needs_auto_compaction: false,
+            pending_compaction: None,
         }
     }
 
@@ -169,7 +176,10 @@ impl SessionState {
         ((self.estimate_current_tokens() as f64 / self.max_token_budget as f64) * 100.0) as u32
     }
 
-    pub fn extract_for_summary(&mut self) -> Vec<ChatMessage> {
+    pub fn prepare_compaction(&mut self) -> Vec<ChatMessage> {
+        if self.pending_compaction.is_some() {
+            return vec![];
+        }
         if self.messages.len() <= 5 {
             return vec![];
         }
@@ -209,18 +219,38 @@ impl SessionState {
             new_messages.push(self.messages[i].clone());
         }
 
-        self.messages = new_messages;
+        self.pending_compaction = Some(PendingCompaction {
+            original_messages: self.messages.clone(),
+            compacted_messages: new_messages,
+        });
         to_drop
     }
 
-    pub fn apply_summary(&mut self, summary: &str) {
-        for msg in &mut self.messages {
+    pub fn commit_compaction(&mut self, summary: &str) -> Result<(), String> {
+        if summary.trim().is_empty() {
+            self.pending_compaction = None;
+            return Err("빈 context summary는 적용할 수 없습니다".to_string());
+        }
+        let Some(mut pending) = self.pending_compaction.take() else {
+            return Err("pending context compaction이 없습니다".to_string());
+        };
+        if self.messages != pending.original_messages {
+            return Err("요약 중 session messages가 변경되어 compaction을 취소합니다".to_string());
+        }
+        for msg in &mut pending.compacted_messages {
             if msg.content.as_deref() == Some("[Summary Pending...]") {
                 msg.content = Some(format!("[Context Compaction Summary]\n{}", summary));
                 msg.pinned = true;
-                break;
+                self.messages = pending.compacted_messages;
+                self.needs_auto_compaction = false;
+                return Ok(());
             }
         }
+        Err("compaction placeholder가 없습니다".to_string())
+    }
+
+    pub fn abort_compaction(&mut self) {
+        self.pending_compaction = None;
     }
 
     #[allow(dead_code)] // [v3.7.0] 토큰 예산 UI 표시 시 활성화 예정

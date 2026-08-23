@@ -34,6 +34,7 @@ pub struct HarnessPreflightInput {
     pub requested_cwd: Option<String>,
     pub requested_paths: Vec<String>,
     pub snapshot: WorkspaceHarnessSnapshot,
+    pub baseline: Option<WorkspaceHarnessSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,6 +164,7 @@ impl HarnessPreflightInput {
     pub fn from_tool_call(
         call: &crate::domain::tool_result::ToolCall,
         settings: Option<&PersistedSettings>,
+        baseline: Option<&WorkspaceHarnessSnapshot>,
     ) -> Self {
         let command = call
             .args
@@ -190,6 +192,7 @@ impl HarnessPreflightInput {
             requested_cwd,
             requested_paths,
             snapshot: WorkspaceHarnessSnapshot::collect(settings),
+            baseline: baseline.cloned(),
         }
     }
 }
@@ -221,6 +224,15 @@ pub fn evaluate_preflight(input: &HarnessPreflightInput) -> HarnessPreflightDeci
         };
     }
 
+    if let Some(baseline) = &input.baseline {
+        let drift = harness_drift_fields(baseline, &input.snapshot);
+        if !drift.is_empty() {
+            return HarnessPreflightDecision::Deny {
+                reason: format!("workspace harness baseline drift: {}", drift.join(", ")),
+            };
+        }
+    }
+
     if let Some(cwd) = &input.requested_cwd
         && let Some(reason) = path_outside_workspace(cwd, &input.snapshot.canonical_root)
     {
@@ -240,6 +252,29 @@ pub fn evaluate_preflight(input: &HarnessPreflightInput) -> HarnessPreflightDeci
     }
 
     HarnessPreflightDecision::Allow
+}
+
+pub fn harness_drift_fields(
+    baseline: &WorkspaceHarnessSnapshot,
+    current: &WorkspaceHarnessSnapshot,
+) -> Vec<&'static str> {
+    let mut drift = Vec::new();
+    if baseline.canonical_root != current.canonical_root {
+        drift.push("canonical_root");
+    }
+    if baseline.trust_state != current.trust_state {
+        drift.push("trust_state");
+    }
+    if baseline.denied != current.denied {
+        drift.push("denied");
+    }
+    if baseline.sandbox_enabled != current.sandbox_enabled {
+        drift.push("sandbox_enabled");
+    }
+    if baseline.sandbox_guest_root != current.sandbox_guest_root {
+        drift.push("sandbox_guest_root");
+    }
+    drift
 }
 
 pub fn detect_command_os_mismatch(os: &str, command: &str) -> Option<String> {

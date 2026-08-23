@@ -4,6 +4,7 @@
 
 use anyhow::Result;
 use crossterm::{
+    cursor::Show,
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -13,18 +14,43 @@ use std::io::{self, Stdout};
 
 pub type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TerminalInitState {
+    pub raw_mode: bool,
+    pub alternate_screen: bool,
+    pub mouse_capture: bool,
+}
+
 pub struct TerminalGuard {
     pub terminal: TuiTerminal,
+    state: TerminalInitState,
 }
 
 impl TerminalGuard {
     pub fn init() -> Result<Self> {
+        let mut state = TerminalInitState::default();
         enable_raw_mode()?;
+        state.raw_mode = true;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        if let Err(error) = execute!(stdout, EnterAlternateScreen) {
+            let _ = restore_terminal_state(state);
+            return Err(error.into());
+        }
+        state.alternate_screen = true;
+        if let Err(error) = execute!(stdout, EnableMouseCapture) {
+            let _ = restore_terminal_state(state);
+            return Err(error.into());
+        }
+        state.mouse_capture = true;
         let backend = CrosstermBackend::new(stdout);
-        let terminal = Terminal::new(backend)?;
-        Ok(Self { terminal })
+        let terminal = match Terminal::new(backend) {
+            Ok(terminal) => terminal,
+            Err(error) => {
+                let _ = restore_terminal_state(state);
+                return Err(error.into());
+            }
+        };
+        Ok(Self { terminal, state })
     }
 
     /// 서브 프로세스 종료 직후 터미널 잔상(Ghosting) 제거 및 커서 명시적 재설정.
@@ -42,7 +68,9 @@ impl TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = restore_terminal();
+        let _ = self.terminal.show_cursor();
+        let _ = restore_terminal_state(self.state);
+        self.state = TerminalInitState::default();
     }
 }
 
@@ -60,22 +88,44 @@ impl std::ops::DerefMut for TerminalGuard {
 }
 
 pub fn restore_terminal() -> Result<()> {
-    disable_raw_mode()?;
+    restore_terminal_state(TerminalInitState {
+        raw_mode: true,
+        alternate_screen: true,
+        mouse_capture: true,
+    })
+}
+
+fn restore_terminal_state(state: TerminalInitState) -> Result<()> {
     let mut stdout = io::stdout();
-    execute!(stdout, LeaveAlternateScreen, DisableMouseCapture)?;
-    Ok(())
+    let mut first_error: Option<anyhow::Error> = None;
+    if let Err(error) = execute!(stdout, Show) {
+        first_error = Some(error.into());
+    }
+    if state.mouse_capture
+        && let Err(error) = execute!(stdout, DisableMouseCapture)
+        && first_error.is_none()
+    {
+        first_error = Some(error.into());
+    }
+    if state.alternate_screen
+        && let Err(error) = execute!(stdout, LeaveAlternateScreen)
+        && first_error.is_none()
+    {
+        first_error = Some(error.into());
+    }
+    if state.raw_mode
+        && let Err(error) = disable_raw_mode()
+        && first_error.is_none()
+    {
+        first_error = Some(error.into());
+    }
+    first_error.map_or(Ok(()), Err)
 }
 
 pub fn install_panic_hook() {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
-        // [v1.3.0] 패닉 시 즉각적인 터미널 복구 강제
-        let _ = crossterm::terminal::disable_raw_mode();
-        let _ = execute!(
-            std::io::stdout(),
-            crossterm::terminal::LeaveAlternateScreen,
-            crossterm::event::DisableMouseCapture
-        );
+        let _ = restore_terminal();
         original_hook(panic_info);
     }));
 }

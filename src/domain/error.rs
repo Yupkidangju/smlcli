@@ -98,6 +98,8 @@ impl ToolError {
 #[derive(Error, Debug, Clone)]
 #[allow(dead_code)]
 pub enum ProviderError {
+    #[error("프로바이더 설정 오류: {0}")]
+    Configuration(String),
     #[error("인증 실패: {0}")]
     AuthenticationFailed(String),
     #[error("네트워크 연결 실패: {0}")]

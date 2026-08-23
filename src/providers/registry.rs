@@ -58,6 +58,71 @@ pub enum AuthStrategy {
     CustomHeader(String),
 }
 
+struct FailClosedProviderAdapter {
+    reason: String,
+}
+
+impl FailClosedProviderAdapter {
+    fn new(reason: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+        }
+    }
+
+    fn error(&self) -> ProviderError {
+        ProviderError::Configuration(self.reason.clone())
+    }
+}
+
+impl ProviderAdapter for FailClosedProviderAdapter {
+    fn validate_credentials<'a>(
+        &'a self,
+        _api_key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ProviderError>> + Send + 'a>> {
+        let error = self.error();
+        Box::pin(async move { Err(error) })
+    }
+
+    fn chat<'a>(
+        &'a self,
+        _api_key: &'a str,
+        _req: crate::providers::types::ChatRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<crate::providers::types::ChatResponse, ProviderError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        let error = self.error();
+        Box::pin(async move { Err(error) })
+    }
+
+    fn chat_stream<'a>(
+        &'a self,
+        _api_key: &'a str,
+        _req: crate::providers::types::ChatRequest,
+        _delta_tx: tokio::sync::mpsc::Sender<String>,
+    ) -> Pin<
+        Box<
+            dyn Future<Output = Result<crate::providers::types::ChatResponse, ProviderError>>
+                + Send
+                + 'a,
+        >,
+    > {
+        let error = self.error();
+        Box::pin(async move { Err(error) })
+    }
+
+    fn fetch_models<'a>(
+        &'a self,
+        _api_key: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<String>, ProviderError>> + Send + 'a>> {
+        let error = self.error();
+        Box::pin(async move { Err(error) })
+    }
+}
+
 #[derive(Clone)]
 pub struct OpenAICompatAdapter {
     client: Client,
@@ -66,9 +131,16 @@ pub struct OpenAICompatAdapter {
 }
 
 impl OpenAICompatAdapter {
+    fn http_client() -> Client {
+        Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("reqwest client with redirect disabled")
+    }
+
     pub fn new(base_url: String) -> Self {
         Self {
-            client: Client::new(),
+            client: Self::http_client(),
             base_url,
             auth_strategy: AuthStrategy::Bearer,
         }
@@ -77,7 +149,7 @@ impl OpenAICompatAdapter {
     /// [v2.5.2] 커스텀 인증 전략으로 어댑터 생성
     pub fn with_auth(base_url: String, auth_strategy: AuthStrategy) -> Self {
         Self {
-            client: Client::new(),
+            client: Self::http_client(),
             base_url,
             auth_strategy,
         }
@@ -196,7 +268,8 @@ impl ProviderAdapter for OpenAICompatAdapter {
 
             if !response.status().is_success() {
                 let code = response.status().as_u16();
-                let err_text = response.text().await.unwrap_or_default();
+                let err_text =
+                    crate::providers::streaming::bounded_error_body(response, &[api_key]).await;
                 return Err(ProviderError::ApiResponse {
                     code,
                     message: format!("API Error: {}", err_text),
@@ -216,10 +289,8 @@ impl ProviderAdapter for OpenAICompatAdapter {
                 content: String,
             }
 
-            let mut parsed: OpenRouterRes = response
-                .json()
-                .await
-                .map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
+            let mut parsed: OpenRouterRes =
+                crate::providers::streaming::bounded_json_response(response).await?;
             let reply_content = if !parsed.choices.is_empty() {
                 parsed.choices.remove(0).message.content
             } else {
@@ -318,77 +389,16 @@ impl ProviderAdapter for OpenAICompatAdapter {
 
             if !response.status().is_success() {
                 let code = response.status().as_u16();
-                let err_text = response.text().await.unwrap_or_default();
+                let err_text =
+                    crate::providers::streaming::bounded_error_body(response, &[api_key]).await;
                 return Err(ProviderError::ApiResponse {
                     code,
                     message: format!("Stream API Error: {}", err_text),
                 });
             }
 
-            // SSE 라인 단위 파싱
-            let mut full_content = String::new();
-            let mut tool_calls_map: std::collections::HashMap<
-                usize,
-                crate::providers::types::ToolCallRequest,
-            > = std::collections::HashMap::new();
-            let body = response
-                .text()
-                .await
-                .map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
-            for line in body.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with(':') {
-                    continue;
-                }
-                if let Some(data) = line.strip_prefix("data: ") {
-                    if data.trim() == "[DONE]" {
-                        break;
-                    }
-                    // SSE delta JSON 파싱
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                        let delta = &parsed["choices"][0]["delta"];
-                        if let Some(content) = delta["content"].as_str() {
-                            full_content.push_str(content);
-                            let _ = delta_tx.send(content.to_string()).await;
-                        }
-                        if let Some(tc_array) = delta["tool_calls"].as_array() {
-                            for tc_val in tc_array {
-                                if let Some(idx) = tc_val["index"].as_u64().map(|i| i as usize) {
-                                    let entry = tool_calls_map.entry(idx).or_insert_with(|| {
-                                        crate::providers::types::ToolCallRequest {
-                                            id: tc_val["id"]
-                                                .as_str()
-                                                .unwrap_or_default()
-                                                .to_string(),
-                                            r#type: "function".to_string(),
-                                            function: crate::providers::types::FunctionCall {
-                                                name: tc_val["function"]["name"]
-                                                    .as_str()
-                                                    .unwrap_or_default()
-                                                    .to_string(),
-                                                arguments: String::new(),
-                                            },
-                                        }
-                                    });
-                                    if let Some(arg_chunk) =
-                                        tc_val["function"]["arguments"].as_str()
-                                    {
-                                        entry.function.arguments.push_str(arg_chunk);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            let tool_calls = if tool_calls_map.is_empty() {
-                None
-            } else {
-                let mut tcs: Vec<_> = tool_calls_map.into_iter().collect();
-                tcs.sort_by_key(|k| k.0);
-                Some(tcs.into_iter().map(|(_, v)| v).collect())
-            };
+            let (full_content, tool_calls) =
+                crate::providers::streaming::openai_compatible_stream(response, delta_tx).await?;
 
             let reply = crate::providers::types::ChatMessage {
                 role: crate::providers::types::Role::Assistant,
@@ -437,10 +447,8 @@ impl ProviderAdapter for OpenAICompatAdapter {
                 data: Vec<ModelObj>,
             }
 
-            let parsed: ModelRes = response
-                .json()
-                .await
-                .map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
+            let parsed: ModelRes =
+                crate::providers::streaming::bounded_json_response(response).await?;
             Ok(parsed.data.into_iter().map(|m| m.id).collect())
         })
     }
@@ -525,7 +533,8 @@ impl ProviderAdapter for GeminiAdapter {
 
             if !response.status().is_success() {
                 let code = response.status().as_u16();
-                let err_text = response.text().await.unwrap_or_default();
+                let err_text =
+                    crate::providers::streaming::bounded_error_body(response, &[api_key]).await;
                 return Err(ProviderError::ApiResponse {
                     code,
                     message: format!("Gemini Error: {}", err_text),
@@ -546,10 +555,8 @@ impl ProviderAdapter for GeminiAdapter {
                 tool_calls: Option<Vec<crate::providers::types::ToolCallRequest>>,
             }
 
-            let mut parsed: GeminiRes = response
-                .json()
-                .await
-                .map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
+            let mut parsed: GeminiRes =
+                crate::providers::streaming::bounded_json_response(response).await?;
 
             let (reply_content, tool_calls) = if !parsed.choices.is_empty() {
                 let msg = parsed.choices.remove(0).message;
@@ -617,75 +624,16 @@ impl ProviderAdapter for GeminiAdapter {
 
             if !response.status().is_success() {
                 let code = response.status().as_u16();
-                let err_text = response.text().await.unwrap_or_default();
+                let err_text =
+                    crate::providers::streaming::bounded_error_body(response, &[api_key]).await;
                 return Err(ProviderError::ApiResponse {
                     code,
                     message: format!("Gemini Stream Error: {}", err_text),
                 });
             }
 
-            let mut full_content = String::new();
-            let mut tool_calls_map: std::collections::HashMap<
-                usize,
-                crate::providers::types::ToolCallRequest,
-            > = std::collections::HashMap::new();
-            let body = response
-                .text()
-                .await
-                .map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
-            for line in body.lines() {
-                let line = line.trim();
-                if line.is_empty() || line.starts_with(':') {
-                    continue;
-                }
-                if let Some(data) = line.strip_prefix("data: ") {
-                    if data.trim() == "[DONE]" {
-                        break;
-                    }
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data) {
-                        let delta = &parsed["choices"][0]["delta"];
-                        if let Some(content) = delta["content"].as_str() {
-                            full_content.push_str(content);
-                            let _ = delta_tx.send(content.to_string()).await;
-                        }
-                        if let Some(tc_array) = delta["tool_calls"].as_array() {
-                            for tc_val in tc_array {
-                                if let Some(idx) = tc_val["index"].as_u64().map(|i| i as usize) {
-                                    let entry = tool_calls_map.entry(idx).or_insert_with(|| {
-                                        crate::providers::types::ToolCallRequest {
-                                            id: tc_val["id"]
-                                                .as_str()
-                                                .unwrap_or_default()
-                                                .to_string(),
-                                            r#type: "function".to_string(),
-                                            function: crate::providers::types::FunctionCall {
-                                                name: tc_val["function"]["name"]
-                                                    .as_str()
-                                                    .unwrap_or_default()
-                                                    .to_string(),
-                                                arguments: String::new(),
-                                            },
-                                        }
-                                    });
-                                    if let Some(arg_chunk) =
-                                        tc_val["function"]["arguments"].as_str()
-                                    {
-                                        entry.function.arguments.push_str(arg_chunk);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            let tool_calls = if tool_calls_map.is_empty() {
-                None
-            } else {
-                let mut tcs: Vec<_> = tool_calls_map.into_iter().collect();
-                tcs.sort_by_key(|k| k.0);
-                Some(tcs.into_iter().map(|(_, v)| v).collect())
-            };
+            let (full_content, tool_calls) =
+                crate::providers::streaming::openai_compatible_stream(response, delta_tx).await?;
 
             let reply = crate::providers::types::ChatMessage {
                 role: crate::providers::types::Role::Assistant,
@@ -736,10 +684,8 @@ impl ProviderAdapter for GeminiAdapter {
                 models: Vec<ModelObj>,
             }
 
-            let parsed: ModelRes = response
-                .json()
-                .await
-                .map_err(|e| ProviderError::NetworkFailure(e.to_string()))?;
+            let parsed: ModelRes =
+                crate::providers::streaming::bounded_json_response(response).await?;
             // [v0.1.0-beta.7] Gemini API는 name을 "models/gemini-..." 형태로 반환하지만,
             // OpenAI 호환 엔드포인트의 chat/completions는 bare model id (예: "gemini-2.0-flash")를 요구함.
             // 공식 문서(https://ai.google.dev/gemini-api/docs/openai)의 예시: model="gemini-3-flash-preview"
@@ -803,35 +749,97 @@ impl ProviderRegistry {
     pub fn register_custom_providers(
         &mut self,
         configs: &[crate::domain::provider::CustomProviderConfig],
-    ) {
+    ) -> Result<(), ProviderError> {
+        let mut next = std::collections::HashMap::new();
         for config in configs {
-            // [v2.5.2] 감사 HIGH-2: auth_type → AuthStrategy 변환.
-            // None이면 헤더 없이, CustomHeader면 지정된 헤더로, 기본은 Bearer.
+            if config.id.is_empty()
+                || config.id.len() > 64
+                || !config
+                    .id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+            {
+                return Err(ProviderError::Configuration(format!(
+                    "custom provider id가 유효하지 않습니다: {}",
+                    config.id
+                )));
+            }
+            if next.contains_key(&config.id) {
+                return Err(ProviderError::Configuration(format!(
+                    "custom provider id가 중복되었습니다: {}",
+                    config.id
+                )));
+            }
+            let parsed_url = reqwest::Url::parse(&config.base_url).map_err(|error| {
+                ProviderError::Configuration(format!(
+                    "custom provider base_url이 유효하지 않습니다 ({}): {error}",
+                    config.id
+                ))
+            })?;
+            if !matches!(parsed_url.scheme(), "http" | "https")
+                || !parsed_url.username().is_empty()
+                || parsed_url.password().is_some()
+                || parsed_url.query().is_some()
+                || parsed_url.fragment().is_some()
+                || parsed_url.host_str().is_none()
+            {
+                return Err(ProviderError::Configuration(format!(
+                    "custom provider base_url은 credential/query/fragment 없는 http(s) origin이어야 합니다: {}",
+                    config.id
+                )));
+            }
+
             let auth_strategy = match config.auth_type.to_lowercase().as_str() {
                 "none" => AuthStrategy::None,
                 "customheader" => {
-                    let header_name = config
-                        .auth_header_name
-                        .clone()
-                        .unwrap_or_else(|| "X-API-Key".to_string());
+                    let header_name = config.auth_header_name.clone().ok_or_else(|| {
+                        ProviderError::Configuration(format!(
+                            "CustomHeader에는 auth_header_name이 필요합니다: {}",
+                            config.id
+                        ))
+                    })?;
+                    reqwest::header::HeaderName::from_bytes(header_name.as_bytes()).map_err(
+                        |_| {
+                            ProviderError::Configuration(format!(
+                                "auth_header_name이 유효하지 않습니다: {}",
+                                config.id
+                            ))
+                        },
+                    )?;
                     AuthStrategy::CustomHeader(header_name)
                 }
-                _ => AuthStrategy::Bearer, // "Bearer" 또는 기타
+                "bearer" => AuthStrategy::Bearer,
+                _ => {
+                    return Err(ProviderError::Configuration(format!(
+                        "지원하지 않는 custom auth_type입니다: {}",
+                        config.auth_type
+                    )));
+                }
             };
 
             let adapter: Arc<dyn ProviderAdapter> = match config.dialect {
-                crate::domain::provider::ToolDialect::OpenAICompat => Arc::new(
-                    OpenAICompatAdapter::with_auth(config.base_url.clone(), auth_strategy),
-                ),
-                crate::domain::provider::ToolDialect::Anthropic => Arc::new(
-                    crate::providers::anthropic::AnthropicAdapter::new(config.base_url.clone()),
-                ),
+                crate::domain::provider::ToolDialect::OpenAICompat => {
+                    Arc::new(OpenAICompatAdapter::with_auth(
+                        config.base_url.trim_end_matches('/').to_string(),
+                        auth_strategy,
+                    ))
+                }
+                crate::domain::provider::ToolDialect::Anthropic => {
+                    Arc::new(crate::providers::anthropic::AnthropicAdapter::new(
+                        config.base_url.trim_end_matches('/').to_string(),
+                    ))
+                }
                 crate::domain::provider::ToolDialect::Gemini => {
-                    Arc::new(GeminiAdapter::new()) // Gemini는 baseUrl 변경이 지원 안 되지만 일단 더미 매핑
+                    return Err(ProviderError::Configuration(format!(
+                        "custom Gemini dialect는 configured base_url을 보장할 수 없어 지원하지 않습니다: {}",
+                        config.id
+                    )));
                 }
             };
-            self.custom_adapters.insert(config.id.clone(), adapter);
+            next.insert(config.id.clone(), adapter);
         }
+        self.custom_adapters = next;
+        Ok(())
     }
 
     // [v3.7.2] LM Studio의 base_url을 실시간 갱신하는 런타임 제어 함수 구현
@@ -843,7 +851,14 @@ impl ProviderRegistry {
 
     // [v2.5.0] cfg별 분리 구현으로 #[allow(unused_variables)] 제거
     #[cfg(test)]
-    pub fn get_adapter(&self, _kind: &ProviderKind) -> Arc<dyn ProviderAdapter> {
+    pub fn get_adapter(&self, kind: &ProviderKind) -> Arc<dyn ProviderAdapter> {
+        if let ProviderKind::Custom(id) = kind
+            && !self.custom_adapters.contains_key(id)
+        {
+            return Arc::new(FailClosedProviderAdapter::new(format!(
+                "custom provider adapter가 등록되지 않았습니다: {id}"
+            )));
+        }
         Arc::new(MockProvider)
     }
 
@@ -860,11 +875,13 @@ impl ProviderRegistry {
                 let adapter = self.lmstudio.read().unwrap().clone();
                 Arc::new(adapter)
             }
-            ProviderKind::Custom(id) => self
-                .custom_adapters
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| self.openai.clone()),
+            ProviderKind::Custom(id) => {
+                self.custom_adapters.get(id).cloned().unwrap_or_else(|| {
+                    Arc::new(FailClosedProviderAdapter::new(format!(
+                        "custom provider adapter가 등록되지 않았습니다: {id}"
+                    )))
+                })
+            }
         }
     }
 }
@@ -954,15 +971,25 @@ pub fn get_adapter(kind: &ProviderKind) -> Arc<dyn ProviderAdapter> {
     get_registry().read().unwrap().get_adapter(kind)
 }
 
-pub fn reload_providers() {
-    *get_registry().write().unwrap() = ProviderRegistry::new();
+pub fn reload_providers(
+    settings: &crate::domain::settings::PersistedSettings,
+) -> Result<(), ProviderError> {
+    let mut next = ProviderRegistry::new();
+    next.register_custom_providers(&settings.custom_providers)?;
+    if let Some(base_url) = &settings.lmstudio_base_url {
+        next.update_lmstudio_base_url(base_url);
+    }
+    *get_registry().write().unwrap() = next;
+    Ok(())
 }
 
-pub fn update_custom_providers(configs: &[crate::domain::provider::CustomProviderConfig]) {
+pub fn update_custom_providers(
+    configs: &[crate::domain::provider::CustomProviderConfig],
+) -> Result<(), ProviderError> {
     get_registry()
         .write()
         .unwrap()
-        .register_custom_providers(configs);
+        .register_custom_providers(configs)
 }
 
 // [v3.7.2] 전역 레지스트리에 LM Studio base_url을 바인딩하기 위한 공용 인터페이스

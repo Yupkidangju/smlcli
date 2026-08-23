@@ -21,7 +21,9 @@ pub enum FetchSource {
 // [v3.7.0] ChatStarted, ToolQueued, ToolStarted, ToolSummaryReady variant는
 // 이벤트 기반 리팩토링 시 활성화 예정. 현재 세단화된 핸들러 방식으로 동작 중.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+// 액션은 단일 소비자 채널에서 move되며, 큰 변형은 설정/MCP 소유권을 한 번만
+// 전달한다. 모든 액션에 힙 할당을 강제하는 것보다 현재 표현이 단순하고 안전하다.
+#[allow(dead_code, clippy::large_enum_variant)]
 pub enum Action {
     // === 채팅 라이프사이클 ===
     /// [v1.3.0] 파일 멘션 파싱이 완료된 텍스트를 LLM에 제출
@@ -73,10 +75,10 @@ pub enum Action {
     CredentialValidated(Result<(), crate::domain::error::ProviderError>),
 
     /// [v0.1.0-beta.27] 비동기 Repo Map 갱신 완료.
-    RepoMapReady(String),
+    RepoMapReady(u64, String),
 
     /// [v0.1.0-beta.27] Repo Map 갱신 실패.
-    RepoMapFailed(String),
+    RepoMapFailed(u64, String),
 
     /// 컨텍스트 요약 성공
     ContextSummaryOk(String),
@@ -115,7 +117,7 @@ pub enum Action {
     QuestionnaireCompleted,
 
     /// [v3.7.1] 설정 마법사 저장 완료 이벤트
-    WizardSaveFinished(Result<(), String>),
+    WizardSaveFinished(Result<crate::domain::settings::PersistedSettings, String>),
     /// [v3.7.1] 일반 설정 비동기 저장 완료 이벤트
     ConfigSaveFinished(Result<(), String>),
 }

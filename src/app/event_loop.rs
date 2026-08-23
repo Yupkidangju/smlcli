@@ -9,7 +9,9 @@ use tokio::sync::mpsc;
 use tokio::task;
 
 // [v3.7.0] Resize variant의 필드는 이벤트 라우팅에서 참조되지만 clippy가 직접 읽기를 감지 못함.
-#[allow(dead_code)]
+// 이벤트는 bounded 단일 소비자 채널에서 move된다. Action 전체를 boxing하면 모든
+// 키/도구 이벤트에 불필요한 할당이 추가되므로 의도적으로 인라인 보관한다.
+#[allow(dead_code, clippy::large_enum_variant)]
 pub enum Event {
     Tick,
     Input(KeyEvent),
@@ -23,6 +25,8 @@ pub enum Event {
 
 pub struct EventLoop {
     rx: mpsc::Receiver<Event>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    tasks: Vec<task::JoinHandle<()>>,
 }
 
 impl EventLoop {
@@ -30,11 +34,13 @@ impl EventLoop {
         let (tx, rx) = mpsc::channel(100);
         let tick_tx = tx.clone();
         let app_tx = tx.clone();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         // 타이머 태스크: tick_rate 간격으로 Tick 이벤트 전송
-        task::spawn(async move {
+        let tick_stop = stop.clone();
+        let tick_task = task::spawn(async move {
             let mut interval = tokio::time::interval(tick_rate);
-            loop {
+            while !tick_stop.load(std::sync::atomic::Ordering::Acquire) {
                 interval.tick().await;
                 if tick_tx.send(Event::Tick).await.is_err() {
                     break;
@@ -44,8 +50,9 @@ impl EventLoop {
 
         // Crossterm 이벤트 폴링 (블로킹 태스크)
         // [v0.1.0-beta.24] 키 이벤트와 마우스 이벤트를 모두 수신
-        task::spawn_blocking(move || {
-            loop {
+        let input_stop = stop.clone();
+        let input_task = task::spawn_blocking(move || {
+            while !input_stop.load(std::sync::atomic::Ordering::Acquire) {
                 if event::poll(Duration::from_millis(50)).unwrap_or(false) {
                     match event::read() {
                         Ok(CrosstermEvent::Key(key)) if key.kind == KeyEventKind::Press => {
@@ -71,7 +78,7 @@ impl EventLoop {
 
         // [v1.4.0] 시스템 신호 (SIGINT, SIGTERM) 수신 시 Graceful Shutdown (Event::Quit 전송)
         let signal_tx = app_tx.clone();
-        task::spawn(async move {
+        let signal_task = task::spawn(async move {
             #[cfg(unix)]
             {
                 let mut sigterm =
@@ -89,7 +96,14 @@ impl EventLoop {
             let _ = signal_tx.send(Event::Quit).await;
         });
 
-        (Self { rx }, app_tx)
+        (
+            Self {
+                rx,
+                stop,
+                tasks: vec![tick_task, input_task, signal_task],
+            },
+            app_tx,
+        )
     }
 
     pub async fn next(&mut self) -> Result<Event> {
@@ -97,5 +111,24 @@ impl EventLoop {
             .recv()
             .await
             .ok_or_else(|| anyhow::anyhow!("Event channel closed"))
+    }
+
+    pub async fn shutdown(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        self.rx.close();
+        let tasks = std::mem::take(&mut self.tasks);
+        for task in tasks {
+            task.abort();
+            let _ = tokio::time::timeout(std::time::Duration::from_millis(250), task).await;
+        }
+    }
+}
+
+impl Drop for EventLoop {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Release);
+        for task in &self.tasks {
+            task.abort();
+        }
     }
 }

@@ -61,6 +61,9 @@ pub struct RepoMapState {
     pub is_loading: bool,
     pub stale: bool,
     pub last_error: Option<String>,
+    pub desired_revision: u64,
+    pub loading_revision: Option<u64>,
+    pub applied_revision: u64,
 }
 
 impl RepoMapState {
@@ -72,29 +75,48 @@ impl RepoMapState {
         self.cached.is_none() || self.stale
     }
 
-    pub fn begin_refresh(&mut self) -> bool {
+    pub fn begin_refresh(&mut self) -> Option<u64> {
         if self.is_loading || !self.should_refresh() {
-            return false;
+            return None;
         }
         self.is_loading = true;
         self.last_error = None;
-        true
+        let revision = self.desired_revision.max(1);
+        self.loading_revision = Some(revision);
+        Some(revision)
     }
 
     pub fn mark_stale(&mut self) {
         self.stale = true;
+        self.desired_revision = self.desired_revision.wrapping_add(1).max(1);
     }
 
-    pub fn finish_success(&mut self, repo_map: String) {
+    pub fn finish_success(&mut self, revision: u64, repo_map: String) -> bool {
+        if self.loading_revision != Some(revision) || revision != self.desired_revision.max(1) {
+            if self.loading_revision == Some(revision) {
+                self.is_loading = false;
+                self.loading_revision = None;
+            }
+            self.stale = true;
+            return false;
+        }
         self.cached = Some(repo_map);
         self.is_loading = false;
+        self.loading_revision = None;
         self.stale = false;
+        self.applied_revision = revision;
         self.last_error = None;
+        true
     }
 
-    pub fn finish_error(&mut self, error: String) {
+    pub fn finish_error(&mut self, revision: u64, error: String) -> bool {
+        if self.loading_revision != Some(revision) {
+            return false;
+        }
         self.is_loading = false;
+        self.loading_revision = None;
         self.last_error = Some(error);
+        true
     }
 }
 

@@ -28,6 +28,7 @@ impl GitEngine {
     /// 커밋 메시지: "{prefix}{tool_name}: {파일 경로 요약}"
     /// [v2.5.3] 감사 MEDIUM-2: files가 비어있으면 WIP 혼입 방지를 위해 즉시 skip.
     /// 기존 git add -u fallback은 사용자 WIP를 포함할 위험이 있어 제거.
+    #[cfg(test)]
     pub fn auto_commit(cwd: &str, tool_name: &str, files: &[&str], prefix: &str) -> Result<String> {
         // 1) 파일 목록이 비어있으면 skip (WIP 보호)
         if files.is_empty() {
@@ -75,10 +76,14 @@ impl GitEngine {
         let message = format!("{}{}: {}", prefix, tool_name, files_summary);
 
         // 4) 커밋 실행
-        let commit_status = Command::new("git")
-            .args(["commit", "-m", &message])
-            .current_dir(cwd)
-            .status()?;
+        // 기존 index에 stage되어 있던 사용자 변경은 commit 대상에서 제외한다.
+        // `--only`는 지정 path의 working-tree content만 커밋하고 unrelated
+        // staged entries를 index에 보존한다. `--`는 dash로 시작하는 path를
+        // option으로 해석하지 않게 하는 hard boundary다.
+        let mut commit = Command::new("git");
+        commit.args(["commit", "--only", "-m", &message, "--"]);
+        commit.args(files);
+        let commit_status = commit.current_dir(cwd).status()?;
 
         if !commit_status.success() {
             return Err(anyhow::anyhow!("git commit failed"));

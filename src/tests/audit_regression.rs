@@ -584,14 +584,12 @@ fn test_session_logger_append_and_restore() {
     use crate::infra::session_log::SessionLogger;
     use crate::providers::types::{ChatMessage, Role};
 
-    let dir = std::env::temp_dir().join("smlcli_test_session_1");
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("test_session.jsonl");
-    let _ = std::fs::remove_file(&path);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session_1_abcdef.jsonl");
 
     // 새 파일 생성 후 로거 초기화
     std::fs::File::create(&path).unwrap();
-    let logger = SessionLogger::from_file(path.clone()).unwrap();
+    let logger = SessionLogger::from_file_in(path.clone(), dir.path()).unwrap();
 
     // 메시지 2건 기록
     let msg1 = ChatMessage {
@@ -620,10 +618,6 @@ fn test_session_logger_append_and_restore() {
         messages[1].content.as_deref().unwrap_or_default(),
         "hi there"
     );
-
-    // 정리
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_dir(&dir);
 }
 
 /// JSONL 빈 파일 restore 시 0건 반환
@@ -631,18 +625,14 @@ fn test_session_logger_append_and_restore() {
 fn test_session_logger_empty_file() {
     use crate::infra::session_log::SessionLogger;
 
-    let dir = std::env::temp_dir().join("smlcli_test_session_2");
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("empty.jsonl");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session_2_abcdef.jsonl");
     std::fs::File::create(&path).unwrap();
 
-    let logger = SessionLogger::from_file(path.clone()).unwrap();
+    let logger = SessionLogger::from_file_in(path.clone(), dir.path()).unwrap();
     let (messages, errors) = logger.restore_messages().unwrap();
     assert_eq!(messages.len(), 0);
     assert_eq!(errors, 0);
-
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_dir(&dir);
 }
 
 /// JSONL 손상된 라인이 있어도 나머지는 정상 복원
@@ -651,9 +641,8 @@ fn test_session_logger_corrupted_line_skipped() {
     use crate::infra::session_log::SessionLogger;
     use crate::providers::types::{ChatMessage, Role};
 
-    let dir = std::env::temp_dir().join("smlcli_test_session_3");
-    let _ = std::fs::create_dir_all(&dir);
-    let path = dir.join("corrupted.jsonl");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("session_3_abcdef.jsonl");
 
     // 정상 1줄 + 손상 1줄 + 정상 1줄
     let msg = ChatMessage {
@@ -664,7 +653,7 @@ fn test_session_logger_corrupted_line_skipped() {
         pinned: false,
     };
     std::fs::File::create(&path).unwrap();
-    let logger = SessionLogger::from_file(path.clone()).unwrap();
+    let logger = SessionLogger::from_file_in(path.clone(), dir.path()).unwrap();
     logger.append_message(&msg).unwrap();
 
     // 손상된 라인 직접 추가
@@ -681,9 +670,6 @@ fn test_session_logger_corrupted_line_skipped() {
     let (messages, errors) = logger.restore_messages().unwrap();
     assert_eq!(messages.len(), 2, "정상 2건만 복원");
     assert_eq!(errors, 1, "손상 1건 건너뛰기");
-
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_dir(&dir);
 }
 
 /// from_file: 존재하지 않는 파일은 에러
@@ -1585,16 +1571,14 @@ async fn test_auto_verify_abort_integrated_event_flow() {
 #[test]
 fn test_repo_map_state_refresh_lifecycle() {
     let mut state = crate::domain::repo_map::RepoMapState::new();
+    let revision = state.begin_refresh().expect("refresh revision");
+    assert!(revision >= 1, "빈 캐시는 즉시 refresh를 시작해야 함");
     assert!(
-        state.begin_refresh(),
-        "빈 캐시는 즉시 refresh를 시작해야 함"
-    );
-    assert!(
-        !state.begin_refresh(),
+        state.begin_refresh().is_none(),
         "로딩 중에는 중복 refresh를 막아야 함"
     );
 
-    state.finish_success("[Repo Map]\nFile: src/main.rs".to_string());
+    assert!(state.finish_success(revision, "[Repo Map]\nFile: src/main.rs".to_string()));
     assert!(state.cached.is_some(), "성공 후 캐시가 채워져야 함");
     assert!(!state.should_refresh(), "최신 캐시는 stale 아님");
 
@@ -1700,17 +1684,24 @@ fn test_approval_timeout_promotes_queue() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_bwrap_mounts_workspace_as_canonical_guest_root() {
+    if !crate::infra::sandbox::detect_backend() {
+        eprintln!("[SKIP] bubblewrap namespace capability가 없는 host");
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
 
-    let output = crate::infra::sandbox::wrap_command_bwrap(
+    let mut command = crate::infra::sandbox::wrap_command_bwrap(
         dir.path().to_string_lossy().as_ref(),
         "pwd",
         true,
         &[],
+        &[],
     )
-    .output()
-    .await
-    .expect("bwrap 명령은 실행 가능해야 함");
+    .expect("validated bwrap command");
+    let output = command
+        .output()
+        .await
+        .expect("bwrap 명령은 실행 가능해야 함");
 
     assert!(
         output.status.success(),
@@ -1825,6 +1816,7 @@ fn test_harness_preflight_denies_cwd_outside_workspace() {
     let input = crate::infra::workspace_harness::HarnessPreflightInput::from_tool_call(
         &call,
         Some(&settings),
+        None,
     );
     let decision = crate::infra::workspace_harness::evaluate_preflight(&input);
     assert!(
@@ -1880,9 +1872,22 @@ fn test_session_harness_record_is_skipped_on_restore() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_execute_shell_sandbox_blocks_etc_writes() {
+    if !crate::infra::sandbox::detect_backend() {
+        eprintln!("[SKIP] bubblewrap namespace capability가 없는 host");
+        return;
+    }
+    let settings = crate::domain::settings::PersistedSettings {
+        sandbox: crate::domain::settings::SandboxConfig {
+            enabled: true,
+            allow_network: false,
+            extra_binds: Vec::new(),
+        },
+        ..Default::default()
+    };
     let res = crate::tools::shell::execute_shell(
         "touch /etc/smlcli_should_fail",
         Some("."),
+        &settings,
         tokio_util::sync::CancellationToken::new(),
     )
     .await
@@ -1900,6 +1905,10 @@ async fn test_execute_shell_sandbox_blocks_etc_writes() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn test_execute_shell_sandbox_allows_workspace_writes() {
+    if !crate::infra::sandbox::detect_backend() {
+        eprintln!("[SKIP] bubblewrap namespace capability가 없는 host");
+        return;
+    }
     let dir = std::env::temp_dir().join(format!(
         "smlcli_sandbox_workspace_{}",
         std::time::SystemTime::now()
@@ -1908,10 +1917,19 @@ async fn test_execute_shell_sandbox_allows_workspace_writes() {
             .as_nanos()
     ));
     std::fs::create_dir_all(&dir).unwrap();
+    let settings = crate::domain::settings::PersistedSettings {
+        sandbox: crate::domain::settings::SandboxConfig {
+            enabled: true,
+            allow_network: false,
+            extra_binds: Vec::new(),
+        },
+        ..Default::default()
+    };
 
     let res = crate::tools::shell::execute_shell(
         "touch sandbox_ok.txt && echo done",
         Some(dir.to_string_lossy().as_ref()),
+        &settings,
         tokio_util::sync::CancellationToken::new(),
     )
     .await
@@ -2532,9 +2550,12 @@ async fn test_fetch_url_network_policy() {
 
     // 4. Invalid Scheme execution error
     let token = crate::domain::permissions::PermissionToken::grant();
+    let tool_settings = crate::domain::settings::PersistedSettings::default();
     let ctx = ToolContext {
         token: &token,
         cancel_token: tokio_util::sync::CancellationToken::new(),
+        settings: &tool_settings,
+        event_tx: None,
     };
     let exec_err = tool
         .execute(json!({"url": "file:///etc/passwd"}), &ctx)
@@ -2581,9 +2602,12 @@ async fn test_grep_search_invalid_regex() {
 
     let tool = crate::tools::grep::GrepSearchTool;
     let token = crate::domain::permissions::PermissionToken::grant();
+    let tool_settings = crate::domain::settings::PersistedSettings::default();
     let ctx = ToolContext {
         token: &token,
         cancel_token: tokio_util::sync::CancellationToken::new(),
+        settings: &tool_settings,
+        event_tx: None,
     };
 
     let res = tool
@@ -2607,9 +2631,12 @@ async fn test_list_dir_missing_path() {
 
     let tool = crate::tools::sys_ops::ListDirTool;
     let token = crate::domain::permissions::PermissionToken::grant();
+    let tool_settings = crate::domain::settings::PersistedSettings::default();
     let ctx = ToolContext {
         token: &token,
         cancel_token: tokio_util::sync::CancellationToken::new(),
+        settings: &tool_settings,
+        event_tx: None,
     };
 
     let res = tool
@@ -4054,8 +4081,8 @@ async fn test_mcp_e2e_initialize_and_list_tools() {
     assert!(tools.is_ok(), "list_tools 실패: {:?}", tools.err());
     let tools = tools.unwrap();
 
-    // 2개의 도구가 반환되어야 함
-    assert_eq!(tools.len(), 2, "mock 서버는 2개의 도구를 제공해야 함");
+    // 제품 경로 2개 + lifecycle/security fixture 4개
+    assert_eq!(tools.len(), 6, "mock 서버는 6개의 도구를 제공해야 함");
 
     // get_weather 도구 검증
     let weather = tools.iter().find(|t| t.name == "get_weather");
@@ -4108,6 +4135,10 @@ async fn test_mcp_e2e_call_tool() {
     )
     .await
     .expect("McpClient spawn 실패");
+    client
+        .list_tools()
+        .await
+        .expect("call_tool 전 schema cache 로드 실패");
 
     // get_weather 호출: "Seoul"을 전달하면 "Seoul: 맑음, 22°C" 응답 기대
     let weather_result = client
@@ -4232,6 +4263,7 @@ fn test_mcp_config_add_remove_persistence() {
         name: "test_server".to_string(),
         command: "python3".to_string(),
         args: vec!["server.py".to_string()],
+        allowed_env_vars: Vec::new(),
     };
     settings.mcp_servers.push(server_config);
     assert_eq!(settings.mcp_servers.len(), 1, "서버 1개 추가 후 1건");

@@ -7,6 +7,129 @@
 
 use super::{App, action, event_loop};
 
+const MAX_FILE_MENTIONS_PER_TURN: usize = 16;
+const MAX_FILE_MENTION_BYTES: usize = 256 * 1024;
+const MAX_FILE_MENTION_TOTAL_BYTES: usize = 512 * 1024;
+const MAX_TERMINAL_CONTEXT_BYTES: usize = 64 * 1024;
+
+fn truncate_utf8_bytes(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut boundary = max_bytes;
+    while boundary > 0 && !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    &value[..boundary]
+}
+
+pub(crate) fn expand_chat_mentions(
+    text: &str,
+    terminal_logs: &str,
+    workspace_root: &std::path::Path,
+) -> (String, Vec<String>) {
+    let mut expanded = text.to_string();
+    let mut errors = Vec::new();
+    let mut file_mentions = 0usize;
+    let mut total_file_bytes = 0usize;
+
+    for word in text.split_whitespace().filter(|word| word.starts_with('@')) {
+        if word.len() <= 1 {
+            continue;
+        }
+        let name = &word[1..];
+        let replacement = match name {
+            "workspace" => {
+                let mut names = match std::fs::read_dir(workspace_root) {
+                    Ok(entries) => entries
+                        .filter_map(|entry| entry.ok())
+                        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                        .take(1_000)
+                        .collect::<Vec<_>>(),
+                    Err(error) => {
+                        errors.push(format!("workspace summary 실패: {error}"));
+                        continue;
+                    }
+                };
+                names.sort();
+                format!(
+                    "\n--- Workspace Summary ---\n{}\n-------------------------\n",
+                    names.join("\n")
+                )
+            }
+            "terminal" => format!(
+                "\n--- Recent Terminal Logs ---\n{}\n----------------------------\n",
+                truncate_utf8_bytes(terminal_logs, MAX_TERMINAL_CONTEXT_BYTES)
+            ),
+            path => {
+                file_mentions += 1;
+                if file_mentions > MAX_FILE_MENTIONS_PER_TURN {
+                    errors.push(format!(
+                        "파일 mention은 턴당 최대 {MAX_FILE_MENTIONS_PER_TURN}개입니다: {path}"
+                    ));
+                    continue;
+                }
+                let remaining = MAX_FILE_MENTION_TOTAL_BYTES.saturating_sub(total_file_bytes);
+                if remaining == 0 {
+                    errors.push(format!(
+                        "파일 mention 총량 {MAX_FILE_MENTION_TOTAL_BYTES} bytes를 초과했습니다: {path}"
+                    ));
+                    continue;
+                }
+                let limit = remaining.min(MAX_FILE_MENTION_BYTES);
+                match crate::tools::file_ops::read_file_context(path, workspace_root, limit) {
+                    Ok(content) => {
+                        total_file_bytes += content.len();
+                        format!("\n--- {path} ---\n{content}\n--- End of {path} ---\n")
+                    }
+                    Err(error) => {
+                        errors.push(error);
+                        continue;
+                    }
+                }
+            }
+        };
+        expanded = expanded.replacen(word, &replacement, 1);
+    }
+    (expanded, errors)
+}
+
+pub(crate) fn resolve_provider_kind(
+    settings: &crate::domain::settings::PersistedSettings,
+    provider_name: &str,
+) -> Result<crate::domain::provider::ProviderKind, crate::domain::error::ProviderError> {
+    use crate::domain::provider::ProviderKind;
+
+    let kind = match provider_name {
+        "OpenAI" => ProviderKind::OpenAI,
+        "Anthropic" => ProviderKind::Anthropic,
+        "xAI" => ProviderKind::Xai,
+        "OpenRouter" => ProviderKind::OpenRouter,
+        "Google" => ProviderKind::Google,
+        "LmStudio" => ProviderKind::LmStudio,
+        name if name.starts_with("Custom: ") => {
+            let id = name.trim_start_matches("Custom: ");
+            if id.is_empty()
+                || !settings
+                    .custom_providers
+                    .iter()
+                    .any(|config| config.id == id)
+            {
+                return Err(crate::domain::error::ProviderError::Configuration(format!(
+                    "settings에 없는 custom provider입니다: {id}"
+                )));
+            }
+            ProviderKind::Custom(id.to_string())
+        }
+        _ => {
+            return Err(crate::domain::error::ProviderError::Configuration(format!(
+                "지원하지 않는 provider 이름입니다: {provider_name}"
+            )));
+        }
+    };
+    Ok(kind)
+}
+
 impl App {
     /// [v0.1.0-beta.25] 도구 스키마를 포함한 표준 스트리밍 요청 생성기.
     /// 초기 요청과 Auto-Verify 재전송이 동일한 도구 능력을 갖도록 공통화한다.
@@ -23,6 +146,19 @@ impl App {
             crate::domain::provider::ProviderKind::Anthropic => {
                 crate::domain::provider::ToolDialect::Anthropic
             }
+            crate::domain::provider::ProviderKind::Custom(id) => self
+                .state
+                .domain
+                .settings
+                .as_ref()
+                .and_then(|settings| {
+                    settings
+                        .custom_providers
+                        .iter()
+                        .find(|config| config.id == *id)
+                })
+                .map(|config| config.dialect.clone())
+                .unwrap_or(crate::domain::provider::ToolDialect::OpenAICompat),
             _ => crate::domain::provider::ToolDialect::OpenAICompat,
         };
         let mut schemas = crate::tools::registry::GLOBAL_REGISTRY.all_schemas(&dialect);
@@ -136,21 +272,19 @@ impl App {
             ));
         }
 
-        let provider = match settings.default_provider.as_str() {
-            "OpenAI" => crate::domain::provider::ProviderKind::OpenAI,
-            "Anthropic" => crate::domain::provider::ProviderKind::Anthropic,
-            "xAI" => crate::domain::provider::ProviderKind::Xai,
-            "Google" => crate::domain::provider::ProviderKind::Google,
-            "LmStudio" => crate::domain::provider::ProviderKind::LmStudio,
-            _ => crate::domain::provider::ProviderKind::OpenRouter,
-        };
+        let provider = resolve_provider_kind(settings, &settings.default_provider)?;
 
         if provider == crate::domain::provider::ProviderKind::LmStudio {
             // [v3.8.1] LM Studio는 로컬 무인증 API이므로 API 키 조회 과정을 건너뜀
             return Ok((provider, settings.default_model.clone(), "".to_string()));
         }
 
-        let alias = format!("{}_key", settings.default_provider.to_lowercase());
+        let alias = match &provider {
+            crate::domain::provider::ProviderKind::Custom(id) => {
+                format!("{}_key", id.to_lowercase())
+            }
+            _ => format!("{}_key", settings.default_provider.to_lowercase()),
+        };
         // [v0.1.0-beta.14] 파일 기반 암호화 저장소에서 API 키 조회
         let api_key = crate::infra::secret_store::get_api_key(settings, &alias).map_err(|e| {
             crate::domain::error::ProviderError::AuthenticationFailed(format!(
@@ -193,30 +327,25 @@ impl App {
             ));
         }
 
-        let (provider, alias, needs_key) = if provider_str.starts_with("Custom: ") {
-            let id = provider_str.trim_start_matches("Custom: ").to_string();
-            let mut needs_k = true;
-            if let Some(cp) = settings.custom_providers.iter().find(|c| c.id == id)
-                && cp.auth_type.to_lowercase() == "none"
-            {
-                needs_k = false;
+        let provider = resolve_provider_kind(settings, provider_str)?;
+        let (alias, needs_key) = match &provider {
+            crate::domain::provider::ProviderKind::Custom(id) => {
+                let config = settings
+                    .custom_providers
+                    .iter()
+                    .find(|config| config.id == *id)
+                    .ok_or_else(|| {
+                        crate::domain::error::ProviderError::Configuration(format!(
+                            "settings에 없는 custom provider입니다: {id}"
+                        ))
+                    })?;
+                (
+                    format!("{}_key", id.to_lowercase()),
+                    !config.auth_type.eq_ignore_ascii_case("none"),
+                )
             }
-            (
-                crate::domain::provider::ProviderKind::Custom(id.clone()),
-                format!("{}_key", id.to_lowercase()),
-                needs_k,
-            )
-        } else {
-            let p = match provider_str {
-                "OpenAI" => crate::domain::provider::ProviderKind::OpenAI,
-                "Anthropic" => crate::domain::provider::ProviderKind::Anthropic,
-                "xAI" => crate::domain::provider::ProviderKind::Xai,
-                "Google" => crate::domain::provider::ProviderKind::Google,
-                "LmStudio" => crate::domain::provider::ProviderKind::LmStudio,
-                _ => crate::domain::provider::ProviderKind::OpenRouter,
-            };
-            let needs_k = p != crate::domain::provider::ProviderKind::LmStudio;
-            (p, format!("{}_key", provider_str.to_lowercase()), needs_k)
+            crate::domain::provider::ProviderKind::LmStudio => ("lmstudio_key".to_string(), false),
+            _ => (format!("{}_key", provider_str.to_lowercase()), true),
         };
 
         if !needs_key {
@@ -248,6 +377,17 @@ impl App {
 
     /// 사용자 자연어 입력을 처리하여 비동기로 파일 멘션을 파싱한 뒤 LLM Provider에 전송.
     pub(crate) fn dispatch_chat_request(&mut self, text: String) {
+        if let Err(error) = self.resolve_credentials() {
+            self.state
+                .ui
+                .timeline
+                .push(crate::app::state::TimelineBlock::new(
+                    crate::app::state::TimelineBlockKind::Notice,
+                    error.to_string(),
+                ));
+            return;
+        }
+
         let tx = self.action_tx.clone();
 
         let mut logs = String::new();
@@ -267,55 +407,18 @@ impl App {
                 .join("\n");
         }
 
+        let workspace_root = crate::infra::workspace_harness::canonical_workspace_root();
         tokio::spawn(async move {
-            let mut final_text = text.clone();
-            if text.contains('@') {
-                let parts: Vec<&str> = text.split_whitespace().collect();
-                for word in parts {
-                    if word.starts_with('@') && word.len() > 1 {
-                        let path = &word[1..];
-                        if path == "workspace" {
-                            if let Ok(mut entries) = tokio::fs::read_dir(".").await {
-                                let mut dirs = vec![];
-                                while let Ok(Some(e)) = entries.next_entry().await {
-                                    dirs.push(e.file_name().to_string_lossy().into_owned());
-                                }
-                                let summary = dirs.join("\n");
-                                final_text = final_text.replace(
-                                    word,
-                                    &format!(
-                                        "\n--- Workspace Summary ---\n{}\n-------------------------\n",
-                                        summary
-                                    ),
-                                );
-                            }
-                        } else if path == "terminal" {
-                            final_text = final_text.replace(word, &format!("\n--- Recent Terminal Logs ---\n{}\n----------------------------\n", logs));
-                        } else {
-                            match tokio::fs::read_to_string(path).await {
-                                Ok(content) => {
-                                    final_text = final_text.replace(
-                                        word,
-                                        &format!(
-                                            "\n--- {} ---\n{}\n--- End of {} ---\n",
-                                            path, content, path
-                                        ),
-                                    );
-                                }
-                                Err(e) => {
-                                    let _ = tx
-                                        .send(crate::app::event_loop::Event::Action(
-                                            crate::app::action::Action::AddTimelineNotice(format!(
-                                                "⚠ 파일 멘션 오류 ({}): {}",
-                                                path, e
-                                            )),
-                                        ))
-                                        .await;
-                                }
-                            }
-                        }
-                    }
-                }
+            let (final_text, errors) =
+                expand_chat_mentions(&text, &logs, std::path::Path::new(&workspace_root));
+            for error in errors {
+                let _ = tx
+                    .send(crate::app::event_loop::Event::Action(
+                        crate::app::action::Action::AddTimelineNotice(format!(
+                            "⚠ 파일 멘션 오류: {error}"
+                        )),
+                    ))
+                    .await;
             }
             let _ = tx
                 .send(crate::app::event_loop::Event::Action(
@@ -327,6 +430,22 @@ impl App {
 
     /// 파싱이 완료된 최종 텍스트를 세션에 추가하고 LLM 요청을 전송.
     pub(crate) fn submit_chat_request(&mut self, final_text: String) {
+        // Security/provider guard가 성공하기 전에는 expanded @file content를
+        // session, index, timeline 어느 sink에도 기록하지 않는다.
+        let (provider_kind, model_name, api_key) = match self.resolve_credentials() {
+            Ok(creds) => creds,
+            Err(err_msg) => {
+                self.state
+                    .ui
+                    .timeline
+                    .push(crate::app::state::TimelineBlock::new(
+                        crate::app::state::TimelineBlockKind::Notice,
+                        err_msg.to_string(),
+                    ));
+                return;
+            }
+        };
+
         // 사용자 메시지를 세션에 추가
         let msg = crate::providers::types::ChatMessage {
             role: crate::providers::types::Role::User,
@@ -464,33 +583,6 @@ impl App {
             }
         }
 
-        // [v0.1.0-beta.9] 중앙 보안 가드 사용: dispatch 전 사전 검증
-        let (provider_kind, model_name, api_key) = match self.resolve_credentials() {
-            Ok(creds) => creds,
-            Err(err_msg) => {
-                let err_msg_str = err_msg.to_string();
-                self.state
-                    .domain
-                    .session
-                    .add_message(crate::providers::types::ChatMessage {
-                        role: crate::providers::types::Role::System,
-                        content: Some(err_msg_str.clone()),
-                        tool_calls: None,
-                        tool_call_id: None,
-                        pinned: false,
-                    });
-                // [v0.1.0-beta.18] 에러를 타임라인에도 표시
-                self.state
-                    .ui
-                    .timeline
-                    .push(crate::app::state::TimelineBlock::new(
-                        crate::app::state::TimelineBlockKind::Notice,
-                        err_msg_str,
-                    ));
-                return;
-            }
-        };
-
         self.spawn_chat_request(provider_kind, model_name, api_key);
     }
 
@@ -545,15 +637,11 @@ impl App {
         let idx = self.state.ui.timeline.len().saturating_sub(1);
         self.state.runtime.active_chat_block_idx = Some(idx);
 
-        // [v1.6.0] RepoMap의 데이터 노후화(Stale Data) 결함 해결 - LLM 요청 직전 동기 갱신
+        // RepoMap refresh는 revisioned background worker만 소유한다. 현재 요청은
+        // last known-good cache를 사용하고 UI/event loop에서 AST scan을 기다리지 않는다.
         if self.state.runtime.repo_map_dirty {
-            let cwd = std::env::current_dir()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| ".".to_string());
-            if let Ok(new_map) = crate::domain::repo_map::generate_repo_map(&cwd) {
-                self.state.runtime.repo_map.cached = Some(new_map);
-                self.state.runtime.repo_map.stale = false;
-            }
+            self.state.runtime.repo_map.mark_stale();
+            self.refresh_repo_map_if_needed(false);
             self.state.runtime.repo_map_dirty = false;
         }
 

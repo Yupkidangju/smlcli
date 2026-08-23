@@ -10,6 +10,21 @@ pub enum WizardError {
     MissingRequiredField(String),
 }
 
+pub(crate) fn merge_wizard_settings(
+    existing: Option<&crate::domain::settings::PersistedSettings>,
+    default_provider: String,
+    default_model: String,
+    lmstudio_base_url: Option<String>,
+) -> crate::domain::settings::PersistedSettings {
+    let mut settings = existing.cloned().unwrap_or_default();
+    settings.default_provider = default_provider;
+    settings.default_model = default_model;
+    if let Some(base_url) = lmstudio_base_url {
+        settings.lmstudio_base_url = Some(base_url);
+    }
+    settings
+}
+
 impl App {
     /// 위자드 필수 필드 검증 (Phase 19 Audit Remediation)
     fn validate_wizard_fields(&self) -> Result<(), WizardError> {
@@ -17,7 +32,7 @@ impl App {
             && self.state.ui.wizard.api_key_input.trim().is_empty()
         {
             return Err(WizardError::MissingRequiredField(
-                "API Key is required.".to_string(),
+                self.state.i18n.tr("api_key_required").to_string(),
             ));
         }
         Ok(())
@@ -52,7 +67,8 @@ impl App {
             state::WizardStep::BaseUrlInput => {
                 let url = self.state.ui.wizard.base_url_input.trim().to_string();
                 if url.is_empty() {
-                    self.state.ui.wizard.err_msg = Some("Base URL is required.".to_string());
+                    self.state.ui.wizard.err_msg =
+                        Some(self.state.i18n.tr("base_url_required").to_string());
                     return;
                 }
 
@@ -151,7 +167,7 @@ impl App {
                     let val = self.state.ui.wizard.custom_model_input.trim().to_string();
                     if val.is_empty() {
                         self.state.ui.wizard.err_msg =
-                            Some("Model name cannot be empty.".to_string());
+                            Some(self.state.i18n.tr("model_required").to_string());
                         return;
                     }
                     self.state.ui.wizard.selected_model = val;
@@ -195,25 +211,14 @@ impl App {
             Some(crate::domain::provider::ProviderKind::LmStudio) => "LmStudio".to_string(),
             _ => "OpenRouter".to_string(),
         };
-        // [v0.1.0-beta.14] encrypted_keys 필드 추가, keyring 제거
-        let mut settings = crate::domain::settings::PersistedSettings {
-            version: 1,
-            default_provider: provider_str,
+        let lmstudio_base_url = (!self.state.ui.wizard.base_url_input.is_empty())
+            .then(|| self.state.ui.wizard.base_url_input.clone());
+        let mut settings = merge_wizard_settings(
+            self.state.domain.settings.as_ref(),
+            provider_str,
             default_model,
-            shell_policy: crate::domain::permissions::ShellPolicy::Ask,
-            file_write_policy: crate::domain::permissions::FileWritePolicy::AlwaysAsk,
-            // [v2.5.0] Safe Starter preset (designs.md §8 Step 4): network AllowAll
-            network_policy: crate::domain::permissions::NetworkPolicy::AllowAll,
-            safe_commands: None,
-            encrypted_keys: std::collections::HashMap::new(),
-            theme: "default".to_string(),
-            lmstudio_base_url: if !self.state.ui.wizard.base_url_input.is_empty() {
-                Some(self.state.ui.wizard.base_url_input.clone())
-            } else {
-                Some("http://localhost:1234/v1".to_string())
-            },
-            ..Default::default()
-        };
+            lmstudio_base_url,
+        );
 
         // API 키를 암호화하여 settings.encrypted_keys에 저장
         if !self.state.ui.wizard.api_key_input.is_empty() {
@@ -237,7 +242,7 @@ impl App {
                 Ok(_) => {
                     let _ = tx
                         .send(event_loop::Event::Action(
-                            action::Action::WizardSaveFinished(Ok(())),
+                            action::Action::WizardSaveFinished(Ok(settings_clone)),
                         ))
                         .await;
                 }
@@ -251,7 +256,6 @@ impl App {
             }
         });
 
-        self.state.domain.settings = Some(settings); // 메모리에 반영하여 앱의 구동 상태 보장
         self.state.ui.wizard.is_loading_models = true; // 저장 중 스피너 표시 등 로딩 상태 활용
     }
 
@@ -521,7 +525,7 @@ impl App {
                                 ))
                                 .await;
                         });
-                        crate::providers::registry::reload_providers(); // [v1.2.0] 동적 갱신
+                        let _ = crate::providers::registry::reload_providers(s);
 
                         // 저장 성공 가정 (비동기라 에러 피드백은 향후 개선 필요)
                         self.state.ui.config.rollback_provider = None;

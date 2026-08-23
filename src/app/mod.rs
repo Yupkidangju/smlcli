@@ -168,30 +168,35 @@ impl App {
                 let mcp_name = mcp_cfg.name.clone();
                 let mcp_cmd = mcp_cfg.command.clone();
                 let mcp_args = mcp_cfg.args.clone();
+                let mcp_allowed_env_vars = mcp_cfg.allowed_env_vars.clone();
                 let tx_mcp = tx.clone();
 
                 tokio::spawn(async move {
                     // [v3.3.1] 감사 MEDIUM-1 수정: spawn/list_tools 실패 시 침묵하지 않고
                     // McpLoadFailed 이벤트를 전송하여 사용자에게 피드백 제공.
                     // 기존에는 if let Ok && let Ok 패턴으로 실패를 완전히 삼켰음.
-                    let client = match crate::infra::mcp_client::McpClient::spawn(
-                        &mcp_name, &mcp_cmd, &mcp_args,
-                    )
-                    .await
-                    {
-                        Ok(c) => c,
-                        Err(e) => {
-                            let _ = tx_mcp
-                                .send(crate::app::event_loop::Event::Action(
-                                    crate::app::action::Action::McpLoadFailed(
-                                        mcp_name.clone(),
-                                        format!("spawn 실패: {}", e),
-                                    ),
-                                ))
-                                .await;
-                            return;
-                        }
-                    };
+                    let client =
+                        match crate::infra::mcp_client::McpClient::spawn_with_env_allowlist(
+                            &mcp_name,
+                            &mcp_cmd,
+                            &mcp_args,
+                            &mcp_allowed_env_vars,
+                        )
+                        .await
+                        {
+                            Ok(c) => c,
+                            Err(e) => {
+                                let _ = tx_mcp
+                                    .send(crate::app::event_loop::Event::Action(
+                                        crate::app::action::Action::McpLoadFailed(
+                                            mcp_name.clone(),
+                                            format!("spawn 실패: {}", e),
+                                        ),
+                                    ))
+                                    .await;
+                                return;
+                            }
+                        };
 
                     let tools = match client.list_tools().await {
                         Ok(t) => t,
@@ -419,6 +424,8 @@ impl App {
             }
         }
 
+        event_loop.shutdown().await;
+
         // [v3.3.1] 감사 HIGH-1 수정: 앱 종료 시 MCP 서버 자식 프로세스 명시적 kill.
         // Event::Quit, /quit, Ctrl-C, SIGTERM 모든 종료 경로가 이 지점을 통과하므로
         // 여기서 한 번만 shutdown()을 호출하면 프로세스 누수를 완전히 방지할 수 있다.
@@ -441,9 +448,9 @@ impl App {
         if force {
             self.state.runtime.repo_map.mark_stale();
         }
-        if !self.state.runtime.repo_map.begin_refresh() {
+        let Some(revision) = self.state.runtime.repo_map.begin_refresh() else {
             return;
-        }
+        };
 
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
@@ -453,12 +460,15 @@ impl App {
             match crate::domain::repo_map::generate_repo_map_async(cwd).await {
                 Ok(repo_map) => {
                     let _ = tx
-                        .send(Event::Action(action::Action::RepoMapReady(repo_map)))
+                        .send(Event::Action(action::Action::RepoMapReady(
+                            revision, repo_map,
+                        )))
                         .await;
                 }
                 Err(err) => {
                     let _ = tx
                         .send(Event::Action(action::Action::RepoMapFailed(
+                            revision,
                             err.to_string(),
                         )))
                         .await;
@@ -546,33 +556,7 @@ impl App {
                 crate::app::action::Action::ToolFinished(Box::new(res), tool_index),
             ));
 
-        // Pop next queued approval if any
-        if let Some((next_tool, next_id, next_idx)) =
-            self.state.runtime.approval.queued_approvals.pop_front()
-        {
-            self.state.runtime.approval.pending_tool = Some(next_tool.clone());
-            self.state.runtime.approval.pending_tool_call_id = next_id.clone();
-            self.state.runtime.approval.pending_tool_index = Some(next_idx);
-            self.state.runtime.approval.pending_since_ms = Some(now_ms);
-            if let Some(registry_tool) =
-                crate::tools::registry::GLOBAL_REGISTRY.get_tool(&next_tool.name)
-            {
-                self.state.runtime.approval.diff_preview =
-                    registry_tool.generate_diff_preview(&next_tool.args);
-            }
-            let mut approval_block = crate::app::state::TimelineBlock::new(
-                crate::app::state::TimelineBlockKind::Approval,
-                Self::format_tool_name(&next_tool),
-            );
-            approval_block.status = crate::app::state::BlockStatus::NeedsApproval;
-            approval_block.tool_call_id = next_id;
-            approval_block
-                .body
-                .push(crate::app::state::BlockSection::Markdown(
-                    Self::format_tool_detail(&next_tool),
-                ));
-            self.state.ui.timeline.push(approval_block);
-        }
+        self.promote_next_approval(now_ms);
 
         true
     }
@@ -785,32 +769,38 @@ impl App {
         term_cols: u16,
         term_rows: u16,
     ) -> MousePaneTarget {
-        if term_rows < 5 {
+        if term_cols == 0 || term_rows < 5 {
             return MousePaneTarget::Other;
         }
-
-        let main_top = 1;
-        let composer_top = term_rows.saturating_sub(3);
-        let status_row = composer_top.saturating_sub(1);
-        if mouse.row >= composer_top {
-            return MousePaneTarget::Composer;
-        }
-        if mouse.row < main_top || mouse.row == status_row {
-            return MousePaneTarget::Other;
-        }
-
         let inspector_active =
             self.state.ui.show_inspector || self.state.runtime.approval.pending_tool.is_some();
-        if !inspector_active {
-            return MousePaneTarget::Timeline;
+        let geometry = crate::tui::layout::LayoutGeometry::new(
+            ratatui::layout::Rect::new(0, 0, term_cols, term_rows),
+            inspector_active,
+        );
+        if crate::tui::layout::LayoutGeometry::contains(geometry.composer, mouse.column, mouse.row)
+        {
+            return MousePaneTarget::Composer;
         }
-
-        let inspector_width = (term_cols as f32 * 0.30).clamp(32.0, 48.0) as u16;
-        let timeline_width = term_cols.saturating_sub(inspector_width).max(72);
-        if mouse.column >= timeline_width {
-            MousePaneTarget::Inspector
-        } else {
+        if crate::tui::layout::LayoutGeometry::contains(geometry.top_bar, mouse.column, mouse.row)
+            || crate::tui::layout::LayoutGeometry::contains(
+                geometry.status,
+                mouse.column,
+                mouse.row,
+            )
+        {
+            return MousePaneTarget::Other;
+        }
+        if let Some(inspector) = geometry.inspector
+            && crate::tui::layout::LayoutGeometry::contains(inspector, mouse.column, mouse.row)
+        {
+            return MousePaneTarget::Inspector;
+        }
+        if crate::tui::layout::LayoutGeometry::contains(geometry.timeline, mouse.column, mouse.row)
+        {
             MousePaneTarget::Timeline
+        } else {
+            MousePaneTarget::Other
         }
     }
 
@@ -985,7 +975,7 @@ impl App {
             }
 
             action::Action::ToolOutputChunk(mut chunk) => {
-                self.mask_secrets(&mut chunk);
+                self.mask_stream_chunk(&mut chunk);
                 self.state.runtime.stream_accumulator.push_str(&chunk);
                 let mut new_lines: i32 = 0;
 
@@ -1036,15 +1026,17 @@ impl App {
 
             action::Action::ToolFinished(mut res, tool_index) => {
                 self.flush_stream_accumulator();
-                // [v2.5.0] 완료된 도구의 취소 토큰을 맵에서 제거
-                let token_key = res
-                    .tool_call_id
-                    .clone()
-                    .unwrap_or_else(|| format!("tool_{}", tool_index));
-                self.state
+                let token_key = Self::tool_execution_key(res.tool_call_id.as_deref(), tool_index);
+                let Some(next_write) = self
+                    .state
                     .runtime
-                    .active_tool_cancel_tokens
-                    .remove(&token_key);
+                    .begin_tool_terminal_transition(&token_key)
+                else {
+                    self.state.runtime.logs_buffer.push(format!(
+                        "[Tool] duplicate terminal event ignored: {token_key}"
+                    ));
+                    return;
+                };
 
                 // [v1.9.0] Phase 27: 터미널 타이틀 & 작업표시줄 진행률 복구 (OSC)
                 {
@@ -1067,8 +1059,8 @@ impl App {
                 }
 
                 // [v1.6.0] 마스킹
-                self.mask_secrets(&mut res.stdout);
-                self.mask_secrets(&mut res.stderr);
+                self.mask_secrets_full(&mut res.stdout);
+                self.mask_secrets_full(&mut res.stderr);
 
                 // 결과를 보류 목록에 저장
                 self.state.runtime.pending_tool_outcomes.push((
@@ -1147,7 +1139,9 @@ impl App {
                     }
                     self.reset_auto_verify_after_success();
 
-                    // [v3.0.0] Phase 40: Git-Native Integration 자동 커밋
+                    // FIN-F001: index/path transaction이 증명되기 전에는 성공한
+                    // tool 결과도 자동 커밋하지 않는다. opt-in 설정이 남아 있으면
+                    // 조용히 무시하지 않고 사용자에게 격리 상태를 알린다.
                     if let Some(settings) = &self.state.domain.settings {
                         let should_commit = settings.git_integration.auto_commit
                             && settings
@@ -1155,93 +1149,12 @@ impl App {
                                 .commit_tools
                                 .contains(&res.tool_name);
 
-                        // [v2.5.1] 감사 HIGH-1 수정: affected_paths가 비어있으면 commit skip.
-                        // 실제 변경된 파일만 stage하여 사용자 WIP를 보호.
-                        if should_commit && !res.affected_paths.is_empty() {
-                            let cwd = std::env::current_dir()
-                                .map(|p| p.to_string_lossy().to_string())
-                                .unwrap_or_else(|_| ".".to_string());
-
-                            let file_refs: Vec<&str> =
-                                res.affected_paths.iter().map(|s| s.as_str()).collect();
-                            match crate::infra::git_engine::GitEngine::auto_commit(
-                                &cwd,
-                                &res.tool_name,
-                                &file_refs,
-                                &settings.git_integration.commit_prefix,
-                            ) {
-                                Ok(msg) => {
-                                    if msg != "No changes to commit" {
-                                        self.state.ui.timeline.push(
-                                            crate::app::state::TimelineBlock {
-                                                id: uuid::Uuid::new_v4().to_string(),
-                                                kind:
-                                                    crate::app::state::TimelineBlockKind::GitCommit,
-                                                status: crate::app::state::BlockStatus::Done,
-                                                role: None,
-                                                title: msg.clone(),
-                                                subtitle: None,
-                                                body: vec![
-                                                    crate::app::state::BlockSection::Markdown(
-                                                        "Auto-commit successful.".to_string(),
-                                                    ),
-                                                ],
-                                                tool_call_id: None,
-                                                depth: 0,
-                                                display_mode:
-                                                    crate::app::state::BlockDisplayMode::Expanded,
-                                                diff_summary: None,
-                                                created_at_ms: std::time::SystemTime::now()
-                                                    .duration_since(std::time::UNIX_EPOCH)
-                                                    .unwrap_or_default()
-                                                    .as_millis()
-                                                    as u64,
-                                                pinned: false,
-                                            },
-                                        );
-                                        self.state.ui.timeline_scroll = 0;
-                                        self.state.ui.timeline_follow_tail = true;
-                                    }
-                                }
-                                Err(e) => {
-                                    self.state
-                                        .ui
-                                        .timeline
-                                        .push(crate::app::state::TimelineBlock {
-                                            id: uuid::Uuid::new_v4().to_string(),
-                                            kind: crate::app::state::TimelineBlockKind::Notice,
-                                            status: crate::app::state::BlockStatus::Error,
-                                            role: None,
-                                            title: "Auto Commit Failed".to_string(),
-                                            subtitle: None,
-                                            body: vec![crate::app::state::BlockSection::Markdown(
-                                                format!("Git 자동 커밋 중 오류 발생:\n{}", e),
-                                            )],
-                                            tool_call_id: None,
-                                            depth: 0,
-                                            display_mode:
-                                                crate::app::state::BlockDisplayMode::Expanded,
-                                            diff_summary: None,
-                                            created_at_ms: std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap_or_default()
-                                                .as_millis()
-                                                as u64,
-                                            pinned: false,
-                                        });
-                                }
-                            }
+                        if should_commit {
+                            self.state.runtime.logs_buffer.push(
+                                "[Git] 자동 커밋은 사용자 index/WIP 보호를 위해 비활성화되어 있습니다."
+                                    .to_string(),
+                            );
                         }
-                    }
-                }
-
-                if Self::is_write_tool(&res.tool_name) {
-                    self.state.runtime.is_write_tool_running = false;
-                    if let Some((next_tool, next_id, next_idx)) =
-                        self.state.runtime.write_tool_queue.pop_front()
-                    {
-                        self.state.runtime.is_write_tool_running = true;
-                        self.execute_tool_async(next_tool, next_id, next_idx);
                     }
                 }
 
@@ -1257,7 +1170,8 @@ impl App {
                         && self.state.runtime.approval.queued_approvals.is_empty()
                     {
                         // [v3.7.1] 직접 실행(!)된 도구는 LLM 자동 전송을 건너뜀
-                        if res.tool_call_id.is_some() {
+                        if res.tool_call_id.is_some() && !self.state.runtime.tool_followup_sent {
+                            self.state.runtime.tool_followup_sent = true;
                             self.send_chat_message_internal();
                         }
                     }
@@ -1266,6 +1180,9 @@ impl App {
                     {
                         self.state.runtime.auto_verify = crate::app::state::AutoVerifyState::Idle;
                     }
+                }
+                if let Some((next_tool, next_id, next_idx)) = next_write {
+                    self.execute_tool_async(next_tool, next_id, next_idx);
                 }
             }
 
@@ -1285,14 +1202,17 @@ impl App {
 
             action::Action::ToolError(e, tool_call_id, tool_index) => {
                 self.flush_stream_accumulator();
-                // [v2.5.0] 오류 발생한 도구의 취소 토큰을 맵에서 제거
-                let token_key = tool_call_id
-                    .clone()
-                    .unwrap_or_else(|| format!("tool_{}", tool_index));
-                self.state
+                let token_key = Self::tool_execution_key(tool_call_id.as_deref(), tool_index);
+                let Some(next_write) = self
+                    .state
                     .runtime
-                    .active_tool_cancel_tokens
-                    .remove(&token_key);
+                    .begin_tool_terminal_transition(&token_key)
+                else {
+                    self.state.runtime.logs_buffer.push(format!(
+                        "[Tool] duplicate terminal event ignored: {token_key}"
+                    ));
+                    return;
+                };
 
                 // [v1.9.0] Phase 27: 터미널 타이틀 & 작업표시줄 진행률 복구 (OSC)
                 {
@@ -1303,7 +1223,7 @@ impl App {
                     let _ = std::io::stdout().flush();
                 }
                 let mut failure_detail = e.to_actionable().to_string();
-                self.mask_secrets(&mut failure_detail);
+                self.mask_secrets_full(&mut failure_detail);
 
                 // 결과를 보류 목록에 저장
                 self.state.runtime.pending_tool_outcomes.push((
@@ -1345,7 +1265,9 @@ impl App {
                         && self.state.runtime.approval.pending_tool.is_none()
                         && self.state.runtime.approval.queued_approvals.is_empty()
                         && tool_call_id.is_some()
+                        && !self.state.runtime.tool_followup_sent
                     {
+                        self.state.runtime.tool_followup_sent = true;
                         self.send_chat_message_internal();
                     }
                     // Aborted 상태를 Idle로 리셋 (다음 사용자 입력 대기)
@@ -1353,6 +1275,9 @@ impl App {
                     {
                         self.state.runtime.auto_verify = crate::app::state::AutoVerifyState::Idle;
                     }
+                }
+                if let Some((next_tool, next_id, next_idx)) = next_write {
+                    self.execute_tool_async(next_tool, next_id, next_idx);
                 }
             }
 
@@ -1366,10 +1291,22 @@ impl App {
             action::Action::WizardSaveFinished(res) => {
                 self.state.ui.wizard.is_loading_models = false;
                 match res {
-                    Ok(_) => {
-                        crate::providers::registry::reload_providers();
-                        self.state.ui.is_wizard_open = false;
-                    }
+                    Ok(settings) => match crate::providers::registry::reload_providers(&settings) {
+                        Ok(()) => {
+                            self.state.domain.settings = Some(settings);
+                            self.state.ui.is_wizard_open = false;
+                            self.state.runtime.harness_baseline = Some(
+                                crate::infra::workspace_harness::WorkspaceHarnessSnapshot::collect(
+                                    self.state.domain.settings.as_ref(),
+                                ),
+                            );
+                            self.check_trust_gate();
+                        }
+                        Err(error) => {
+                            self.state.ui.wizard.step = crate::app::state::WizardStep::Saving;
+                            self.state.ui.wizard.err_msg = Some(error.to_string());
+                        }
+                    },
                     Err(e) => {
                         self.state.ui.wizard.step = crate::app::state::WizardStep::Saving;
                         self.state.ui.wizard.err_msg = Some(format!("설정 저장 실패: {}", e));
@@ -1390,18 +1327,39 @@ impl App {
                     self.state.ui.timeline.push(block);
                 }
             }
-            action::Action::RepoMapReady(repo_map) => {
-                self.state.runtime.repo_map.finish_success(repo_map);
+            action::Action::RepoMapReady(revision, repo_map) => {
+                if !self
+                    .state
+                    .runtime
+                    .repo_map
+                    .finish_success(revision, repo_map)
+                {
+                    self.refresh_repo_map_if_needed(false);
+                }
             }
-            action::Action::RepoMapFailed(err) => {
-                self.state.runtime.repo_map.finish_error(err.clone());
+            action::Action::RepoMapFailed(revision, err) => {
+                self.state
+                    .runtime
+                    .repo_map
+                    .finish_error(revision, err.clone());
                 self.state
                     .runtime
                     .logs_buffer
                     .push(format!("[Repo Map] 갱신 실패: {}", err));
             }
             action::Action::ContextSummaryOk(summary) => {
-                self.state.domain.session.apply_summary(&summary);
+                if let Err(error) = self.state.domain.session.commit_compaction(&summary) {
+                    let mut block = crate::app::state::TimelineBlock::new(
+                        crate::app::state::TimelineBlockKind::Notice,
+                        "컨텍스트 압축 취소",
+                    );
+                    block.status = crate::app::state::BlockStatus::Error;
+                    block
+                        .body
+                        .push(crate::app::state::BlockSection::Markdown(error));
+                    self.state.ui.timeline.push(block);
+                    return;
+                }
                 let mut block = crate::app::state::TimelineBlock::new(
                     crate::app::state::TimelineBlockKind::Notice,
                     "컨텍스트 압축 완료",
@@ -1412,10 +1370,16 @@ impl App {
                 self.state.ui.timeline.push(block);
             }
             action::Action::ContextSummaryErr(e) => {
-                self.state
-                    .domain
-                    .session
-                    .apply_summary(&format!("Fallback due to error: {}", e));
+                self.state.domain.session.abort_compaction();
+                let mut block = crate::app::state::TimelineBlock::new(
+                    crate::app::state::TimelineBlockKind::Notice,
+                    "컨텍스트 압축 실패",
+                );
+                block.status = crate::app::state::BlockStatus::Error;
+                block
+                    .body
+                    .push(crate::app::state::BlockSection::Markdown(e));
+                self.state.ui.timeline.push(block);
             }
             action::Action::SilentHealthCheckFailed => {
                 self.state.ui.toast = Some(crate::app::state::ToastNotification {
@@ -1673,7 +1637,7 @@ impl App {
                 }
                 crate::app::state::ToolOutcome::Error(e, tool_call_id) => {
                     let mut failure_detail = e.to_actionable().to_string();
-                    self.mask_secrets(&mut failure_detail);
+                    self.mask_secrets_full(&mut failure_detail);
                     self.state
                         .domain
                         .session
@@ -1689,8 +1653,7 @@ impl App {
         }
     }
 
-    // [v1.8.0] Phase 26: 슬라이딩 윈도우 기반 스트리밍 API 키 마스킹
-    fn mask_secrets(&mut self, text: &mut String) {
+    fn ensure_secret_masker(&mut self) {
         if self.state.runtime.secret_mask_regex.is_none()
             && let Some(settings) = &self.state.domain.settings
         {
@@ -1716,39 +1679,44 @@ impl App {
                 self.state.runtime.secret_mask_regex = regex::Regex::new(r"a^").ok();
             }
         }
+    }
 
+    fn mask_secrets_full(&mut self, text: &mut String) {
+        self.ensure_secret_masker();
         if let Some(re) = &self.state.runtime.secret_mask_regex {
-            let max_match_len = self.state.runtime.streaming_masker.max_match_len;
-            if max_match_len > 0 {
-                let mut window =
-                    std::mem::take(&mut self.state.runtime.streaming_masker.trailing_buffer);
-                window.push_str(text);
-
-                let masked_window = re.replace_all(&window, "[REDACTED]").to_string();
-
-                // 만약 마스킹 처리된 내용이 있으면, text를 갱신
-                // 주의: REDACTED 처리로 인해 문자열 길이가 달라졌을 수 있음
-                if masked_window != window {
-                    *text = masked_window;
-                }
-
-                // 새로운 trailing buffer 저장 (최대 max_match_len 바이트)
-                let len = text.len();
-                let trailing_len = max_match_len.min(len);
-                if trailing_len > 0 {
-                    // 유효한 UTF-8 경계를 찾아서 저장
-                    let mut start_idx = len - trailing_len;
-                    while !text.is_char_boundary(start_idx) && start_idx > 0 {
-                        start_idx -= 1;
-                    }
-                    self.state.runtime.streaming_masker.trailing_buffer =
-                        text[start_idx..].to_string();
-                }
-            } else if re.is_match(text) {
-                let masked = re.replace_all(text, "[REDACTED]").to_string();
-                *text = masked;
-            }
+            *text = re.replace_all(text, "[REDACTED]").to_string();
         }
+    }
+
+    pub(crate) fn mask_stream_chunk(&mut self, text: &mut String) {
+        self.ensure_secret_masker();
+        let max_len = self.state.runtime.streaming_masker.max_match_len;
+        if max_len <= 1 {
+            self.mask_secrets_full(text);
+            return;
+        }
+        let mut combined = std::mem::take(&mut self.state.runtime.streaming_masker.trailing_buffer);
+        combined.push_str(text);
+
+        let hold_bytes = max_len.saturating_sub(1).min(combined.len());
+        let mut cut = combined.len().saturating_sub(hold_bytes);
+        while cut > 0 && !combined.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        if let Some(regex) = &self.state.runtime.secret_mask_regex {
+            for matched in regex.find_iter(&combined) {
+                if matched.start() < cut && matched.end() > cut {
+                    cut = matched.start();
+                    break;
+                }
+            }
+            *text = regex
+                .replace_all(&combined[..cut], "[REDACTED]")
+                .to_string();
+        } else {
+            *text = combined[..cut].to_string();
+        }
+        self.state.runtime.streaming_masker.trailing_buffer = combined[cut..].to_string();
     }
 
     /// [v0.1.0-beta.18] ToolResult에서 2~4줄 요약을 생성.
@@ -1926,7 +1894,14 @@ impl App {
             return; // [v2.5.0] Trust Gate 활성 시 나머지 키 핸들러로의 폴스루 차단
         }
 
-        // [v2.4.0] Phase 32: Help Overlay 닫기 및 토글 로직
+        // [v3.7.0] Phase 47 Task Q-2: Questionnaire 모달 활성 시 키 입력 인터셉트.
+        // 다른 모든 키 핸들러보다 우선하여 질문 폼의 탐색/선택/입력을 처리.
+        if self.state.ui.questionnaire.is_some() {
+            self.handle_questionnaire_key(key);
+            return;
+        }
+
+        // Help는 Questionnaire 아래 z-order이므로 입력 우선순위도 그 뒤다.
         if self.state.ui.show_help_overlay {
             if key.code == KeyCode::Esc
                 || key.code == KeyCode::Enter
@@ -1937,10 +1912,16 @@ impl App {
             return;
         }
 
-        // [v3.7.0] Phase 47 Task Q-2: Questionnaire 모달 활성 시 키 입력 인터셉트.
-        // 다른 모든 키 핸들러보다 우선하여 질문 폼의 탐색/선택/입력을 처리.
-        if self.state.ui.questionnaire.is_some() {
-            self.handle_questionnaire_key(key);
+        if self.state.runtime.approval.pending_tool.is_some() {
+            match key.code {
+                KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                    self.handle_tool_approval(true)
+                }
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    self.handle_tool_approval(false)
+                }
+                _ => {}
+            }
             return;
         }
 
@@ -1967,6 +1948,28 @@ impl App {
                 } else {
                     self.state.should_quit = true;
                 }
+            }
+
+            KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cycle_pane_focus(true);
+            }
+            KeyCode::Right if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cycle_pane_focus(false);
+            }
+            KeyCode::Char(digit @ '1'..='6') if key.modifiers.contains(KeyModifiers::ALT) => {
+                use crate::app::state::InspectorTab;
+                let tabs = [
+                    InspectorTab::Preview,
+                    InspectorTab::Diff,
+                    InspectorTab::Search,
+                    InspectorTab::Logs,
+                    InspectorTab::Recent,
+                    InspectorTab::Git,
+                ];
+                self.state.ui.show_inspector = true;
+                self.state.ui.focused_pane = crate::app::state::FocusedPane::Inspector;
+                self.state.ui.active_inspector_tab = tabs[(digit as u8 - b'1') as usize];
+                self.state.ui.inspector_scroll.set(0);
             }
 
             KeyCode::F(2) => {
@@ -2473,6 +2476,29 @@ impl App {
         self.state.ui.inspector_scroll.set(0);
     }
 
+    fn cycle_pane_focus(&mut self, reverse: bool) {
+        use crate::app::state::FocusedPane;
+        let panes = if self.state.ui.show_inspector {
+            vec![
+                FocusedPane::Composer,
+                FocusedPane::Timeline,
+                FocusedPane::Inspector,
+            ]
+        } else {
+            vec![FocusedPane::Composer, FocusedPane::Timeline]
+        };
+        let current = panes
+            .iter()
+            .position(|pane| *pane == self.state.ui.focused_pane)
+            .unwrap_or(0);
+        let next = if reverse {
+            current.checked_sub(1).unwrap_or(panes.len() - 1)
+        } else {
+            (current + 1) % panes.len()
+        };
+        self.state.ui.focused_pane = panes[next];
+    }
+
     fn handle_slash_menu_enter(&mut self) {
         if self.state.ui.slash_menu.matches.is_empty() {
             self.state.ui.slash_menu.is_open = false;
@@ -2651,6 +2677,22 @@ impl App {
                 match target {
                     MousePaneTarget::Inspector => {
                         self.state.ui.focused_pane = crate::app::state::FocusedPane::Inspector;
+                        let geometry = crate::tui::layout::LayoutGeometry::new(
+                            ratatui::layout::Rect::new(0, 0, term_cols, term_rows),
+                            true,
+                        );
+                        if let Some(index) = geometry.inspector_tab_at(mouse.column, mouse.row) {
+                            use crate::app::state::InspectorTab;
+                            self.state.ui.active_inspector_tab = [
+                                InspectorTab::Preview,
+                                InspectorTab::Diff,
+                                InspectorTab::Search,
+                                InspectorTab::Logs,
+                                InspectorTab::Recent,
+                                InspectorTab::Git,
+                            ][index];
+                            self.state.ui.inspector_scroll.set(0);
+                        }
                     }
                     MousePaneTarget::Timeline => {
                         self.state.ui.focused_pane = crate::app::state::FocusedPane::Timeline;
@@ -2726,6 +2768,11 @@ impl App {
 
             self.state.ui.trust_gate.popup = crate::app::state::TrustGatePopup::Closed;
             self.state.ui.focused_pane = crate::app::state::FocusedPane::Composer;
+            self.state.runtime.harness_baseline = Some(
+                crate::infra::workspace_harness::WorkspaceHarnessSnapshot::collect(
+                    self.state.domain.settings.as_ref(),
+                ),
+            );
             return;
         }
 

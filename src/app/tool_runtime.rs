@@ -6,6 +6,13 @@
 use super::{App, action, event_loop};
 
 impl App {
+    pub(crate) fn tool_execution_key(tool_call_id: Option<&str>, tool_index: usize) -> String {
+        match tool_call_id {
+            Some(id) => format!("{id}#{tool_index}"),
+            None => format!("tool_{tool_index}"),
+        }
+    }
+
     /// [v3.4.0] 파일시스템을 변경하는 도구 목록. 직렬화 큐(write_tool_queue)에 사용.
     /// [v3.4.0] Phase 44 완료: DeleteFile이 GLOBAL_REGISTRY에 정식 등록됨.
     /// GitCheckpoint는 스냅샷 보존 도구이므로 write 목록에서 의도적으로 제외.
@@ -34,6 +41,10 @@ impl App {
         }
 
         if let Some(tool_calls) = &msg.tool_calls {
+            if !tool_calls.is_empty() {
+                self.state.runtime.pending_tool_executions += tool_calls.len();
+                self.state.runtime.tool_followup_sent = false;
+            }
             let mut valid_tools = Vec::new();
             for (idx, call) in tool_calls.iter().enumerate() {
                 let name = call.function.name.clone();
@@ -77,13 +88,23 @@ impl App {
                         )
                         .with_depth(1),
                     );
+                    let _ = self
+                        .action_tx
+                        .try_send(crate::app::event_loop::Event::Action(
+                            crate::app::action::Action::ToolError(
+                                crate::domain::error::ToolError::InvalidArguments(
+                                    "ExecShell command가 비어 있습니다".to_string(),
+                                ),
+                                Some(call.id.clone()),
+                                idx,
+                            ),
+                        ));
                     continue;
                 }
 
                 valid_tools.push((tool_call, call.id.clone(), idx));
             }
 
-            self.state.runtime.pending_tool_executions += valid_tools.len();
             for (tool_call, id, idx) in valid_tools {
                 self.dispatch_tool_call(tool_call, Some(id), idx);
             }
@@ -105,6 +126,7 @@ impl App {
             &crate::infra::workspace_harness::HarnessPreflightInput::from_tool_call(
                 &tool_call,
                 Some(&settings),
+                self.state.runtime.harness_baseline.as_ref(),
             ),
         );
         let perm = match preflight {
@@ -341,16 +363,32 @@ impl App {
 
         let tx = self.action_tx.clone();
         let token = crate::domain::permissions::PermissionToken::grant();
-
-        // [v2.5.0] 병렬 도구별 독립 CancellationToken 생성 및 등록
         let cancel_token = tokio_util::sync::CancellationToken::new();
-        let token_key = tool_call_id
-            .clone()
-            .unwrap_or_else(|| format!("tool_{}", tool_index));
+        let token_key = Self::tool_execution_key(tool_call_id.as_deref(), tool_index);
+        self.state
+            .runtime
+            .register_tool_execution(token_key.clone(), Self::is_write_tool(&tool_call.name));
         self.state
             .runtime
             .active_tool_cancel_tokens
             .insert(token_key, cancel_token.clone());
+
+        let Some(settings_snapshot) = self.state.domain.settings.clone() else {
+            let tx = self.action_tx.clone();
+            tokio::spawn(async move {
+                let _ = tx
+                    .send(event_loop::Event::Action(action::Action::ToolError(
+                        crate::domain::error::ToolError::PermissionDenied(
+                            "설정 snapshot이 없어 도구 실행을 거부합니다".to_string(),
+                        ),
+                        tool_call_id,
+                        tool_index,
+                    )))
+                    .await;
+            });
+            return;
+        };
+        let settings_snapshot = std::sync::Arc::new(settings_snapshot);
 
         // [v1.9.0] Phase 27: 터미널 타이틀 & 작업표시줄 진행률 동기화 (OSC)
         {
@@ -428,7 +466,11 @@ impl App {
                 // [v3.3.2] 역매핑에서 복원한 원본 MCP 도구명으로 call_tool 호출.
                 // 정규화된 이름이 아닌 MCP 서버가 인식하는 원래 이름 사용.
                 match client
-                    .call_tool(&actual_tool_name, tool_call.args.clone())
+                    .call_tool_cancellable(
+                        &actual_tool_name,
+                        tool_call.args.clone(),
+                        cancel_token.clone(),
+                    )
                     .await
                 {
                     Ok(output) => {
@@ -461,7 +503,15 @@ impl App {
                     }
                 }
             } else {
-                match crate::tools::executor::execute_tool(tool_call, &token, cancel_token).await {
+                match crate::tools::executor::execute_tool(
+                    tool_call,
+                    &token,
+                    cancel_token,
+                    settings_snapshot,
+                    Some(tx.clone()),
+                )
+                .await
+                {
                     Ok(mut res) => {
                         res.tool_call_id = tool_call_id;
                         let _ = tx
@@ -486,6 +536,37 @@ impl App {
         });
     }
 
+    pub(crate) fn promote_next_approval(&mut self, now_ms: u64) {
+        let Some((next_tool, next_id, next_idx)) =
+            self.state.runtime.approval.queued_approvals.pop_front()
+        else {
+            return;
+        };
+        self.state.runtime.approval.pending_tool = Some(next_tool.clone());
+        self.state.runtime.approval.pending_tool_call_id = next_id.clone();
+        self.state.runtime.approval.pending_tool_index = Some(next_idx);
+        self.state.runtime.approval.pending_since_ms = Some(now_ms);
+        if let Some(registry_tool) =
+            crate::tools::registry::GLOBAL_REGISTRY.get_tool(&next_tool.name)
+        {
+            self.state.runtime.approval.diff_preview =
+                registry_tool.generate_diff_preview(&next_tool.args);
+        }
+        let mut approval_block = crate::app::state::TimelineBlock::new(
+            crate::app::state::TimelineBlockKind::Approval,
+            Self::format_tool_name(&next_tool),
+        );
+        approval_block.status = crate::app::state::BlockStatus::NeedsApproval;
+        approval_block.tool_call_id = next_id;
+        approval_block
+            .body
+            .push(crate::app::state::BlockSection::Markdown(
+                Self::format_tool_detail(&next_tool),
+            ));
+        self.state.ui.timeline.push(approval_block);
+        self.state.ui.show_inspector = true;
+    }
+
     /// 사용자가 도구 승인 카드에서 'y'(승인) 또는 'n'(거부)을 입력했을 때 처리.
     pub(crate) fn handle_tool_approval(&mut self, approved: bool) {
         // [v2.5.0] 상태 경합/만료 직후 입력 등 경계 조건에서 패닉 방지.
@@ -505,20 +586,37 @@ impl App {
         self.state.runtime.approval.pending_since_ms = None;
 
         if approved {
-            let settings = self.state.domain.settings.clone().unwrap_or_default();
-            let preflight = crate::infra::workspace_harness::evaluate_preflight(
-                &crate::infra::workspace_harness::HarnessPreflightInput::from_tool_call(
-                    &tool,
-                    Some(&settings),
-                ),
-            );
-            if let crate::infra::workspace_harness::HarnessPreflightDecision::Deny { reason } =
-                preflight
-            {
+            let denial = match self.state.domain.settings.clone() {
+                None => Some("설정 snapshot이 없습니다".to_string()),
+                Some(settings) => {
+                    let preflight = crate::infra::workspace_harness::evaluate_preflight(
+                        &crate::infra::workspace_harness::HarnessPreflightInput::from_tool_call(
+                            &tool,
+                            Some(&settings),
+                            self.state.runtime.harness_baseline.as_ref(),
+                        ),
+                    );
+                    match preflight {
+                        crate::infra::workspace_harness::HarnessPreflightDecision::Deny {
+                            reason,
+                        } => Some(format!("Harness preflight denied: {reason}")),
+                        _ => match crate::domain::permissions::PermissionEngine::check(
+                            &tool, &settings,
+                        ) {
+                            crate::domain::permissions::PermissionResult::Deny(reason) => {
+                                Some(reason)
+                            }
+                            crate::domain::permissions::PermissionResult::Allow
+                            | crate::domain::permissions::PermissionResult::Ask => None,
+                        },
+                    }
+                }
+            };
+            if let Some(reason) = denial {
                 let res = crate::domain::tool_result::ToolResult {
                     tool_name: tool.name.clone(),
                     stdout: String::new(),
-                    stderr: format!("[Security Block] Harness preflight denied: {}", reason),
+                    stderr: format!("[Security Block] {reason}"),
                     exit_code: 1,
                     is_error: true,
                     tool_call_id: tool_call_id.clone(),
@@ -535,6 +633,7 @@ impl App {
                         )))
                         .await;
                 });
+                self.promote_next_approval(super::App::unix_time_ms());
                 return;
             }
 
@@ -606,36 +705,7 @@ impl App {
             });
         }
 
-        // Pop next queued approval if any
-        if let Some((next_tool, next_id, next_idx)) =
-            self.state.runtime.approval.queued_approvals.pop_front()
-        {
-            self.state.runtime.approval.pending_tool = Some(next_tool.clone());
-            self.state.runtime.approval.pending_tool_call_id = next_id.clone();
-            self.state.runtime.approval.pending_tool_index = Some(next_idx);
-            self.state.runtime.approval.pending_since_ms = Some(super::App::unix_time_ms());
-            if let Some(registry_tool) =
-                crate::tools::registry::GLOBAL_REGISTRY.get_tool(&next_tool.name)
-            {
-                self.state.runtime.approval.diff_preview =
-                    registry_tool.generate_diff_preview(&next_tool.args);
-            }
-            // [v2.5.0] 기존 블록 변형 대신 새 Approval 블록을 명시적으로 생성.
-            // 직전에 Notice/ToolRun이 추가된 경우 해당 블록이 의도치 않게 변형되는 것을 방지.
-            let mut approval_block = crate::app::state::TimelineBlock::new(
-                crate::app::state::TimelineBlockKind::Approval,
-                Self::format_tool_name(&next_tool),
-            );
-            approval_block.status = crate::app::state::BlockStatus::NeedsApproval;
-            approval_block.tool_call_id = next_id;
-            approval_block
-                .body
-                .push(crate::app::state::BlockSection::Markdown(
-                    Self::format_tool_detail(&next_tool),
-                ));
-            self.state.ui.timeline.push(approval_block);
-            self.state.ui.show_inspector = true;
-        }
+        self.promote_next_approval(super::App::unix_time_ms());
     }
 
     /// Composer에서 '!' 접두사로 입력된 직접 셸 실행 요청을 처리.

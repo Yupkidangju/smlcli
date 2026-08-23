@@ -13,6 +13,19 @@ impl App {
     /// 각 커맨드에 대한 상태 변경, 비동기 작업 트리거, 메시지 추가를 수행.
     pub(crate) fn handle_slash_command(&mut self, cmd: &str) {
         let parts: Vec<&str> = cmd.split_whitespace().collect();
+        if parts.is_empty() {
+            return;
+        }
+        if !crate::commands::is_known_command(parts[0]) {
+            self.state
+                .ui
+                .timeline
+                .push(crate::app::state::TimelineBlock::new(
+                    crate::app::state::TimelineBlockKind::Notice,
+                    format!("Unknown command: {}", parts[0]),
+                ));
+            return;
+        }
         match parts[0] {
             "/setting" => {
                 self.state.ui.is_wizard_open = true;
@@ -66,11 +79,27 @@ impl App {
                             };
 
                             if let Some(settings) = &mut self.state.domain.settings {
-                                settings.custom_providers.retain(|p| p.id != id);
-                                settings.custom_providers.push(config);
-                                crate::providers::registry::update_custom_providers(
-                                    &settings.custom_providers,
-                                );
+                                let mut candidate = settings.custom_providers.clone();
+                                candidate.retain(|p| p.id != id);
+                                candidate.push(config);
+                                if let Err(error) =
+                                    crate::providers::registry::update_custom_providers(&candidate)
+                                {
+                                    self.state.domain.session.add_message(
+                                        crate::providers::types::ChatMessage {
+                                            role: crate::providers::types::Role::System,
+                                            content: Some(format!(
+                                                "Custom provider '{}' 등록 거부: {}",
+                                                id, error
+                                            )),
+                                            tool_calls: None,
+                                            tool_call_id: None,
+                                            pinned: false,
+                                        },
+                                    );
+                                    return;
+                                }
+                                settings.custom_providers = candidate;
 
                                 let settings_clone = settings.clone();
                                 let tx = self.action_tx.clone();
@@ -118,15 +147,7 @@ impl App {
                                 let initial_len = settings.custom_providers.len();
                                 settings.custom_providers.retain(|p| p.id != id);
                                 if settings.custom_providers.len() < initial_len {
-                                    crate::providers::registry::reload_providers();
-                                    crate::providers::registry::update_custom_providers(
-                                        &settings.custom_providers,
-                                    );
-                                    if let Some(base_url) = &settings.lmstudio_base_url {
-                                        crate::providers::registry::update_lmstudio_base_url(
-                                            base_url,
-                                        );
-                                    }
+                                    let _ = crate::providers::registry::reload_providers(settings);
 
                                     let settings_clone = settings.clone();
                                     let tx = self.action_tx.clone();
@@ -315,6 +336,15 @@ impl App {
                         tool_call_id: None,
                         pinned: false,
                     });
+                let mut block = crate::app::state::TimelineBlock::new(
+                    crate::app::state::TimelineBlockKind::Notice,
+                    "Session Status",
+                );
+                block.status = crate::app::state::BlockStatus::Done;
+                block
+                    .body
+                    .push(crate::app::state::BlockSection::Markdown(info));
+                self.state.ui.timeline.push(block);
             }
             "/mode" => {
                 use crate::domain::session::AppMode;
@@ -326,6 +356,16 @@ impl App {
             "/clear" => {
                 // [v0.1.0-beta.7] pinned 메시지(시스템 프롬프트, 요약)를 보존하고 나머지만 삭제.
                 self.state.domain.session.messages.retain(|m| m.pinned);
+                self.state.ui.timeline.clear();
+                self.state.ui.timeline_scroll = 0;
+                self.state.ui.timeline_cursor = 0;
+                self.state.ui.timeline_follow_tail = true;
+                let mut block = crate::app::state::TimelineBlock::new(
+                    crate::app::state::TimelineBlockKind::Notice,
+                    "Chat cleared",
+                );
+                block.status = crate::app::state::BlockStatus::Done;
+                self.state.ui.timeline.push(block);
             }
             "/compact" => {
                 self.handle_compact_command();
@@ -348,62 +388,10 @@ impl App {
                 self.state.ui.timeline.push(block);
             }
             "/help" => {
-                let help_entries = vec![
-                    (
-                        "/config".to_string(),
-                        "설정 대시보드 (Settings Dashboard)".to_string(),
-                    ),
-                    (
-                        "/setting".to_string(),
-                        "셋업 위자드 (Setup Wizard)".to_string(),
-                    ),
-                    (
-                        "/provider".to_string(),
-                        "공급자 전환 (Switch Provider)".to_string(),
-                    ),
-                    ("/model".to_string(), "모델 전환 (Switch Model)".to_string()),
-                    (
-                        "/status".to_string(),
-                        "세션 상태 (Session Info)".to_string(),
-                    ),
-                    (
-                        "/mode".to_string(),
-                        "PLAN ↔ RUN 전환 (Toggle Mode)".to_string(),
-                    ),
-                    (
-                        "/tokens".to_string(),
-                        "토큰 사용량 (Token Usage)".to_string(),
-                    ),
-                    (
-                        "/compact".to_string(),
-                        "컨텍스트 압축 (Compress Context)".to_string(),
-                    ),
-                    ("/theme".to_string(), "테마 전환 (Toggle Theme)".to_string()),
-                    (
-                        "/workspace".to_string(),
-                        "워크스페이스 신뢰 관리: show/trust/deny/clear".to_string(),
-                    ),
-                    (
-                        "/mcp".to_string(),
-                        "MCP 서버 관리 (list, add, remove)".to_string(),
-                    ),
-                    (
-                        "/undo".to_string(),
-                        "마지막 AI 작업 되돌리기 (Undo Last AI Commit)".to_string(),
-                    ),
-                    ("/new".to_string(), "새 세션 시작 (New Session)".to_string()),
-                    (
-                        "/resume".to_string(),
-                        "세션 이어하기 (Resume Session)".to_string(),
-                    ),
-                    (
-                        "/session".to_string(),
-                        "세션 목록 (Session List)".to_string(),
-                    ),
-                    ("/clear".to_string(), "대화 초기화 (Clear Chat)".to_string()),
-                    ("/help".to_string(), "도움말 (Help)".to_string()),
-                    ("/quit".to_string(), "종료 (Exit)".to_string()),
-                ];
+                let help_entries = crate::commands::COMMANDS
+                    .iter()
+                    .map(|command| (command.id.to_string(), command.title.to_string()))
+                    .collect::<Vec<_>>();
                 let key_entries = vec![
                     ("F1 / ?".to_string(), "도움말 오버레이 열기".to_string()),
                     (
@@ -686,6 +674,7 @@ impl App {
                                                 name: name.to_string(),
                                                 command: cmd.to_string(),
                                                 args: mcp_args,
+                                                allowed_env_vars: Vec::new(),
                                             },
                                         );
                                         message = format!(
@@ -859,7 +848,7 @@ impl App {
                             );
                         let record = crate::infra::workspace_harness::SessionHarnessRecord::new(
                             metadata.session_id.clone(),
-                            snapshot,
+                            snapshot.clone(),
                         );
                         let _ = logger.append_harness_record(&record);
                         // 타임라인과 세션 상태 초기화
@@ -870,6 +859,7 @@ impl App {
                         self.state.runtime.stream_accumulator.clear();
                         self.state.runtime.active_chat_block_idx = None;
                         self.state.runtime.auto_verify = state::AutoVerifyState::Idle;
+                        self.state.runtime.harness_baseline = Some(snapshot);
                         self.state.ui.timeline_scroll = 0;
                         self.state.ui.timeline_follow_tail = true;
 
@@ -1096,7 +1086,7 @@ impl App {
             }
         };
 
-        let to_summarize = self.state.domain.session.extract_for_summary();
+        let to_summarize = self.state.domain.session.prepare_compaction();
         if to_summarize.is_empty() {
             self.state
                 .domain

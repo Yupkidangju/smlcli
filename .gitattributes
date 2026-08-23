@@ -1,0 +1,2 @@
+# Immutable multi-audit reports preserve their sealed byte representation.
+docs/multi_audit/** whitespace=-blank-at-eof

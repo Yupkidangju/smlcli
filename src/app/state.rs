@@ -138,28 +138,29 @@ pub struct DomainState {
 impl DomainState {
     /// 비동기 초기화: config.toml 로드 및 세션 로거 생성
     pub async fn new_async() -> Self {
-        let (loaded_settings, config_load_error) = match crate::infra::config_store::load_config()
-            .await
-        {
-            Ok(settings) => (settings, None),
-            Err(err) => {
-                let path = crate::infra::config_store::config_path();
-                (
-                    None,
-                    Some(format!(
-                        "설정 파일을 읽지 못했습니다: {}.\n문제가 지속되면 {} 파일을 복구하거나 삭제한 뒤 설정 마법사를 다시 진행하세요.",
-                        err,
-                        path.display()
-                    )),
-                )
-            }
-        };
+        let (loaded_settings, mut config_load_error) =
+            match crate::infra::config_store::load_config().await {
+                Ok(settings) => (settings, None),
+                Err(err) => {
+                    let path = crate::infra::config_store::config_path();
+                    (
+                        None,
+                        Some(format!(
+                            "설정 파일을 읽지 못했습니다: {}.\n문제가 지속되면 {} 파일을 복구하거나 삭제한 뒤 설정 마법사를 다시 진행하세요.",
+                            err,
+                            path.display()
+                        )),
+                    )
+                }
+            };
 
-        if let Some(settings) = &loaded_settings {
-            crate::providers::registry::update_custom_providers(&settings.custom_providers);
-            if let Some(base_url) = &settings.lmstudio_base_url {
-                crate::providers::registry::update_lmstudio_base_url(base_url);
-            }
+        if let Some(settings) = &loaded_settings
+            && let Err(error) = crate::providers::registry::reload_providers(settings)
+        {
+            config_load_error = Some(match config_load_error {
+                Some(existing) => format!("{existing}\nProvider registry: {error}"),
+                None => format!("Provider registry 설정 실패: {error}"),
+            });
         }
 
         // [v3.6.0] Phase 46: 워크스페이스 기반 세션 생성
@@ -178,10 +179,13 @@ impl DomainState {
                     let _ = logger.append_harness_record(&record);
                     (Some(logger), Some(meta))
                 }
-                Err(_) => {
-                    // 폴백: 기존 방식으로 로거만 생성
-                    let logger = crate::infra::session_log::SessionLogger::new_session().ok();
-                    (logger, None)
+                Err(error) => {
+                    config_load_error = Some(match config_load_error {
+                        Some(existing) => format!("{existing}\nSession store: {error}"),
+                        None => format!("세션 store 초기화 실패: {error}"),
+                    });
+                    // Harness record 없는 fallback session은 만들지 않는다.
+                    (None, None)
                 }
             };
 
@@ -377,117 +381,25 @@ pub struct CommandPaletteState {
 
 impl CommandPaletteState {
     pub fn new() -> Self {
-        let all_commands = vec![
-            PaletteCommand {
-                id: "/help",
-                title: "Help",
-                category: PaletteCategory::Navigation,
+        let mut all_commands = crate::commands::COMMANDS
+            .iter()
+            .map(|command| PaletteCommand {
+                id: command.id,
+                title: command.title,
+                category: match command.group {
+                    crate::commands::CommandGroup::Navigation => PaletteCategory::Navigation,
+                    crate::commands::CommandGroup::Session => PaletteCategory::Session,
+                    crate::commands::CommandGroup::Integration => PaletteCategory::Tools,
+                },
                 shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/config",
-                title: "Settings Dashboard",
-                category: PaletteCategory::Navigation,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/setting",
-                title: "Setup Wizard",
-                category: PaletteCategory::Navigation,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/provider",
-                title: "Switch Provider",
-                category: PaletteCategory::Navigation,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/model",
-                title: "Switch Model",
-                category: PaletteCategory::Navigation,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/status",
-                title: "Session Info",
-                category: PaletteCategory::Session,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/mode",
-                title: "PLAN ↔ RUN Toggle",
-                category: PaletteCategory::Session,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/tokens",
-                title: "Token Usage",
-                category: PaletteCategory::Session,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/compact",
-                title: "Compact Context",
-                category: PaletteCategory::Session,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/theme",
-                title: "Toggle Theme",
-                category: PaletteCategory::Navigation,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/clear",
-                title: "Clear Session",
-                category: PaletteCategory::Session,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/workspace trust",
-                title: "Workspace: Trust & Remember",
-                category: PaletteCategory::Navigation,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/workspace deny",
-                title: "Workspace: Restrict (Read-only)",
-                category: PaletteCategory::Navigation,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/workspace clear",
-                title: "Workspace: Clear Trust State",
-                category: PaletteCategory::Navigation,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "toggle_inspector",
-                title: "Toggle Inspector",
-                category: PaletteCategory::Navigation,
-                shortcut_hint: Some("F2"),
-            },
-            // [v3.6.0] Phase 46: 세션 관리 명령어
-            PaletteCommand {
-                id: "/new",
-                title: "New Session",
-                category: PaletteCategory::Session,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/resume",
-                title: "Resume Session",
-                category: PaletteCategory::Session,
-                shortcut_hint: None,
-            },
-            PaletteCommand {
-                id: "/session",
-                title: "Session List",
-                category: PaletteCategory::Session,
-                shortcut_hint: None,
-            },
-        ];
+            })
+            .collect::<Vec<_>>();
+        all_commands.push(PaletteCommand {
+            id: "toggle_inspector",
+            title: "Toggle Inspector",
+            category: PaletteCategory::Navigation,
+            shortcut_hint: Some("F2"),
+        });
 
         Self {
             is_open: false,
@@ -607,11 +519,14 @@ pub struct RuntimeState {
     pub user_intent_actionable: bool,
     pub auto_verify: AutoVerifyState,
     pub workspace: RuntimeWorkspaceState,
+    pub harness_baseline: Option<crate::infra::workspace_harness::WorkspaceHarnessSnapshot>,
     pub active_chat_block_idx: Option<usize>,
     // [v2.5.0] Phase 35: 병렬 도구 실행을 위한 per-tool CancellationToken 맵.
     // 키: tool_call_id (없으면 인덱스 기반 문자열), 값: CancellationToken.
     pub active_tool_cancel_tokens:
         std::collections::HashMap<String, tokio_util::sync::CancellationToken>,
+    pub completed_tool_execution_keys: std::collections::HashSet<String>,
+    pub active_write_execution_key: Option<String>,
     pub stream_accumulator: String,
     // [v1.6.0] RepoMap의 동적 갱신을 위한 Dirty Flag
     pub repo_map_dirty: bool,
@@ -622,6 +537,7 @@ pub struct RuntimeState {
 
     // [v2.4.0] Phase 32: Parallel Tool Execution
     pub pending_tool_executions: usize,
+    pub tool_followup_sent: bool,
     pub write_tool_queue:
         std::collections::VecDeque<(crate::domain::tool_result::ToolCall, Option<String>, usize)>,
     pub is_write_tool_running: bool,
@@ -662,13 +578,17 @@ impl RuntimeState {
             user_intent_actionable: true,
             auto_verify: AutoVerifyState::Idle,
             workspace: RuntimeWorkspaceState::new(),
+            harness_baseline: None,
             active_chat_block_idx: None,
             active_tool_cancel_tokens: std::collections::HashMap::new(),
+            completed_tool_execution_keys: std::collections::HashSet::new(),
+            active_write_execution_key: None,
             stream_accumulator: String::new(),
             repo_map_dirty: true,
             secret_mask_regex: None,
             streaming_masker: StreamingMasker::default(),
             pending_tool_executions: 0,
+            tool_followup_sent: false,
             write_tool_queue: std::collections::VecDeque::new(),
             is_write_tool_running: false,
             pending_tool_outcomes: Vec::new(),
@@ -676,6 +596,30 @@ impl RuntimeState {
             mcp_tools_cache: Vec::new(),
             mcp_tool_name_map: std::collections::HashMap::new(),
         }
+    }
+
+    pub fn register_tool_execution(&mut self, key: String, is_write: bool) {
+        self.completed_tool_execution_keys.remove(&key);
+        if is_write {
+            self.is_write_tool_running = true;
+            self.active_write_execution_key = Some(key);
+        }
+    }
+
+    pub fn begin_tool_terminal_transition(
+        &mut self,
+        key: &str,
+    ) -> Option<Option<(crate::domain::tool_result::ToolCall, Option<String>, usize)>> {
+        if !self.completed_tool_execution_keys.insert(key.to_string()) {
+            return None;
+        }
+        self.active_tool_cancel_tokens.remove(key);
+        if self.active_write_execution_key.as_deref() == Some(key) {
+            self.active_write_execution_key = None;
+            self.is_write_tool_running = false;
+            return Some(self.write_tool_queue.pop_front());
+        }
+        Some(None)
     }
 }
 
@@ -695,15 +639,18 @@ impl AppState {
         let ui = UiState::new(is_wizard_open);
         let mut runtime = RuntimeState::new();
         runtime.workspace.refresh(domain.settings.as_ref());
+        runtime.harness_baseline = Some(
+            crate::infra::workspace_harness::WorkspaceHarnessSnapshot::collect(
+                domain.settings.as_ref(),
+            ),
+        );
 
         // [v3.9.0] 1. 설정에 명시된 언어를 우선으로 하며, 없는 경우 환경변수(LANG, LC_ALL) 파싱.
         // 환경변수도 없는 경우 기본값 "en"으로 폴백한다.
         let lang = if let Some(settings) = &domain.settings {
             settings.lang.clone()
         } else {
-            std::env::var("LANG")
-                .or_else(|_| std::env::var("LC_ALL"))
-                .unwrap_or_else(|_| "en".to_string())
+            crate::tui::i18n::preferred_language_from_env()
         };
         let i18n = crate::tui::i18n::I18nManager::new(&lang);
 
@@ -938,24 +885,6 @@ pub struct SlashMenuState {
 }
 
 impl SlashMenuState {
-    const ALL_COMMANDS: [(&'static str, &'static str); 16] = [
-        ("/config", "Settings Dashboard"),
-        ("/setting", "Setup Wizard"),
-        ("/provider", "Switch Provider"),
-        ("/model", "Switch Model"),
-        ("/status", "Session Info"),
-        ("/mode", "PLAN ↔ RUN Toggle"),
-        ("/tokens", "Token Usage"),
-        ("/compact", "Compress Context"),
-        ("/theme", "Toggle Theme"),
-        ("/workspace", "Manage Workspace Trust"),
-        ("/new", "New Session"),
-        ("/resume", "Resume Session"),
-        ("/session", "Session List"),
-        ("/clear", "Clear Chat"),
-        ("/help", "Show Help"),
-        ("/quit", "Exit"),
-    ];
     const WORKSPACE_COMMANDS: [(&'static str, &'static str); 4] = [
         ("show", "Show trust state"),
         ("trust", "Trust current workspace"),
@@ -967,7 +896,7 @@ impl SlashMenuState {
         Self {
             is_open: false,
             filter: String::new(),
-            matches: Self::ALL_COMMANDS.to_vec(),
+            matches: crate::commands::command_pairs(),
             cursor: 0,
         }
     }
@@ -984,6 +913,7 @@ impl SlashMenuState {
 
         let ends_with_space = input.chars().last().is_some_and(char::is_whitespace);
         let parts: Vec<&str> = input.split_whitespace().collect();
+        let root_commands = crate::commands::command_pairs();
         let (filter, source): (&str, &[(&'static str, &'static str)]) =
             if parts.first() == Some(&"/workspace") && (ends_with_space || parts.len() >= 2) {
                 let filter = if ends_with_space {
@@ -994,7 +924,7 @@ impl SlashMenuState {
                 (filter, &Self::WORKSPACE_COMMANDS)
             } else {
                 let filter = parts.first().copied().unwrap_or("/");
-                (filter, &Self::ALL_COMMANDS)
+                (filter, &root_commands)
             };
 
         self.filter = filter.to_string();

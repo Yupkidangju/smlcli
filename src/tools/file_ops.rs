@@ -2,10 +2,81 @@ use crate::domain::tool_result::ToolResult;
 use anyhow::{Context, Result};
 use similar::{ChangeTag, TextDiff};
 use std::fs;
+use std::io::Write;
 
 /// [v0.1.0-beta.18] Phase 9-B: 라인 범위 미지정 시 기본 최대 표시 줄 수.
 /// 대규모 파일의 전체 출력을 방지하여 토큰 예산을 보호.
 const DEFAULT_MAX_LINES: usize = 800;
+
+pub(crate) fn read_file_context(
+    path: &str,
+    workspace_root: &std::path::Path,
+    max_bytes: usize,
+) -> std::result::Result<String, String> {
+    let canonical_root = std::fs::canonicalize(workspace_root).map_err(|error| {
+        format!(
+            "workspace root를 canonicalize할 수 없습니다 ({}): {error}",
+            workspace_root.display()
+        )
+    })?;
+    let requested = std::path::Path::new(path);
+    let candidate = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        canonical_root.join(requested)
+    };
+    let canonical = std::fs::canonicalize(&candidate)
+        .map_err(|error| format!("파일 경로를 확인할 수 없습니다 ({path}): {error}"))?;
+    if !canonical.starts_with(&canonical_root) {
+        return Err(format!(
+            "workspace 밖 파일 mention은 허용되지 않습니다: {path}"
+        ));
+    }
+
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|error| format!("파일 metadata 확인 실패 ({path}): {error}"))?;
+    if !metadata.is_file() {
+        return Err(format!("regular file만 mention할 수 있습니다: {path}"));
+    }
+    if metadata.len() > max_bytes as u64 {
+        return Err(format!(
+            "파일 mention 크기 제한을 초과했습니다 ({} > {} bytes): {}",
+            metadata.len(),
+            max_bytes,
+            path
+        ));
+    }
+
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    }
+    let file = options
+        .open(&canonical)
+        .map_err(|error| format!("파일 mention open 실패 ({path}): {error}"))?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    use std::io::Read;
+    file.take(max_bytes.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("파일 mention read 실패 ({path}): {error}"))?;
+    if bytes.len() > max_bytes {
+        return Err(format!("파일 mention 크기 제한을 초과했습니다: {path}"));
+    }
+    if bytes.contains(&0) {
+        return Err(format!("binary/NUL 파일은 mention할 수 없습니다: {path}"));
+    }
+    let control_count = bytes
+        .iter()
+        .filter(|byte| **byte < 32 && !matches!(**byte, b'\n' | b'\r' | b'\t'))
+        .count();
+    if !bytes.is_empty() && control_count * 10 > bytes.len() * 3 {
+        return Err(format!("binary control byte가 많은 파일입니다: {path}"));
+    }
+    String::from_utf8(bytes).map_err(|_| format!("UTF-8 text file만 mention할 수 있습니다: {path}"))
+}
 
 pub(crate) fn validate_sandbox(path: &str) -> std::result::Result<std::path::PathBuf, String> {
     let target = std::path::Path::new(path);
@@ -177,65 +248,158 @@ pub(crate) fn write_file_preview(path: &str, new_content: &str) -> Result<String
 }
 
 pub(crate) fn write_file_commit(path: &str, new_content: &str) -> Result<ToolResult> {
+    write_file_commit_with_policy(path, new_content, true)
+}
+
+fn file_write_error(message: impl Into<String>) -> ToolResult {
+    ToolResult {
+        tool_name: "WriteFile".to_string(),
+        stdout: String::new(),
+        stderr: message.into(),
+        exit_code: 1,
+        is_error: true,
+        tool_call_id: None,
+        is_truncated: false,
+        original_size_bytes: None,
+        affected_paths: vec![],
+    }
+}
+
+fn write_file_commit_with_policy(
+    path: &str,
+    new_content: &str,
+    overwrite: bool,
+) -> Result<ToolResult> {
     let canonical = match validate_sandbox(path) {
         Ok(p) => p,
-        Err(e) => {
-            return Ok(ToolResult {
-                tool_name: "WriteFile".to_string(),
-                stdout: String::new(),
-                stderr: e,
-                exit_code: 1,
-                is_error: true,
-                tool_call_id: None,
-                is_truncated: false,
-                original_size_bytes: None,
-                affected_paths: vec![],
-            });
-        }
+        Err(e) => return Ok(file_write_error(e)),
     };
 
-    let path_str = canonical.to_string_lossy().to_string();
-    let tmp_path = format!("{}.tmp", path_str);
-    match fs::write(&tmp_path, new_content) {
-        Ok(_) => match fs::rename(&tmp_path, &canonical) {
-            Ok(_) => Ok(ToolResult {
-                tool_name: "WriteFile".to_string(),
-                stdout: format!("Successfully wrote to {}", path_str),
-                stderr: String::new(),
-                exit_code: 0,
-                is_error: false,
-                tool_call_id: None,
-                is_truncated: false,
-                original_size_bytes: None,
-                affected_paths: vec![path_str.clone()],
-            }),
-            Err(e) => {
-                let _ = fs::remove_file(&tmp_path);
-                Ok(ToolResult {
-                    tool_name: "WriteFile".to_string(),
-                    stdout: String::new(),
-                    stderr: format!("Failed atomic rename: {}", e),
-                    exit_code: 1,
-                    is_error: true,
-                    tool_call_id: None,
-                    is_truncated: false,
-                    original_size_bytes: None,
-                    affected_paths: vec![],
-                })
+    let parent = match canonical.parent() {
+        Some(parent) if parent.is_dir() => parent,
+        _ => return Ok(file_write_error("대상 파일의 parent directory가 없습니다")),
+    };
+    let existing_metadata = match fs::symlink_metadata(&canonical) {
+        Ok(metadata) => {
+            if !metadata.file_type().is_file() {
+                return Ok(file_write_error(format!(
+                    "regular file만 교체할 수 있습니다: {}",
+                    canonical.display()
+                )));
             }
-        },
-        Err(e) => Ok(ToolResult {
-            tool_name: "WriteFile".to_string(),
-            stdout: String::new(),
-            stderr: format!("Failed to write temp file: {}", e),
-            exit_code: 1,
-            is_error: true,
-            tool_call_id: None,
-            is_truncated: false,
-            original_size_bytes: None,
-            affected_paths: vec![],
-        }),
+            Some(metadata)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Ok(file_write_error(format!(
+                "대상 metadata 확인 실패: {error}"
+            )));
+        }
+    };
+    if existing_metadata.is_some() && !overwrite {
+        return Ok(file_write_error(format!(
+            "overwrite=false이므로 기존 파일을 덮어쓸 수 없습니다: {}",
+            canonical.display()
+        )));
     }
+
+    let file_name = canonical
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    let mut temp_file = None;
+    for _ in 0..16 {
+        let candidate = parent.join(format!(".{file_name}.smlcli-{}.tmp", uuid::Uuid::new_v4()));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options
+                .mode(0o666)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        }
+        match options.open(&candidate) {
+            Ok(file) => {
+                temp_file = Some((candidate, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Ok(file_write_error(format!(
+                    "exclusive temp file 생성 실패: {error}"
+                )));
+            }
+        }
+    }
+
+    let Some((temp_path, mut file)) = temp_file else {
+        return Ok(file_write_error(
+            "unique temp file 이름을 확보하지 못했습니다",
+        ));
+    };
+    let cleanup = |message: String| {
+        let _ = fs::remove_file(&temp_path);
+        file_write_error(message)
+    };
+
+    if let Err(error) = file.write_all(new_content.as_bytes()) {
+        return Ok(cleanup(format!("temp file write 실패: {error}")));
+    }
+    if let Some(metadata) = &existing_metadata
+        && let Err(error) = file.set_permissions(metadata.permissions())
+    {
+        return Ok(cleanup(format!("기존 file mode 보존 실패: {error}")));
+    }
+    if let Err(error) = file.sync_all() {
+        return Ok(cleanup(format!("temp file sync 실패: {error}")));
+    }
+    drop(file);
+
+    let publish_result = if overwrite {
+        fs::rename(&temp_path, &canonical)
+    } else {
+        // Same-directory hard link creation is atomic and fails if the final path
+        // appeared after validation. This prevents a create-only race clobber.
+        fs::hard_link(&temp_path, &canonical).and_then(|_| fs::remove_file(&temp_path))
+    };
+    if let Err(error) = publish_result {
+        let _ = fs::remove_file(&temp_path);
+        return Ok(file_write_error(format!("atomic publish 실패: {error}")));
+    }
+    if let Ok(directory) = fs::File::open(parent) {
+        let _ = directory.sync_all();
+    }
+
+    let path_str = canonical.to_string_lossy().to_string();
+    Ok(ToolResult {
+        tool_name: "WriteFile".to_string(),
+        stdout: format!("Successfully wrote to {path_str}"),
+        stderr: String::new(),
+        exit_code: 0,
+        is_error: false,
+        tool_call_id: None,
+        is_truncated: false,
+        original_size_bytes: None,
+        affected_paths: vec![path_str],
+    })
+}
+
+fn replace_exactly_once(
+    old_content: &str,
+    target: &str,
+    replacement: &str,
+) -> std::result::Result<String, String> {
+    if target.is_empty() {
+        return Err("target_content는 비어 있을 수 없습니다".to_string());
+    }
+    let matches = old_content.match_indices(target).count();
+    if matches != 1 {
+        return Err(format!(
+            "target_content는 정확히 1회 일치해야 합니다 (현재 {matches}회)"
+        ));
+    }
+    Ok(old_content.replacen(target, replacement, 1))
 }
 
 // ==========================================
@@ -345,7 +509,7 @@ impl Tool for WriteFileTool {
                         "content": { "type": "string" },
                         "overwrite": { "type": "boolean" }
                     },
-                    "required": ["path", "content"]
+                    "required": ["path", "content", "overwrite"]
                 }
             }
         })
@@ -355,6 +519,14 @@ impl Tool for WriteFileTool {
         let path = args.get("path").and_then(|v| v.as_str()).unwrap_or("");
         if let Err(e) = validate_sandbox(path) {
             return PermissionResult::Deny(e);
+        }
+        let Some(overwrite) = args.get("overwrite").and_then(|v| v.as_bool()) else {
+            return PermissionResult::Deny("overwrite boolean이 필요합니다".to_string());
+        };
+        if !overwrite && std::path::Path::new(path).exists() {
+            return PermissionResult::Deny(format!(
+                "overwrite=false이므로 기존 파일을 덮어쓸 수 없습니다: {path}"
+            ));
         }
         match settings.file_write_policy {
             FileWritePolicy::AlwaysAsk => PermissionResult::Ask,
@@ -395,11 +567,14 @@ impl Tool for WriteFileTool {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let Some(overwrite) = args.get("overwrite").and_then(|v| v.as_bool()) else {
+            return Ok(file_write_error("overwrite boolean이 필요합니다"));
+        };
 
         let old_content = std::fs::read_to_string(&path).unwrap_or_default();
         let diff = generate_diff(&old_content, &content);
 
-        match write_file_commit(&path, &content) {
+        match write_file_commit_with_policy(&path, &content, overwrite) {
             Ok(mut res) => {
                 res.stdout = format!("{}\n{}", diff, res.stdout);
                 Ok(res)
@@ -469,10 +644,8 @@ impl Tool for ReplaceFileContentTool {
 
         let canonical = validate_sandbox(path).ok()?;
         let old_text = std::fs::read_to_string(canonical).unwrap_or_default();
-        Some(generate_diff(
-            &old_text,
-            &old_text.replace(target, replacement),
-        ))
+        let new_text = replace_exactly_once(&old_text, target, replacement).ok()?;
+        Some(generate_diff(&old_text, &new_text))
     }
 
     fn is_destructive(&self, _args: &Value) -> bool {
@@ -515,20 +688,22 @@ impl Tool for ReplaceFileContentTool {
 
         match std::fs::read_to_string(&canonical) {
             Ok(old_content) => {
-                if !old_content.contains(&target) {
-                    return Ok(ToolResult {
-                        tool_name: "ReplaceFileContent".to_string(),
-                        stdout: String::new(),
-                        stderr: format!("Target content not found in {}", path),
-                        exit_code: 1,
-                        is_error: true,
-                        tool_call_id: None,
-                        is_truncated: false,
-                        original_size_bytes: None,
-                        affected_paths: vec![],
-                    });
-                }
-                let new_content = old_content.replace(&target, &replacement);
+                let new_content = match replace_exactly_once(&old_content, &target, &replacement) {
+                    Ok(content) => content,
+                    Err(message) => {
+                        return Ok(ToolResult {
+                            tool_name: "ReplaceFileContent".to_string(),
+                            stdout: String::new(),
+                            stderr: format!("{}: {}", message, path),
+                            exit_code: 1,
+                            is_error: true,
+                            tool_call_id: None,
+                            is_truncated: false,
+                            original_size_bytes: None,
+                            affected_paths: vec![],
+                        });
+                    }
+                };
                 let diff = generate_diff(&old_content, &new_content);
                 match write_file_commit(&path, &new_content) {
                     Ok(mut res) => {

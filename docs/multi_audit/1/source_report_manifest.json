@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "run_directory": "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1",
+  "reports": [
+    {
+      "path": "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_01_contract_docs.md",
+      "sha256": "28f800b181bf44133b52cfd203df41b7145d0fd36abb6a61afde521b4e509488",
+      "size": 44337,
+      "sealed_at_utc": "2026-08-23T11:56:46.795710+00:00"
+    },
+    {
+      "path": "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_02_runtime_arch.md",
+      "sha256": "8d4f40e870e058cc5aeb97ba3d4821028f020fe28e299e4b889d62173eabff20",
+      "size": 30533,
+      "sealed_at_utc": "2026-08-23T12:07:06.834128+00:00"
+    },
+    {
+      "path": "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_02_runtime_arch_supplement_1.md",
+      "sha256": "a748ff13d743288e9824b8229d415d0d0724b31f4f485b0390e15e07cb707b90",
+      "size": 22492,
+      "sealed_at_utc": "2026-08-23T12:18:33.903146+00:00"
+    },
+    {
+      "path": "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_03_security_resilience.md",
+      "sha256": "15376b719ec6823f075a2fde1dd71e1457972bc831f78eeb27994caeaaf67deb",
+      "size": 68371,
+      "sealed_at_utc": "2026-08-23T12:13:15.767551+00:00"
+    },
+    {
+      "path": "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_03_security_resilience_supplement_1.md",
+      "sha256": "59ccc7b3046c7c0872ac77f6b7e77cd8eac44d6575ad7bf4d093c16762b78de8",
+      "size": 18251,
+      "sealed_at_utc": "2026-08-23T12:19:32.839525+00:00"
+    },
+    {
+      "path": "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_04_tui_ux_i18n.md",
+      "sha256": "79c2ab75ba49ed33a321f0eaf82b7671985fa904740452967637db0e4c598ac9",
+      "size": 48055,
+      "sealed_at_utc": "2026-08-23T12:05:43.127105+00:00"
+    },
+    {
+      "path": "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_05_tests_concurrency.md",
+      "sha256": "0300c2b14daf18eb052360a8efdd9b6e1d7027125583575ede910c3193b54515",
+      "size": 38114,
+      "sealed_at_utc": "2026-08-23T12:02:43.688139+00:00"
+    },
+    {
+      "path": "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_05_tests_concurrency_supplement_1.md",
+      "sha256": "8f31c3617dc3310f9d4548bbef50c8eb14e8fcf0223b84a4b994eb533826be7d",
+      "size": 17780,
+      "sealed_at_utc": "2026-08-23T12:24:49.042572+00:00"
+    },
+    {
+      "path": "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_06_release_supplychain.md",
+      "sha256": "e9ee229d4a19867cc06d126595e1c20a661b8cd80978acc64e45a0372f86738e",
+      "size": 35132,
+      "sealed_at_utc": "2026-08-23T12:02:43.690522+00:00"
+    }
+  ],
+  "missing_source_reports": [],
+  "finalized_at_utc": "2026-08-23T12:25:14.030253+00:00"
+}

@@ -4,6 +4,24 @@
 `spec.md`와 `designs.md`를 바탕으로 단계적, 수직적(Vertical Slicing)으로 나뉜 작업 단위입니다.
 새 기능 구현과 완료 시마다 체크박스를 표시하고 변경 내역을 요약해야 합니다.
 
+## Phase 55: Final Multi-Audit Turn 1 Remediation (구현 완료, 릴리스 runner 검증 대기)
+
+- **기준 문서:** `spec.md` §1.1, `DESIGN_DECISIONS.md` ADR-041, `audit_roadmap.md` Phase 55
+- **원 감사:** `docs/multi_audit/1/final_audit_report_1.md`의 FIN-F001~FIN-F025
+- **재감사:** `docs/audit/audit_report_10.md`
+- [x] Critical 5건: Git WIP/index 보존, MCP secret 상속 차단, `@file` containment, no-follow atomic file mutation, custom provider zero-request fail-closed.
+- [x] Major runtime/security 14건: MCP/Fetch/Shell/approval/storage/session/compaction/streaming/RepoMap/harness/TUI/i18n/CLI 경계와 production-path 회귀군.
+- [x] Release/hygiene 6건: identity/ADR authority, hermetic tests, advisory/license/source gates, canonical target workflow, checksum/SBOM/attestation, package scope와 local residue 정리.
+- [x] 호스트 품질 게이트: fmt/check/clippy, 183 tests, glibc release build, version sync, audit, deny, offline package verification, workflow static check, SPDX/checksum 검증.
+- [ ] 외부 runner 게이트: `ubuntu-24.04` musl build/smoke와 `windows-2025` MSVC build/smoke 및 attestation publication. 로컬 Ubuntu에는 `musl-gcc`가 없고 sudo 설치가 인증에서 차단되며, MSVC의 `lib.exe`는 Windows runner 전용이므로 실제 workflow 성공 전 release는 HOLD다.
+
+### 구현 결과 요약
+
+1. 모든 execution boundary가 현재 settings/workspace snapshot을 공유하고 실패 시 Deny하는 방향으로 통일되었다.
+2. file/config/secret/session write는 unique private temp와 atomic publish를 사용하며, 입력·복원·streaming 결과에는 명시적 byte/count cap이 있다.
+3. command/help/palette, layout/hit-test, locale catalog와 공개 CLI/provider 문서가 단일 runtime authority를 소비한다.
+4. CI/release는 Rust 1.94.1과 locked dependency graph, full-SHA official actions, RustSec/license/source 검사 및 검증 가능한 release sidecar를 요구한다.
+
 ## Phase 1: 터미널 기반 골격과 레이아웃 (Foundation & TUI Layout)
 - [x] **Task 1: 환경 구성 및 기본 구조 세팅**
   - Cargo 초기화, 구조 폴더 (`src/app`, `src/tui`, `src/domain` 등) 생성
@@ -113,7 +131,7 @@ _(각 Task가 완료될 때마다 이 아래에 요약 코멘트를 작성합니
 - [2026-05-22] : **[Audit Remediation - v3.8.0 Build Gate Recovery]**
   - ✅ **컴파일 오류 수정**: `OpenAICompatAdapter`가 LM Studio 어댑터 조회 경로에서 복제될 수 있도록 `Clone` 파생을 추가하여 `cargo check --all-targets` 실패를 해결.
   - ✅ **버전 동기화 수정**: `Cargo.toml`, `Cargo.lock`, `spec.md`의 현재 버전을 `3.8.0`으로 맞춰 `scripts/check-version-sync.sh` 실패를 해소.
-  - ✅ **감사 보고서 산출**: 전체 구현 감사 및 빌드 수정 결과를 `audit_report_4.md`에 별도 기록.
+  - ✅ **감사 보고서 산출**: 전체 구현 감사 및 빌드 수정 결과를 `docs/audit/audit_report_4.md`에 별도 기록.
 
 - [2026-04-21] : **[Implemented - Phase 25 Ultimate Polish & Security Hardening]**
   - ✅ **UTF-8 안전성 보장 (UX/UI)**: TUI 렌더링 시 `unicode-width` 크레이트를 적용하여 한국어/이모지 멀티바이트 문자가 깨지거나 패닉이 발생하는 현상 수정.

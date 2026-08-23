@@ -12,6 +12,7 @@ pub fn render(
     f: &mut Frame,
     area: Rect,
     state: &UiState,
+    i18n: &crate::tui::i18n::I18nManager,
     use_ascii_borders: bool,
     palette: &crate::tui::palette::Palette,
 ) {
@@ -26,6 +27,8 @@ pub fn render(
             ("Tab/Shift+Tab", "Toggle PLAN/RUN"),
             ("Ctrl+K", "Command Palette"),
             ("F2", "Open Inspector"),
+            ("Ctrl+Left/Right", "Focus Composer/Timeline/Inspector"),
+            ("Alt+1..6", "Open Inspector Tab"),
             ("Up/Down", "Navigate History"),
             ("/", "Complete Slash Command"),
             ("?", "Toggle Help"),
@@ -38,6 +41,7 @@ pub fn render(
             ("y", "Copy Timeline Content"),
             ("Tab/Shift+Tab", "Toggle PLAN/RUN"),
             ("F2", "Focus Inspector"),
+            ("Ctrl+Left/Right", "Change Pane Focus"),
             ("?", "Toggle Help"),
             ("Esc", "Close Help"),
         ],
@@ -46,6 +50,8 @@ pub fn render(
             ("Up/Down", "Scroll Content"),
             ("PageUp/PageDown", "Scroll Content Faster"),
             ("F2", "Close Inspector"),
+            ("Alt+1..6", "Select Inspector Tab"),
+            ("Ctrl+Left/Right", "Change Pane Focus"),
             ("?", "Toggle Help"),
             ("Esc", "Close Help"),
         ],
@@ -88,7 +94,7 @@ pub fn render(
     f.render_widget(Clear, popup_area);
 
     let block = crate::tui::widgets::block_with_borders(Borders::ALL, use_ascii_borders)
-        .title(" Keyboard Shortcuts ")
+        .title(format!(" {} ", i18n.tr("help_title")))
         .title_alignment(Alignment::Center)
         .border_style(
             Style::default()

@@ -1,1 +1,8 @@
 /target
+__pycache__/
+*.py[cod]
+/.codex
+/.gemini/
+/.antigravitycli/
+/scratch.py
+/scratch2.py

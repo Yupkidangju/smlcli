@@ -14,27 +14,28 @@ use std::path::PathBuf;
 
 /// 설정 디렉토리 경로 반환: ~/.smlcli/
 fn get_config_dir() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.join(".smlcli")
-}
-
-/// 마스터 키 파일 경로: ~/.smlcli/.master_key
-fn master_key_path() -> PathBuf {
-    get_config_dir().join(".master_key")
+    crate::infra::config_store::get_config_dir()
 }
 
 /// 마스터 키를 파일에서 읽거나, 없으면 새로 생성하여 저장.
 /// [v0.1.0-beta.19] secrecy::SecretBox<Vec<u8>>을 사용하여 메모리 상의 키 노출을 방지.
 pub fn get_or_create_master_key() -> Result<SecretBox<Vec<u8>>, SmlError> {
-    let config_dir = get_config_dir();
-    std::fs::create_dir_all(&config_dir)
-        .map_err(|e| SmlError::InfraError(format!("~/.smlcli 디렉토리 생성 실패: {}", e)))?;
+    get_or_create_master_key_in(&get_config_dir())
+}
 
-    let path = master_key_path();
+pub(crate) fn get_or_create_master_key_in(
+    config_dir: &std::path::Path,
+) -> Result<SecretBox<Vec<u8>>, SmlError> {
+    crate::infra::secure_fs::ensure_private_dir(config_dir).map_err(|error| {
+        SmlError::InfraError(format!("private config directory 준비 실패: {error}"))
+    })?;
+    let path = config_dir.join(".master_key");
 
     if path.exists() {
-        let encoded = std::fs::read_to_string(&path)
+        let bytes = crate::infra::secure_fs::read_private_limited(&path, 128)
             .map_err(|e| SmlError::InfraError(format!("마스터 키 파일 읽기 실패: {}", e)))?;
+        let encoded = String::from_utf8(bytes)
+            .map_err(|e| SmlError::InfraError(format!("마스터 키 UTF-8 오류: {e}")))?;
         let key = hex::decode(encoded.trim()).map_err(|e| {
             SmlError::InfraError(format!("마스터 키 hex 디코딩 실패 (파일 손상 가능): {}", e))
         })?;
@@ -50,20 +51,22 @@ pub fn get_or_create_master_key() -> Result<SecretBox<Vec<u8>>, SmlError> {
         getrandom::fill(&mut key)
             .map_err(|e| SmlError::InfraError(format!("난수 생성 실패: {}", e)))?;
         let encoded = hex::encode(&key);
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-
-        let mut file = options
-            .open(&path)
-            .map_err(|e| SmlError::InfraError(format!("마스터 키 파일 생성 실패: {}", e)))?;
+        let mut file = match crate::infra::secure_fs::create_private_new(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return get_or_create_master_key_in(config_dir);
+            }
+            Err(error) => {
+                return Err(SmlError::InfraError(format!(
+                    "마스터 키 파일 생성 실패: {error}"
+                )));
+            }
+        };
         use std::io::Write;
         file.write_all(encoded.as_bytes())
             .map_err(|e| SmlError::InfraError(format!("마스터 키 파일 저장 실패: {}", e)))?;
+        file.sync_all()
+            .map_err(|e| SmlError::InfraError(format!("마스터 키 sync 실패: {e}")))?;
 
         Ok(SecretBox::new(key.into()))
     }
@@ -107,6 +110,17 @@ pub fn decrypt_value(
         .map_err(|e| SmlError::InfraError(format!("논스 hex 디코딩 실패: {}", e)))?;
     let ciphertext = hex::decode(parts[1])
         .map_err(|e| SmlError::InfraError(format!("암호문 hex 디코딩 실패: {}", e)))?;
+    if nonce_bytes.len() != 24 {
+        return Err(SmlError::InfraError(format!(
+            "논스 길이 불일치: {}바이트 (24바이트 필요)",
+            nonce_bytes.len()
+        )));
+    }
+    if ciphertext.len() > 1024 * 1024 {
+        return Err(SmlError::InfraError(
+            "암호문이 1 MiB 제한을 초과했습니다".to_string(),
+        ));
+    }
 
     let cipher = XChaCha20Poly1305::new_from_slice(master_key.expose_secret())
         .map_err(|e| SmlError::InfraError(format!("복호화 키 길이 오류: {}", e)))?;

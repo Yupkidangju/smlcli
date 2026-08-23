@@ -28,12 +28,13 @@ pub struct DoctorReport {
 impl DoctorReport {
     pub async fn run_diagnostics() -> Self {
         let config_status = Self::check_config().await;
-        let api_status = Self::check_api(&config_status).await;
-        let git_status = Self::check_git();
-        let term_status = Self::check_terminal();
         let settings = crate::infra::config_store::load_config()
             .await
-            .unwrap_or(None);
+            .ok()
+            .flatten();
+        let api_status = Self::check_api(&config_status, settings.as_ref()).await;
+        let git_status = Self::check_git();
+        let term_status = Self::check_terminal();
         let sandbox_status = Self::check_sandbox();
         let workspace_harness =
             crate::infra::workspace_harness::WorkspaceHarnessSnapshot::collect(settings.as_ref());
@@ -85,24 +86,51 @@ impl DoctorReport {
         }
     }
 
-    async fn check_api(config_status: &DiagnosticStatus) -> DiagnosticStatus {
+    async fn check_api(
+        config_status: &DiagnosticStatus,
+        settings: Option<&crate::domain::settings::PersistedSettings>,
+    ) -> DiagnosticStatus {
         if let DiagnosticStatus::Ok(_) = config_status {
-            // Check if any keys are saved
-            let settings = crate::infra::config_store::load_config()
-                .await
-                .unwrap_or(None);
             if let Some(s) = settings {
-                if s.encrypted_keys.is_empty() {
+                if s.network_policy == crate::domain::permissions::NetworkPolicy::Deny {
+                    return DiagnosticStatus::Ok(
+                        "NetworkPolicy::Deny — offline 진단만 수행, provider probe 생략".into(),
+                    );
+                }
+                let needs_key = if s.default_provider == "LmStudio" {
+                    false
+                } else if let Some(id) = s.default_provider.strip_prefix("Custom: ") {
+                    s.custom_providers
+                        .iter()
+                        .find(|config| config.id == id)
+                        .is_none_or(|config| !config.auth_type.eq_ignore_ascii_case("none"))
+                } else {
+                    true
+                };
+                if needs_key && s.encrypted_keys.is_empty() {
                     return DiagnosticStatus::Warn("저장된 API 키가 없습니다. API를 사용할 수 없습니다.\n(제안: 'smlcli run' 설정 마법사에서 키 입력)".into());
                 }
 
-                // [v2.3.0] Phase 31: Doctor Timeout & Network Check
-                let client = reqwest::Client::new();
-                let ping = tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    client.get("https://openrouter.ai/api/v1/auth/key").send(),
-                )
-                .await;
+                let Some(url) = doctor_probe_url(s) else {
+                    return DiagnosticStatus::Warn(
+                        "현재 provider의 안전한 probe URL을 결정할 수 없습니다".into(),
+                    );
+                };
+                let client = match reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .timeout(std::time::Duration::from_secs(5))
+                    .build()
+                {
+                    Ok(client) => client,
+                    Err(error) => {
+                        return DiagnosticStatus::Error(format!(
+                            "doctor HTTP client 생성 실패: {error}"
+                        ));
+                    }
+                };
+                let ping =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), client.get(url).send())
+                        .await;
 
                 match ping {
                     Ok(Ok(_resp)) => {
@@ -174,8 +202,8 @@ impl DoctorReport {
         println!(
             "빌드 버전: v{} ({} - {})",
             env!("CARGO_PKG_VERSION"),
-            crate::shadow::build::SHORT_COMMIT,
-            crate::shadow::build::BUILD_TIME
+            env!("SMLCLI_SHORT_COMMIT"),
+            env!("SMLCLI_BUILD_EPOCH")
         );
         println!();
         println!("--- 설정(Config) 상태 ---");
@@ -192,4 +220,37 @@ impl DoctorReport {
         self.term_status.display();
         println!("\n진단 완료.");
     }
+}
+
+pub(crate) fn doctor_probe_url(
+    settings: &crate::domain::settings::PersistedSettings,
+) -> Option<reqwest::Url> {
+    if settings.network_policy == crate::domain::permissions::NetworkPolicy::Deny {
+        return None;
+    }
+    let raw = match settings.default_provider.as_str() {
+        "OpenAI" => "https://api.openai.com/v1/models".to_string(),
+        "Anthropic" => "https://api.anthropic.com/v1/models".to_string(),
+        "xAI" => "https://api.x.ai/v1/models".to_string(),
+        "Google" => "https://generativelanguage.googleapis.com/v1beta/models".to_string(),
+        "OpenRouter" => "https://openrouter.ai/api/v1/models".to_string(),
+        "LmStudio" => format!(
+            "{}/models",
+            settings
+                .lmstudio_base_url
+                .as_deref()
+                .unwrap_or("http://localhost:1234/v1")
+                .trim_end_matches('/')
+        ),
+        custom if custom.starts_with("Custom: ") => {
+            let id = custom.trim_start_matches("Custom: ");
+            let config = settings
+                .custom_providers
+                .iter()
+                .find(|config| config.id == id)?;
+            format!("{}/models", config.base_url.trim_end_matches('/'))
+        }
+        _ => return None,
+    };
+    reqwest::Url::parse(&raw).ok()
 }

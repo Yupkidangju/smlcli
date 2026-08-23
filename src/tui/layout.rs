@@ -13,6 +13,99 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LayoutGeometry {
+    pub top_bar: Rect,
+    pub body: Rect,
+    pub timeline: Rect,
+    pub inspector: Option<Rect>,
+    pub status: Rect,
+    pub composer: Rect,
+}
+
+impl LayoutGeometry {
+    pub(crate) fn new(size: Rect, inspector_active: bool) -> Self {
+        let chunks = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(1),
+            Constraint::Length(3),
+        ])
+        .split(size);
+        let body = chunks[1];
+        let (timeline, inspector) = if inspector_active {
+            if body.width < 100 {
+                let width = 32.min(body.width);
+                (
+                    body,
+                    Some(Rect {
+                        x: body.x.saturating_add(body.width.saturating_sub(width)),
+                        y: body.y,
+                        width,
+                        height: body.height,
+                    }),
+                )
+            } else {
+                let inspector_width = (body.width as f32 * 0.30).clamp(32.0, 48.0) as u16;
+                let timeline_width = body.width.saturating_sub(inspector_width).max(72);
+                (
+                    Rect {
+                        width: timeline_width,
+                        ..body
+                    },
+                    Some(Rect {
+                        x: body.x.saturating_add(timeline_width),
+                        y: body.y,
+                        width: body.width.saturating_sub(timeline_width),
+                        height: body.height,
+                    }),
+                )
+            }
+        } else {
+            (body, None)
+        };
+        Self {
+            top_bar: chunks[0],
+            body,
+            timeline,
+            inspector,
+            status: chunks[2],
+            composer: chunks[3],
+        }
+    }
+
+    pub(crate) fn contains(rect: Rect, column: u16, row: u16) -> bool {
+        column >= rect.x
+            && column < rect.x.saturating_add(rect.width)
+            && row >= rect.y
+            && row < rect.y.saturating_add(rect.height)
+    }
+
+    pub(crate) fn inspector_tab_at(&self, column: u16, row: u16) -> Option<usize> {
+        let area = self.inspector?;
+        if !Self::contains(area, column, row) {
+            return None;
+        }
+        let inner_x = area.x.saturating_add(1);
+        let inner_width = area.width.saturating_sub(1);
+        if inner_width < 32 {
+            if row > area.y.saturating_add(1) || column < inner_x {
+                return None;
+            }
+            let group = if row == area.y { 0 } else { 3 };
+            let slot_width = (inner_width / 3).max(1);
+            Some((group + ((column - inner_x) / slot_width) as usize).min(group + 2))
+        } else {
+            if row != area.y || column < inner_x {
+                return None;
+            }
+            let slot_width = (inner_width / 6).max(1);
+            Some(((column - inner_x) / slot_width).min(5) as usize)
+        }
+    }
+}
 
 /// [v0.1.0-beta.24] Phase 14-A: 멀티라인 텍스트 렌더링 헬퍼.
 /// `\n` 기준으로 분리하여 각 줄을 독립 `Line`으로 변환.
@@ -28,14 +121,38 @@ fn render_multiline_text(text: &str, style: Style) -> Vec<Line<'static>> {
 
 /// [v0.1.0-beta.24] Phase 14-D: 긴 문자열의 중간을 생략하는 헬퍼.
 /// 예: "/home/user/very/long/path" → "/home/u…long/path" (max_len=20)
-fn truncate_middle(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+pub(crate) fn truncate_middle(s: &str, max_len: usize) -> String {
+    if UnicodeWidthStr::width(s) <= max_len {
         return s.to_string();
     }
-    let half = max_len.saturating_sub(1) / 2;
-    let start = &s[..half];
-    let end = &s[s.len().saturating_sub(half)..];
-    format!("{}…{}", start, end)
+    if max_len <= 1 {
+        return "…".to_string();
+    }
+    let side_budget = max_len.saturating_sub(1);
+    let left_budget = side_budget / 2;
+    let right_budget = side_budget - left_budget;
+    let mut left = String::new();
+    let mut width = 0;
+    for character in s.chars() {
+        let char_width = character.width().unwrap_or(0);
+        if width + char_width > left_budget {
+            break;
+        }
+        left.push(character);
+        width += char_width;
+    }
+    let mut right_chars = Vec::new();
+    width = 0;
+    for character in s.chars().rev() {
+        let char_width = character.width().unwrap_or(0);
+        if width + char_width > right_budget {
+            break;
+        }
+        right_chars.push(character);
+        width += char_width;
+    }
+    right_chars.reverse();
+    format!("{}…{}", left, right_chars.into_iter().collect::<String>())
 }
 
 /// 선택 커서가 항상 보이는 마지막 줄 안에 들어오도록 리스트 렌더링 시작점을 계산한다.
@@ -55,7 +172,7 @@ pub fn draw(f: &mut Frame, state: &AppState) {
         let p = state.palette();
         let warning = Paragraph::new(vec![
             Line::from(Span::styled(
-                "⚠️ 터미널 크기가 너무 작습니다.",
+                format!("⚠️ {}", state.i18n.tr("terminal_too_small")),
                 Style::default().fg(p.danger),
             )),
             Line::from(Span::styled(
@@ -90,72 +207,27 @@ pub fn draw(f: &mut Frame, state: &AppState) {
         return;
     }
 
-    // 메인 레이아웃 분할: 상단바, 본문 영역(타임라인+인스펙터), 커맨드 상태바, 컴포저
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(
-            [
-                Constraint::Length(1), // 상태바(Top Bar)
-                Constraint::Min(0),    // 타임라인 + 인스펙터
-                Constraint::Length(1), // 상태/명령 바 (Command Status Bar)
-                Constraint::Length(3), // 하단 Composer
-            ]
-            .as_ref(),
-        )
-        .split(size);
-
-    // 본문 영역을 타임라인과 인스펙터로 나눔 (만약 인스펙터 활성화 시 30% 영역 할당)
-    draw_top_bar(f, state, chunks[0]);
+    let inspector_active = state.ui.show_inspector || state.runtime.approval.pending_tool.is_some();
+    let geometry = LayoutGeometry::new(size, inspector_active);
+    draw_top_bar(f, state, geometry.top_bar);
 
     // [v0.1.0-beta.24] Phase 14-D: 반응형 인스펙터 폭.
     // 인스펙터: 32~48칼럼 범위 클램프. 타임라인 최소 72칼럼 보장.
-    if state.ui.show_inspector || state.runtime.approval.pending_tool.is_some() {
-        let total_width = chunks[1].width;
-        if total_width < 100 {
-            // [v0.1.0-beta.26] 100칼럼 미만일 경우 오버레이/드로어(Drawer) 모드 적용
-            draw_timeline(f, state, chunks[1]);
-            let drawer_width = 32;
-            let drawer_area = Rect {
-                x: chunks[1]
-                    .x
-                    .saturating_add(total_width.saturating_sub(drawer_width)),
-                y: chunks[1].y,
-                width: drawer_width.min(total_width),
-                height: chunks[1].height,
-            };
-            f.render_widget(ratatui::widgets::Clear, drawer_area);
-            draw_inspector(f, state, drawer_area);
-        } else {
-            let inspector_width = (total_width as f32 * 0.30).clamp(32.0, 48.0) as u16;
-            let timeline_width = total_width.saturating_sub(inspector_width).max(72);
-            let actual_inspector = total_width.saturating_sub(timeline_width);
-
-            let main_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints(
-                    [
-                        Constraint::Length(timeline_width),
-                        Constraint::Length(actual_inspector),
-                    ]
-                    .as_ref(),
-                )
-                .split(chunks[1]);
-
-            draw_timeline(f, state, main_chunks[0]);
-            draw_inspector(f, state, main_chunks[1]);
+    if let Some(inspector) = geometry.inspector {
+        draw_timeline(f, state, geometry.timeline);
+        if inspector_active && geometry.timeline == geometry.body {
+            f.render_widget(ratatui::widgets::Clear, inspector);
         }
+        draw_inspector(f, state, inspector);
     } else {
-        draw_timeline(f, state, chunks[1]);
+        draw_timeline(f, state, geometry.timeline);
     }
 
-    draw_composer_toolbar(f, state, chunks[2]);
-    draw_composer(f, state, chunks[3]);
+    draw_composer_toolbar(f, state, geometry.status);
+    draw_composer(f, state, geometry.composer);
 
     if state.ui.config.is_open {
         crate::tui::widgets::config_dashboard::draw_config(f, state);
-    }
-    if let crate::app::state::TrustGatePopup::Open { .. } = state.ui.trust_gate.popup {
-        draw_trust_gate(f, state);
     }
     if state.ui.palette.is_open {
         draw_command_palette(f, state);
@@ -195,6 +267,7 @@ pub fn draw(f: &mut Frame, state: &AppState) {
         f,
         size,
         &state.ui,
+        &state.i18n,
         state
             .domain
             .settings
@@ -219,6 +292,9 @@ pub fn draw(f: &mut Frame, state: &AppState) {
             &state.i18n, // [v3.9.0] 다국어(i18n) 매니저 주입
         );
         f.render_widget(widget, size);
+    }
+    if let crate::app::state::TrustGatePopup::Open { .. } = state.ui.trust_gate.popup {
+        draw_trust_gate(f, state);
     }
 }
 

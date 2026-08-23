@@ -8,14 +8,9 @@ mod infra;
 mod providers;
 mod tools;
 mod tui;
-mod types;
 
 #[cfg(test)]
 mod tests;
-
-pub mod shadow {
-    shadow_rs::shadow!(build);
-}
 
 use anyhow::Result;
 use app::App;
@@ -60,11 +55,6 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // [v2.5.0] Phase 34: 시작 시 백그라운드 스레드로 고아 프로세스 정리
-    std::thread::spawn(|| {
-        crate::infra::process_reaper::reap_orphans();
-    });
-
     match cli.command {
         // 서브커맨드가 없거나 'run'이면 인터랙티브 TUI 진입
         None | Some(Commands::Run) => run_interactive().await,
@@ -96,9 +86,11 @@ async fn run_interactive() -> Result<()> {
 /// Doctor: 환경 진단
 async fn run_doctor(clean_orphans: bool) -> Result<()> {
     if clean_orphans {
-        println!("🔍 고아 프로세스 스캔 및 정리 중...");
+        if !crate::infra::process_reaper::is_global_reaping_enabled() {
+            println!("전역 PID 환경변수 기반 고아 프로세스 정리는 안전상 비활성화되어 있습니다.");
+        }
         crate::infra::process_reaper::reap_orphans();
-        println!("✅ 프로세스 정리가 완료되었습니다.");
+        println!("현재 실행이 소유한 shell/MCP process group은 cancel/quit 시 직접 정리됩니다.");
         return Ok(());
     }
 

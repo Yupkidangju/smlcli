@@ -6,7 +6,7 @@ use crate::app::state::AppState;
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
@@ -30,6 +30,8 @@ pub struct ScrollAnchor {
 
 struct DiffCache {
     pub last_diff_text: String,
+    pub palette_key: [Color; 3],
+    pub width: u16,
     pub cached_lines: Vec<Line<'static>>,
 }
 
@@ -54,7 +56,11 @@ pub fn render_preview(f: &mut Frame, state: &AppState, area: Rect) {
     let p = state.palette();
 
     if state.ui.timeline.is_empty() {
-        let text = "No active blocks.\n\nTimeline is empty.";
+        let text = format!(
+            "{}\n\n{}",
+            state.i18n.tr("no_active_blocks"),
+            state.i18n.tr("timeline_empty")
+        );
         let paragraph = Paragraph::new(text).style(Style::default().fg(p.muted));
         f.render_widget(paragraph, area);
         return;
@@ -149,10 +155,14 @@ pub fn render_diff(f: &mut Frame, state: &AppState, area: Rect) {
     let p = state.palette();
 
     if let Some(diff) = &state.runtime.approval.diff_preview {
+        let palette_key = [p.success, p.danger, p.text_primary];
         // 캐시 히트 체크
         let cached_hit = DIFF_RENDER_CACHE.with(|cache_ref| {
             if let Some(cache) = &*cache_ref.borrow() {
-                if cache.last_diff_text == *diff {
+                if cache.last_diff_text == *diff
+                    && cache.palette_key == palette_key
+                    && cache.width == area.width
+                {
                     return Some(cache.cached_lines.clone());
                 }
             }
@@ -180,6 +190,8 @@ pub fn render_diff(f: &mut Frame, state: &AppState, area: Rect) {
                 DIFF_RENDER_CACHE.with(|cache_ref| {
                     *cache_ref.borrow_mut() = Some(DiffCache {
                         last_diff_text: diff.clone(),
+                        palette_key,
+                        width: area.width,
                         cached_lines: new_lines.clone(),
                     });
                 });
@@ -202,7 +214,7 @@ pub fn render_diff(f: &mut Frame, state: &AppState, area: Rect) {
             .scroll((top_scroll, 0));
         f.render_widget(para, area);
     } else {
-        let text = "No pending diffs.\n\nDiffs will appear here after file write proposals.";
+        let text = state.i18n.tr("no_pending_diffs");
         let paragraph = Paragraph::new(text).style(Style::default().fg(p.muted));
         f.render_widget(paragraph, area);
     }
@@ -219,7 +231,7 @@ pub fn render_logs(f: &mut Frame, state: &AppState, area: Rect) {
     let total_lines = state.runtime.logs_buffer.len();
     if total_lines == 0 {
         let para = Paragraph::new(vec![Line::from(Span::styled(
-            " (No logs recorded in this session) ",
+            format!(" ({}) ", state.i18n.tr("no_logs")),
             Style::default().fg(p.muted).add_modifier(Modifier::ITALIC),
         ))])
         .block(Block::default().borders(Borders::NONE));
@@ -660,6 +672,8 @@ mod tests {
         DIFF_RENDER_CACHE.with(|cache_ref| {
             *cache_ref.borrow_mut() = Some(DiffCache {
                 last_diff_text: diff_text_1.clone(),
+                palette_key: [Color::Green, Color::Red, Color::White],
+                width: 80,
                 cached_lines: new_lines_1.clone(),
             });
         });
@@ -677,6 +691,8 @@ mod tests {
                 3,
                 "캐시된 디프 라인 수가 3개여야 함"
             );
+            assert_eq!(cache.width, 80);
+            assert_eq!(cache.palette_key, [Color::Green, Color::Red, Color::White]);
         });
 
         // 3. 디프 텍스트가 미세하게 변경(유효하지 않음)되었을 때 캐시 갱신 및 무효화 시뮬레이션
@@ -696,6 +712,8 @@ mod tests {
             if need_update {
                 *cache_opt = Some(DiffCache {
                     last_diff_text: diff_text_2.clone(),
+                    palette_key: [Color::Green, Color::Red, Color::White],
+                    width: 80,
                     cached_lines: new_lines_2.clone(),
                 });
             }

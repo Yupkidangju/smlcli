@@ -124,8 +124,8 @@ pub(crate) fn grep_search(query: &str, path: &str, is_regex: bool) -> Result<Too
         exit_code: 0,
         is_error: false,
         tool_call_id: None,
-        is_truncated: false,
-        original_size_bytes: None,
+        is_truncated: truncated,
+        original_size_bytes: truncated.then_some(output.len()),
         affected_paths: vec![],
     })
 }

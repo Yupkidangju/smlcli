@@ -633,7 +633,7 @@ cargo test
 
 ---
 
-## Phase 53: v3.9.1 Workspace Harness Snapshot & OS/Sandbox 정합화 감사 기준
+## Phase 53: Workspace Harness Snapshot & OS/Sandbox 정합화 감사 기준 (Unreleased, planned v3.9.1)
 
 ### 53.1 감사 항목 및 합격 검증 기준표
 | 항목 | 검증 방법 | 합격 기준 |
@@ -678,7 +678,7 @@ Sandbox Network: isolated
 
 ---
 
-## Phase 54: v3.9.2 Workspace Harness Enforcement & Model Grounding 감사 기준 (완료)
+## Phase 54: Workspace Harness Enforcement & Model Grounding 감사 기준 (implemented, Unreleased, planned v3.9.2)
 
 ### 54.1 감사 항목 및 합격 검증 기준표
 | 항목 | 검증 방법 | 합격 기준 |
@@ -721,3 +721,84 @@ Rule: host paths are for local file APIs; sandbox shell cwd is /workspace only w
 * **Prompt 중복 리스크**:
   - **내용**: system prompt dedupe 실패 시 harness block이 누적되어 context budget을 낭비할 수 있다.
   - **대응책**: block header `[Workspace Harness]` 기준으로 기존 block을 교체하는 dedupe 테스트를 필수로 둔다.
+
+---
+
+## Phase 55: Final Multi-Audit Turn 1 Remediation (구현 완료, release runner 검증 대기)
+
+> 생성 시점: 2026-08-23 (Asia/Seoul)
+> 근거 보고서: `docs/multi_audit/1/final_audit_report_1.md`
+> 구현 계약: `spec.md` §1.1, `DESIGN_DECISIONS.md` ADR-041
+> baseline: `cargo test --all-targets --locked --no-fail-fast` = 119 passed / 2 failed
+
+### 55.1 목표와 비목표
+
+- 목표: FIN-F001~FIN-F025를 현재 문서와 production call path에 대조하고 Critical→Major→Minor 순으로 수정한다.
+- 목표: 각 behavior fix에 실패 재현/경계 회귀 테스트를 추가하고, 전체 locked build/test/security gate와 재감사 ledger를 남긴다.
+- 비목표: 외부 provider에 실제 credential을 전송하거나 release를 게시하지 않는다.
+- 비목표: 이 작업에서 Git commit/push/tag/release를 수행하지 않는다.
+
+### 55.2 Finding 작업 지도
+
+| 우선순위 | Findings | 구현 단위 | 완료 증거 |
+| --- | --- | --- | --- |
+| P0-A | FIN-F001 | 자동 hard-reset/auto-commit 격리, WIP/index 보존 | temp Git repo hash/index 회귀 |
+| P0-B | FIN-F002, FIN-F006 | MCP env clear, bounded IO/request/schema, cancellation/shutdown | env/hang/huge/malformed fixture |
+| P0-C | FIN-F003, FIN-F004, FIN-F010 | canonical mention, unique exclusive atomic write, no-clobber/exact-one contract | outside/symlink/binary/size/cardinality/mode fixture |
+| P0-D | FIN-F005 | settings-aware provider registry와 zero-request fail-closed | pure registry/recorder-equivalent request build tests |
+| P0-E | FIN-F007 | public destination/redirect/size/UTF-8-safe Fetch | local resolver/redirect/large/CJK fixture |
+| P1-A | FIN-F008, FIN-F009 | immutable execution settings, fail-closed sandbox, exactly-once terminal queues | config failure/queue error/policy-change fixture |
+| P1-B | FIN-F011, FIN-F012 | owner-only no-follow atomic config/secret/session stores | isolated root, corrupt/concurrent/bounds fixture |
+| P1-C | FIN-F013, FIN-F014 | transactional turn/compact, streaming/redaction/truncation | mixed/cancel/error/split-secret/cap fixture |
+| P1-D | FIN-F015, FIN-F016 | revisioned background work, deterministic event/shutdown, harness baseline/onboarding/doctor policy | large/overlap/first-run/policy fixture |
+| P2-A | FIN-F017, FIN-F018 | shared command/focus/layout/Unicode/overlay/terminal state | TestBackend breakpoint/key/mouse/failure fixture |
+| P2-B | FIN-F019, FIN-F020 | 5-locale consumption, current CLI/provider/module authority | locale render + CLI/provider contract tests |
+| P3-A | FIN-F021, FIN-F022 | identity/version/ADR authority와 hermetic production-path suite | authority script + isolated full suite |
+| P3-B | FIN-F023, FIN-F024 | locked CI/security gates, musl/MSVC, checksum/SBOM/provenance/rollback doc | workflow static gate + available target build |
+| P3-C | FIN-F025 | package include/exclude와 local/generated/reference classification | `cargo package --list --allow-dirty` |
+
+### 55.3 Checkpoints
+
+각 checkpoint는 표적 테스트→`cargo check --all-targets --locked` 순으로 통과해야 다음 단계로 이동한다.
+
+1. P0: Critical 5건과 Fetch negative fixture 통과.
+2. P1: state/storage/lifecycle fixture 통과, 전체 test에서 환경 결합 실패 0건.
+3. P2: command catalog parity와 Unicode/breakpoint/locale TestBackend 통과.
+4. P3: locked fmt/check/clippy/test/build와 가능한 security/package/release 정적 gate 통과.
+5. Final: `docs/audit/audit_report_10.md`에 FIN-F001~FIN-F025 원 ID별 verdict, command, residual risk를 기록한다. 실제 musl/MSVC hosted job 성공 전 release gate는 HOLD다.
+
+### 55.4 전체 검증 명령
+
+```bash
+cargo fmt --check
+cargo check --all-targets --locked
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-targets --locked --no-fail-fast
+cargo build --release --locked
+scripts/check-version-sync.sh
+cargo audit --no-fetch
+cargo package --list --allow-dirty
+git diff --check
+```
+
+실행할 수 없는 cross-target, live provider/DNS, physical TTY, release upload 검증은 PASS로 환산하지 않고 재감사 residual risk에 남긴다.
+
+### 55.5 2026-08-23 실행 증거
+
+| Gate | 결과 |
+| --- | --- |
+| `cargo fmt --all -- --check` | PASS |
+| `cargo check --all-targets --locked` | PASS |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | PASS, warnings 0 |
+| `cargo test --all-targets --locked --no-fail-fast` | PASS, 183 passed / 0 failed |
+| `cargo build --release --locked` | PASS, host `x86_64-unknown-linux-gnu` |
+| `bash scripts/check-version-sync.sh` | PASS, Cargo/CHANGELOG/spec/AGENTS = 3.9.0 |
+| `python3 scripts/check-workflows.py` | PASS |
+| `cargo audit --no-fetch` | PASS, 428 lock dependencies / vulnerability 0 |
+| `cargo deny check --disable-fetch` | PASS, advisories/bans/licenses/sources; duplicate dependency warnings 3종 |
+| `cargo package --allow-dirty --locked --offline` | PASS, 79 files / 1.6 MiB / compressed 425.2 KiB |
+| SPDX 2.3 생성 + JSON 검사 + SHA-256 sidecar 검증 | PASS |
+| local musl build | BLOCKED BY ENVIRONMENT: Rust target 설치 후 `x86_64-linux-musl-gcc` 부재; sudo 설치는 terminal authentication 필요 |
+| local MSVC check | BLOCKED BY ENVIRONMENT: Rust target 설치 후 Windows SDK/Visual Studio `lib.exe` 부재 |
+
+재감사 결론은 24개 finding `Verified`, FIN-F024의 hosted target/runtime/provenance 실행 증거만 `Hold`다. 구현 및 정적 release control은 반영되었으나 실제 release workflow 성공을 대신하지 않는다.

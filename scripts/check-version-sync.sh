@@ -25,8 +25,23 @@ echo "📋 CHANGELOG.md 최신 버전: $CHANGELOG_VERSION"
 # 3) 버전 일치 검증
 ERRORS=0
 
+SPEC_VERSION=$(sed -n '1s/.*(v\([0-9][0-9.]*\)).*/\1/p' spec.md)
+AGENTS_VERSION=$(sed -n 's/^\* \*\*Version:\*\* \([0-9][0-9.]*\)$/\1/p' AGENTS.md | head -1)
+echo "📐 spec.md 버전: $SPEC_VERSION"
+echo "🤖 AGENTS.md 버전: $AGENTS_VERSION"
+
 if [ "$CARGO_VERSION" != "$CHANGELOG_VERSION" ]; then
     echo "❌ 버전 불일치: Cargo.toml ($CARGO_VERSION) ≠ CHANGELOG.md ($CHANGELOG_VERSION)"
+    ERRORS=$((ERRORS + 1))
+fi
+
+if [ "$CARGO_VERSION" != "$SPEC_VERSION" ]; then
+    echo "❌ 버전 불일치: Cargo.toml ($CARGO_VERSION) ≠ spec.md ($SPEC_VERSION)"
+    ERRORS=$((ERRORS + 1))
+fi
+
+if [ "$CARGO_VERSION" != "$AGENTS_VERSION" ]; then
+    echo "❌ 버전 불일치: Cargo.toml ($CARGO_VERSION) ≠ AGENTS.md ($AGENTS_VERSION)"
     ERRORS=$((ERRORS + 1))
 fi
 

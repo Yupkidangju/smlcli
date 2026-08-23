@@ -8,9 +8,23 @@
 ### Added
 - **Workspace Harness 표준화 로드맵 및 구현 착수**: `AI_IMPLEMENTATION_DOC_STANDARD.md` 기준으로 OS/셸/workspace trust/sandbox mount 상태를 하나의 `WorkspaceHarnessSnapshot` 계약으로 동결하고, `doctor`와 `/workspace show`에서 동일 하네싱 정보를 노출하도록 확장.
 - **Workspace Harness Enforcement 구현**: Phase 54로 system prompt 주입, tool preflight, session snapshot 기록, OS mismatch 감지, sandbox 비활성 문구 구분을 구현하고 `AI_IMPLEMENTATION_DOC_STANDARD.md` 기준 문서를 동기화.
+- **Final Multi-Audit Turn 1 회귀군**: FIN-F001~FIN-F025의 실패 모드를 production call path로 검증하는 보안·동시성·TUI·릴리스 회귀 테스트와 hostile MCP fixture를 추가.
+- **릴리스 공급망 산출물**: pinned GitHub Actions, SPDX 2.3 SBOM, portable SHA-256, Sigstore artifact attestation, checksum 검증 스크립트를 추가.
 
 ### Changed
 - **Linux ExecShell sandbox mount 정합화**: 문서상 `/workspace` 모델과 실제 `bwrap` 실행 경로가 어긋나던 문제를 해소하기 위해 sandbox 내부 작업 경로를 `/workspace`로 표준화.
+- **Final Multi-Audit Turn 1 remediation 계약 확정**: `spec.md` §1.1, ADR-041, `audit_roadmap.md` Phase 55에서 canonical identity/version, Git/MCP/path/provider/network/storage/release hard boundary와 finding별 검증 순서를 동결. 구현 및 재감사 완료 전 release 판정은 HOLD로 유지.
+- **패키지·빌드 범위 정규화**: release target을 Linux musl/Windows MSVC로 통일하고, source package를 runtime source·필수 fixture·라이선스·사용자/빌드 문서로 제한. 프로젝트 identity/version/ADR authority를 `smlcli 3.9.0`과 Unreleased Phase 53/54로 통일.
+
+### Fixed
+- **데이터·파일 무결성**: 자동 hard reset/자동 커밋 경로를 격리하고, `@file`, WriteFile, ReplaceFileContent에 canonical containment, 크기·형식 제한, unique no-follow atomic write, create-only/exact-one 계약을 적용.
+- **런타임 lifecycle**: MCP 환경·schema·I/O·pending call·process group을 bounded/cancellable하게 만들고, approval/write queue의 success/error/cancel/deny를 exactly-once terminal transition으로 통합.
+- **네트워크·provider 안전성**: custom provider를 settings-aware fail-closed로 전환하고 credential redirect를 차단. FetchURL에 public-address-only DNS/redirect 검증과 bounded Unicode-safe 결과 계약을 적용.
+- **저장소·스트리밍·상태 안정성**: config/secret/session을 owner-only atomic storage로 전환하고, compaction·tool turn을 transaction화. provider/Shell streaming, 중앙 redaction, RepoMap revision, EventLoop shutdown을 보강.
+- **TUI·i18n·공개 계약**: command registry, visible timeline mutation, pane/Inspector 접근, shared layout hit-test, Unicode width, overlay/terminal cleanup, 5-locale 선택·렌더 경로와 CLI/provider 문서를 실제 구현에 맞춤.
+
+### Security
+- RustSec advisory가 있던 `crossbeam-epoch`, `quinn-proto`, `anyhow`를 안전 버전으로 갱신하고 불필요한 `shadow-rs`/`git2` 및 GPL runtime dependency를 제거. `cargo audit`와 `cargo deny`를 CI/release gate로 추가.
 
 ## [3.9.0] - 2026-05-23 (TUI Modernization & Responsive Multi-viewport Redesign)
 

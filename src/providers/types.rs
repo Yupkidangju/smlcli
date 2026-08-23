@@ -9,20 +9,20 @@ pub enum Role {
     Tool,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ToolCallRequest {
     pub id: String,
     pub r#type: String, // Always "function"
     pub function: FunctionCall,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct FunctionCall {
     pub name: String,
     pub arguments: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ChatMessage {
     pub role: Role,
     #[serde(skip_serializing_if = "Option::is_none")]

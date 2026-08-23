@@ -13,48 +13,60 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
+  RUST_TOOLCHAIN: "1.94.1"
+
+permissions:
+  contents: read
 
 jobs:
   check:
-    name: Quality Gate (fmt / clippy / test)
-    runs-on: ubuntu-latest
+    name: Locked Quality and Supply-chain Gate
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          components: rustfmt, clippy
+          persist-credentials: false
 
-      - name: Cache cargo registry & build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
 
       - name: Check formatting
         run: cargo fmt --check
 
       - name: Clippy lint
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Check all targets
+        run: cargo check --all-targets --locked
 
       - name: Run tests
-        run: cargo test --all-targets
+        run: cargo test --all-targets --locked --no-fail-fast
+
+      - name: Install pinned supply-chain tools
+        run: |
+          cargo install cargo-audit --version 0.22.1 --locked
+          cargo install cargo-deny --version 0.19.4 --locked
+
+      - name: RustSec advisory gate
+        run: cargo audit
+
+      - name: License, source, ban, and advisory policy
+        run: cargo deny check
 
   version-sync:
     name: Version Sync Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Verify version consistency
-        run: |
-          chmod +x ./scripts/check-version-sync.sh
-          ./scripts/check-version-sync.sh
+        run: bash ./scripts/check-version-sync.sh

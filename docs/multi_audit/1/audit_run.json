@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "turn": 1,
+  "project_root": "/mnt/Projects_SSD/rust/smlcli",
+  "directory": "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1",
+  "source_reports": [
+    "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_01_contract_docs.md",
+    "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_02_runtime_arch.md",
+    "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_03_security_resilience.md",
+    "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_04_tui_ux_i18n.md",
+    "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_05_tests_concurrency.md",
+    "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/sub_audit_06_release_supplychain.md"
+  ],
+  "final_report": "/mnt/Projects_SSD/rust/smlcli/docs/multi_audit/1/final_audit_report_1.md",
+  "created_at_utc": "2026-08-23T11:42:04.612603+00:00"
+}

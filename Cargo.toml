@@ -2,9 +2,38 @@
 name = "smlcli"
 version = "3.9.0"
 edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.94.1"
+readme = "README.md"
+description = "Terminal-native AI agent CLI with explicit workspace and execution boundaries"
+repository = "https://github.com/Yupkidangju/smlcli"
+include = [
+    "/src/**",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/build.rs",
+    "/build.sh",
+    "/LICENSE",
+    "/AGENTS.md",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/BUILD_GUIDE.md",
+    "/spec.md",
+    "/designs.md",
+    "/DESIGN_DECISIONS.md",
+    "/deny.toml",
+    "/.github/workflows/ci.yml",
+    "/.github/workflows/release.yml",
+    "/scripts/check-version-sync.sh",
+    "/scripts/check-workflows.py",
+    "/scripts/generate-sbom.py",
+    "/scripts/mock_mcp_server.py",
+    "/scripts/prepare-release-artifact.py",
+    "/scripts/verify-release-artifacts.py",
+]
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow = "1.0.103"
 chacha20poly1305 = "0.10.1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29.0"
@@ -29,17 +58,12 @@ tree-sitter-rust = "0.24.2"
 streaming-iterator = "0.1.9"
 uuid = { version = "1.23.1", features = ["v4"] }
 regex = "1.12.3"
-html2md = "0.2.15"
 tokio-util = "0.7.18"
 unicode-width = "0.2.2"
 libc = "0.2.185"
 fs2 = "0.4.3"
 arboard = "3.6.1"
 clap_complete = "4.6.2"
-shadow-rs = "1.7.1"
 
 [dev-dependencies]
 tempfile = "3.27.0"
-
-[build-dependencies]
-shadow-rs = "1.7.1"

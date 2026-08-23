@@ -28,6 +28,34 @@ v3.9.0
 **Status**
 Initial Specification & Implementation Entry
 
+### 1.1 Current Release Authority and Audit Turn 1 Remediation Contract
+
+> 기준 시점: 2026-08-23 (Asia/Seoul)
+> 근거: `Cargo.toml`, `CHANGELOG.md`, `README.md`, 현재 런타임 엔트리포인트, `docs/multi_audit/1/final_audit_report_1.md`
+
+- canonical project identity는 `smlcli`, current released version은 `3.9.0`이다.
+- Phase 53/54의 `3.9.1`/`3.9.2` 표기는 **Unreleased 구현 계보**이며, 태그·패키지·릴리스 완료를 뜻하지 않는다.
+- 현재 shipped CLI는 `smlcli`, `smlcli run`, `smlcli doctor`, `smlcli sessions`, `smlcli completions`이다. `smlcli run "prompt"` 비대화형 실행은 shipped 기능이 아니며 후속 계약으로 분리한다.
+- built-in provider는 OpenAI, Anthropic, xAI, OpenRouter, Google, LM Studio다. Ollama/vLLM 등은 OpenAI-compatible `Custom` provider로만 등록한다.
+
+보안·데이터 계약은 다음과 같이 동결한다.
+
+1. **Git mutation**: 도구 실패 시 `git reset --hard`를 자동 실행하지 않는다. 자동 커밋도 별도 승인 가능한 path/index transaction이 구현되기 전까지 실행하지 않는다. 실패는 원문 그대로 보고하며 롤백 성공 문구를 합성하지 않는다.
+2. **MCP environment**: MCP child는 parent environment를 초기화하고 `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `TERM`, `LANG`, `LC_*`, `TMPDIR` 중 존재하는 값만 기본 전달한다. 서버별 추가 변수는 명시적 allowlist만 허용하며 `KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL` 계열 이름은 config 기반 참조형 secret 계약이 생기기 전까지 거부한다.
+3. **File mention**: `@file`은 canonical workspace 내부 일반 UTF-8 text file만 허용한다. symlink가 workspace 밖을 가리키면 거부한다. 파일당 256 KiB, 턴당 512 KiB, 최대 16개 mention으로 제한하며 provider/security preflight 성공 전 파일을 읽거나 session에 기록하지 않는다.
+4. **Atomic file write**: temporary file은 validated parent 안에서 예측 불가능한 이름으로 exclusive create하고, 기존 mode를 보존하며 file sync 후 atomic rename한다. deterministic sibling `.tmp` 이름과 symlink-following write는 금지한다.
+5. **WriteFile**: `overwrite`는 required다. `false`는 create-only이며 기존 path를 절대 덮어쓰지 않는다. `true`만 기존 regular file 교체를 허용한다.
+6. **ReplaceFileContent**: `target_content`는 비어 있을 수 없고 정확히 1회 일치해야 한다. 0회 또는 2회 이상은 mutation 없이 오류다. preview와 execute는 같은 cardinality 판정을 공유한다.
+7. **Custom provider**: persisted ID는 정확히 `Custom: <id>`로 해석하고 settings에 없는 ID, 등록 실패, unsupported Gemini custom dialect는 zero-request error다. built-in provider로 fallback하지 않는다. configured base URL 이외 host로 credential을 redirect하지 않는다.
+8. **FetchURL**: `AllowAll`은 public Internet fetch만 뜻한다. loopback, private, link-local, multicast, unspecified, cloud metadata destination과 그 redirect hop은 거부한다. wire body는 5 MiB, rendered output은 10,000 UTF-8 bytes 이하로 제한하고 truncation metadata를 정확히 기록한다.
+9. **Shell/sandbox**: settings load 또는 sandbox capability failure는 host shell fallback이 아니라 Deny다. `extra_binds`는 trusted `extra_workspace_dirs`에 포함된 canonical directory만 read-only로 허용한다.
+10. **Local storage**: `~/.smlcli` directory는 owner-only `0700`, key/config/session/index file은 `0600`, no-follow, atomic replace를 적용한다. session history는 암호화되지 않은 local sensitive data이며 명시적 삭제 전까지 유지한다. restore는 line 1 MiB, file 32 MiB 상한을 가진다.
+11. **Network and provider logs**: credentials, authorization headers, query keys와 secret-like values는 중앙 redaction을 거친 뒤 UI/log/session sink에 전달한다.
+12. **Release targets**: canonical Linux artifact는 `x86_64-unknown-linux-musl`, canonical Windows artifact는 `x86_64-pc-windows-msvc`다. GNU/MinGW는 개발용 비공식 경로이며 release artifact로 주장하지 않는다.
+13. **Repository/package scope**: crates.io/source package에는 runtime source, required scripts, license, user/build documentation만 포함한다. local agent metadata, scratch rewrite 도구, generated cache와 design reference corpus는 package에서 제외한다.
+
+검증 완료 조건은 `audit_roadmap.md`의 “Phase 55: Final Multi-Audit Turn 1 Remediation”과 새 재감사 보고서가 소유한다. 구현 중 이 계약을 바꿔야 하면 코드를 먼저 수정하지 않고 이 절을 먼저 갱신한다.
+
 **Target Environment**
 Google Antigravity
 
@@ -220,12 +248,12 @@ CLI는 두 가지 진입 모드를 제공한다.
 
 ```bash
 smlcli
-smlcli run "explain this repository"
+smlcli run
 smlcli doctor
 smlcli sessions
 ```
 
-인자 없이 실행하면 TUI에 진입하고, `run`은 비대화형 1회 실행 모드다.
+인자 없이 실행하거나 `run`을 사용하면 동일한 인터랙티브 TUI에 진입한다. prompt 인자를 받는 비대화형 실행은 현재 shipped surface가 아니다.
 
 ### 3.4 Main Screen Layout
 
@@ -2341,7 +2369,7 @@ pub enum AuthStrategy {
 
 **Step 4: 모델 Fetch 호환**
 - `fetch_models()` 호출 시 `/v1/models` 엔드포인트 사용. 실패 시 빈 목록 반환 (수동 입력 허용).
-- Ollama는 `/api/tags` 형식이므로 `ToolDialect::Ollama` 추가 고려 (또는 v3.2 확장).
+- Ollama native `/api/tags` dialect는 현재 지원하지 않는다. `/v1` OpenAI-compatible endpoint를 노출한 경우에만 `Custom` provider로 등록한다.
 
 #### 41.4 테스트 요구사항
 - Mock HTTP 서버(wiremock-rs)로 커스텀 provider CRUD + chat + fetch_models E2E 테스트.
@@ -2816,12 +2844,13 @@ pub enum WizardStep {
 // 1. src/domain/provider.rs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderKind {
+    OpenAI,
+    Anthropic,
+    Xai,
     OpenRouter,
     Google,
-    OpenAi,
-    Anthropic,
-    Ollama,
-    LmStudio, // [v3.8.0] 추가됨
+    LmStudio,
+    Custom(String), // Ollama/vLLM 등 OpenAI-compatible endpoint
 }
 
 // 2. src/app/chat_runtime.rs 내 크레덴셜 해소 시그니처 및 LmStudio 예외 규격
@@ -2863,8 +2892,8 @@ pub fn resolve_credentials_for_provider(provider: &ProviderKind) -> Result<Provi
 TUI 레이아웃 패널 및 인덱스 핸들러에 적용된 명확한 정적 수치 명세는 다음과 같습니다.
 
 * **대시보드 팝업 최대 렌더링 높이 (`MAX_HEIGHT`)**:
-  - 기존: `5` (OpenRouter, Gemini, OpenAI, Anthropic, Ollama)
-  - 변경: `6` (LM Studio 추가로 인한 TUI 높이 1칸 확장 보정, `5 + custom` 구조 안정성 확보)
+  - built-in: `6` (OpenAI, Anthropic, xAI, OpenRouter, Google, LM Studio)
+  - custom: Ollama/vLLM 등 OpenAI-compatible endpoint는 `Custom(String)` 뒤에 추가
 * **Select Provider 팝업 메뉴 인덱스**:
   - `idx => 5` 분기: LM Studio 프로바이더와 1:1 매핑
 * **사용자 정의 프로바이더 오프셋 오버플로우 보정**:
@@ -2872,22 +2901,16 @@ TUI 레이아웃 패널 및 인덱스 핸들러에 적용된 명확한 정적 �
   - 변경: `saturating_sub(6)` (LM Studio 삽입에 따른 커서 선택 배열 인덱스 시프트 1칸 보정)
 
 #### 48-A.4 Real Data Samples (실데이터 샘플)
-LM Studio 프로바이더 연동 및 모델 설정 완료 시 `smlcli` 설정 영속화 파일(`~/.smlcli/config.json`)에 기록되는 규격 데이터 샘플입니다.
+LM Studio 프로바이더 연동 및 모델 설정 완료 시 `smlcli` 설정 영속화 파일(`~/.smlcli/config.toml`)에 기록되는 규격 데이터 샘플입니다.
 
-```json
-{
-  "active_provider": "LmStudio",
-  "providers": {
-    "LmStudio": {
-      "base_url": "http://localhost:1234/v1",
-      "default_model": "qwen2.5-7b-instruct",
-      "skip_credentials_validation": true
-    }
-  },
-  "security": {
-    "permission_preset": "SafeStarter"
-  }
-}
+```toml
+version = 1
+default_provider = "LmStudio"
+default_model = "qwen2.5-7b-instruct"
+lmstudio_base_url = "http://localhost:1234/v1"
+shell_policy = "Ask"
+file_write_policy = "AlwaysAsk"
+network_policy = "ProviderOnly"
 ```
 
 #### 48-A.5 Execution & Verification Path (구현 및 검증 경로)
@@ -2908,7 +2931,7 @@ LM Studio 프로바이더 연동 및 모델 설정 완료 시 `smlcli` 설정 �
 
 ---
 
-### Phase 53: Workspace Harness Snapshot & OS/Sandbox 정합화 (v3.9.1)
+### Phase 53: Workspace Harness Snapshot & OS/Sandbox 정합화 (Unreleased, planned v3.9.1)
 
 #### 53.1 Scope Closure
 - **목표**: 현재 작업 운영체제, Host Shell, Exec Shell, canonical workspace root, trust/deny 상태, Linux sandbox mount 정책을 하나의 `WorkspaceHarnessSnapshot` 계약으로 통합한다.
@@ -2998,7 +3021,7 @@ git diff --check
 
 ---
 
-### Phase 54: Workspace Harness Enforcement & Model Grounding (v3.9.2)
+### Phase 54: Workspace Harness Enforcement & Model Grounding (Unreleased, planned v3.9.2)
 
 #### 54.1 Scope Closure
 - **목표**: Phase 53에서 수집/표시한 `WorkspaceHarnessSnapshot`을 LLM 프롬프트, 도구 실행 전 preflight, 세션 메타데이터, 명령 검증에 연결하여 모델과 런타임이 현재 OS/작업환경을 항상 기준으로 삼게 한다.

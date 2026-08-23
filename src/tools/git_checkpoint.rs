@@ -233,48 +233,17 @@ pub fn create_checkpoint(cwd: &str, tool_name: &str) -> Result<bool> {
     Ok(true)
 }
 
-/// 가장 최근의 커밋(HEAD) 상태로 추적 중인(tracked) 파일만 되돌립니다.
-/// [v0.1.0-beta.23] git clean -fd 완전 제거: untracked 사용자 파일 보호.
-/// git reset --hard의 종료 코드를 반드시 검사하여 롤백 실패 시 에러를 전파합니다.
+/// 과거 자동 hard-reset API의 안전 격리 지점입니다.
+///
+/// 현재 HEAD는 checkpoint 생성 이후 다른 actor가 변경할 수 있고, tracked WIP도
+/// 도구 실행과 동시에 생길 수 있으므로 `git reset --hard`로 안전하게 복구할 수
+/// 없습니다. path/index snapshot transaction이 도입될 때까지 항상 거부합니다.
+#[cfg(test)]
 pub fn rollback_checkpoint(cwd: &str) -> Result<()> {
     if !is_git_repo(cwd) {
         return Ok(()); // Git 저장소가 아니면 스킵
     }
-
-    // [v2.1.0] Phase 29: 커밋 0개인 상태에서는 HEAD가 없으므로 리셋 불가
-    let has_commits = Command::new("git")
-        .stdin(std::process::Stdio::null())
-        .args(["rev-list", "-n", "1", "--all"])
-        .current_dir(cwd)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-
-    if !has_commits {
-        return Ok(());
-    }
-
-    // git reset --hard HEAD — tracked 파일만 HEAD 상태로 복원
-    let status = Command::new("git")
-        .stdin(std::process::Stdio::null())
-        .arg("reset")
-        .arg("--hard")
-        .arg("HEAD")
-        .current_dir(cwd)
-        .status()?;
-
-    if !status.success() {
-        return Err(anyhow::anyhow!(
-            "git reset --hard HEAD 실패 (exit code: {:?}). 롤백을 중단합니다.",
-            status.code()
-        ));
-    }
-
-    // [v0.1.0-beta.23] git clean -fd 삭제됨.
-    // 사유: untracked 파일(사용자 WIP, 새 파일 등)을 무조건 삭제하여 데이터 유실 위험이 있었음.
-    // 삭제 버전: v0.1.0-beta.23 (감사 보고서 H-1 대응)
-
-    Ok(())
+    Err(anyhow::anyhow!(
+        "자동 Git hard-reset rollback은 사용자 WIP 보호를 위해 비활성화되어 있습니다"
+    ))
 }

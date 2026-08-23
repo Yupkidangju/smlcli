@@ -12,6 +12,7 @@ use ratatui::{
 pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
     // [v0.1.0-beta.21] 동적 팔레트 참조: 테마 전환 즉시 반영
     let p = state.palette();
+    let tr = &state.i18n;
 
     let block = crate::tui::widgets::block_with_borders(
         Borders::ALL,
@@ -22,11 +23,11 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
             .map(|s| s.use_ascii_borders)
             .unwrap_or(false),
     )
-    .title("Setup Wizard");
+    .title(tr.tr("wizard_title"));
 
     let content = match state.ui.wizard.step {
         WizardStep::ProviderSelection => {
-            let mut list = "[Step 1] Select Provider\n\n".to_string();
+            let mut list = format!("{}\n\n", tr.tr("wizard_step_provider"));
             // [v3.7.2] LM Studio 로컬 프로바이더 선택 옵션 추가
             let providers = [
                 "OpenAI",
@@ -48,7 +49,7 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
                 list.push_str(err);
                 list.push('\n');
             }
-            list.push_str("\n(Use Up/Down to navigate, Enter to select)");
+            list.push_str(&format!("\n({})", tr.tr("select_hint")));
             list
         }
         // [v3.7.2] LmStudio의 base_url을 입력받기 위한 신규 위저드 단계 UI 렌더링 로직 추가
@@ -59,10 +60,12 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
                     .render();
             if state.ui.wizard.is_loading_models {
                 format!(
-                    "[Step 2] Validating Base URL...\n\
+                    "{}...\n\
                 Current URL: {}\n\n\
-                Please wait.",
-                    rendered
+                {}",
+                    tr.tr("wizard_step_base_url"),
+                    rendered,
+                    tr.tr("please_wait")
                 )
             } else {
                 let err_str = state.ui.wizard.err_msg.as_deref().unwrap_or("");
@@ -73,10 +76,12 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
                 };
 
                 format!(
-                    "[Step 2] Enter LM Studio Base URL\n\
+                    "{}\n\
                 Current Base URL: {}\n\n\
                 Press Enter to validate URL and fetch available models.{}",
-                    rendered, err_disp
+                    tr.tr("wizard_step_base_url"),
+                    rendered,
+                    err_disp
                 )
             }
         }
@@ -87,10 +92,12 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
                     .render();
             if state.ui.wizard.is_loading_models {
                 format!(
-                    "[Step 2] Validating API Key...\n\
+                    "{}...\n\
                 Current buffer: {}\n\n\
-                Please wait.",
-                    masked
+                {}",
+                    tr.tr("wizard_step_api_key"),
+                    masked,
+                    tr.tr("please_wait")
                 )
             } else {
                 let err_str = state.ui.wizard.err_msg.as_deref().unwrap_or("");
@@ -101,10 +108,12 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
                 };
 
                 format!(
-                    "[Step 2] Enter API Key\n\
+                    "{}\n\
                 Current buffer: {}\n\n\
                 Press Enter to submit and fetch available models.{}",
-                    masked, err_disp
+                    tr.tr("wizard_step_api_key"),
+                    masked,
+                    err_disp
                 )
             }
         }
@@ -123,23 +132,26 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
                     format!("\n\n!! [Input Error] !!\n{}", err_str)
                 };
                 format!(
-                    "[Step 3] Enter Custom Model Name (직접 수동 입력)\n\
+                    "{}\n\
                 Current Model Name: {}\n\n\
                 Press Enter to submit and proceed to save.{}",
-                    rendered, err_disp
+                    tr.tr("wizard_step_model"),
+                    rendered,
+                    err_disp
                 )
             } else if state.ui.wizard.is_loading_models {
-                "[Step 3] Loading Available Models...\nPlease wait.".to_string()
+                format!("{}\n{}", tr.tr("loading_models"), tr.tr("please_wait"))
             } else if let Some(e) = &state.ui.wizard.err_msg {
                 format!(
-                    "[Error Loading Models]\n{}\nPress Esc to restart or exit.",
+                    "{}\n{}\nPress Esc to restart or exit.",
+                    tr.tr("error_loading_models"),
                     e
                 )
             } else if state.ui.wizard.available_models.is_empty() {
                 "[Error Loading Models]\nNo models found. Please check API Key/Base URL and Restart."
                     .to_string()
             } else {
-                let mut list = "[Step 3] Select Model\n\n".to_string();
+                let mut list = format!("{}\n\n", tr.tr("wizard_step_model"));
                 let start_idx = state.ui.wizard.cursor_index.saturating_sub(5); // Show items in window
                 let end_idx = (start_idx + 10).min(state.ui.wizard.available_models.len());
                 for (i, m) in state.ui.wizard.available_models[start_idx..end_idx]
@@ -168,11 +180,19 @@ pub fn draw_wizard(f: &mut Frame, state: &AppState, area: Rect) {
             // [v0.1.0-beta.9] 5차 감사 Low: 문구가 실제 동작과 일치하도록 수정.
             // Enter를 눌러야 저장이 실행되므로, "saved" 대신 "Press Enter to save" 표현.
             if state.ui.wizard.is_loading_models {
-                "Saving configuration...\nPlease wait.".to_string()
+                format!(
+                    "{}...\n{}",
+                    tr.tr("wizard_step_saving"),
+                    tr.tr("please_wait")
+                )
             } else if let Some(err) = &state.ui.wizard.err_msg {
-                format!("[Save Error]\n{}\n\nPress Esc to go back and retry.", err)
+                format!(
+                    "[{}]\n{}\n\nPress Esc to go back and retry.",
+                    tr.tr("save_error"),
+                    err
+                )
             } else {
-                "Ready to save configuration.\nPress Enter to save and start smlcli.".to_string()
+                tr.tr("ready_save").to_string()
             }
         }
     };

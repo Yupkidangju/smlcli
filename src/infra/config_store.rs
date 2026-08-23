@@ -7,13 +7,30 @@
 use crate::domain::error::{ConfigError, SmlError};
 use crate::domain::settings::PersistedSettings;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::fs;
+
+static CONFIG_SAVE_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static NEXT_CONFIG_REVISION: AtomicU64 = AtomicU64::new(1);
+static COMMITTED_CONFIG_REVISION: AtomicU64 = AtomicU64::new(0);
 
 /// 설정 디렉토리: ~/.smlcli/
 /// ~/.smlcli 디렉토리 경로 반환
 pub fn get_config_dir() -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.join(".smlcli")
+    #[cfg(test)]
+    {
+        static TEST_CONFIG_ROOT: std::sync::OnceLock<tempfile::TempDir> =
+            std::sync::OnceLock::new();
+        TEST_CONFIG_ROOT
+            .get_or_init(|| tempfile::tempdir().expect("isolated test config root"))
+            .path()
+            .to_path_buf()
+    }
+    #[cfg(not(test))]
+    {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        home.join(".smlcli")
+    }
 }
 
 /// 설정 파일 전체 경로: ~/.smlcli/config.toml
@@ -23,7 +40,13 @@ pub(crate) fn config_path() -> PathBuf {
 
 /// 설정을 TOML 형식으로 디스크에 비동기 저장.
 pub async fn save_config(settings: &PersistedSettings) -> Result<(), SmlError> {
-    // [v0.1.0-beta.26] 메모리 전용 레코드(remember == false) 필터링 후 저장
+    save_config_to_path(settings, &config_path()).await
+}
+
+pub(crate) async fn save_config_to_path(
+    settings: &PersistedSettings,
+    path: &Path,
+) -> Result<(), SmlError> {
     let mut clean_settings = settings.clone();
     clean_settings.trusted_workspaces.retain(|r| r.remember);
 
@@ -34,115 +57,40 @@ pub async fn save_config(settings: &PersistedSettings) -> Result<(), SmlError> {
         )))
     })?;
 
-    let config_dir = get_config_dir();
-    fs::create_dir_all(&config_dir).await.map_err(|e| {
-        SmlError::Config(ConfigError::ParseFailure(format!(
-            "~/.smlcli 디렉토리 생성 실패: {}",
-            e
-        )))
-    })?;
-
-    let path = config_path();
-
-    // [v2.0.0] Phase 28: File Locking을 통한 동시 쓰기 경합 방지
+    let revision = NEXT_CONFIG_REVISION.fetch_add(1, Ordering::SeqCst);
+    let _writer_guard = CONFIG_SAVE_MUTEX.lock().await;
+    if revision < COMMITTED_CONFIG_REVISION.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+    let path = path.to_path_buf();
     let lock_path = path.with_extension("toml.lock");
-    let lock_file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(&lock_path)
-        .map_err(|e| {
-            SmlError::Config(ConfigError::ParseFailure(format!(
-                "config.toml.lock 파일 열기 실패: {}",
-                e
-            )))
-        })?;
-
-    use fs2::FileExt;
-    lock_file.lock_exclusive().map_err(|e| {
-        SmlError::Config(ConfigError::ParseFailure(format!(
-            "설정 파일 락 획득 실패: {}",
-            e
-        )))
-    })?;
-
-    let tmp_path = path.with_extension("toml.tmp");
-
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        options.mode(0o600);
-    }
-
-    let mut file = options.open(&tmp_path).await.map_err(|e| {
-        SmlError::Config(ConfigError::ParseFailure(format!(
-            "config.toml.tmp 임시 파일 생성 실패: {}",
-            e
-        )))
-    })?;
-
-    use tokio::io::AsyncWriteExt;
-    file.write_all(toml_str.as_bytes()).await.map_err(|e| {
-        if e.kind() == std::io::ErrorKind::StorageFull {
+    tokio::task::spawn_blocking(move || {
+        use fs2::FileExt;
+        let lock_file = crate::infra::secure_fs::open_private_lock(&lock_path)?;
+        lock_file.lock_exclusive()?;
+        crate::infra::secure_fs::atomic_write_private(&path, toml_str.as_bytes())
+    })
+    .await
+    .map_err(|error| SmlError::InfraError(format!("config writer join 실패: {error}")))?
+    .map_err(|error| {
+        if error.kind() == std::io::ErrorKind::StorageFull {
             SmlError::InfraError(
-                "디스크 용량이 부족하여 설정 저장을 중단합니다. 기존 설정은 보존됩니다.".into(),
+                "디스크 용량이 부족하여 설정 저장을 중단합니다. 기존 설정은 보존됩니다."
+                    .to_string(),
             )
         } else {
             SmlError::Config(ConfigError::ParseFailure(format!(
-                "config.toml.tmp 저장 실패: {}",
-                e
+                "private atomic config 저장 실패: {error}"
             )))
         }
     })?;
-
-    // [v1.4.0] fsync 호출로 디스크 기록 보장
-    file.sync_all().await.map_err(|e| {
-        if e.kind() == std::io::ErrorKind::StorageFull {
-            SmlError::InfraError(
-                "디스크 용량이 부족하여 설정 저장을 중단합니다. 기존 설정은 보존됩니다.".into(),
-            )
-        } else {
-            SmlError::Config(ConfigError::ParseFailure(format!(
-                "config.toml.tmp 동기화 실패: {}",
-                e
-            )))
-        }
-    })?;
-
-    // [v1.4.0] 원본 파일로 원자적 덮어쓰기(rename)
-    fs::rename(&tmp_path, &path).await.map_err(|e| {
-        SmlError::Config(ConfigError::ParseFailure(format!(
-            "config.toml 원자적 교체 실패: {}",
-            e
-        )))
-    })?;
-
+    COMMITTED_CONFIG_REVISION.store(revision, Ordering::SeqCst);
     Ok(())
-}
-
-/// [v2.2.0] Phase 30: Atomic 쓰기 실패 시 남겨진 .tmp 파일 일괄 정리
-pub async fn cleanup_tmp_files() {
-    let dir = get_config_dir();
-    if let Ok(mut entries) = fs::read_dir(&dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let path = entry.path();
-            if path.is_file()
-                && let Some(ext) = path.extension()
-                && ext == "tmp"
-            {
-                let _ = fs::remove_file(path).await;
-            }
-        }
-    }
 }
 
 /// 디스크에서 TOML 설정 비동기 로드.
 /// [v0.1.0-beta.20] 내부에서 ConfigError를 사용하여 에러를 구조화.
 pub async fn load_config() -> Result<Option<PersistedSettings>, SmlError> {
-    cleanup_tmp_files().await;
-
     let path = config_path();
     let mut settings_opt = load_config_from_path(&path).await?;
 
@@ -185,15 +133,24 @@ pub(crate) async fn load_config_from_path(
     // [v0.1.0-beta.21] I/O 에러 종류를 정확히 분류.
     // 파일 미존재(NotFound)와 권한 거부/기타 I/O 실패를 구분하여
     // 사용자에게 정확한 진단 메시지를 전달한다.
-    let content = fs::read_to_string(&path)
-        .await
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => SmlError::Config(ConfigError::NotFound),
-            std::io::ErrorKind::PermissionDenied => SmlError::Config(ConfigError::ParseFailure(
-                format!("파일 접근 권한 없음: {}", path.display()),
-            )),
-            _ => SmlError::IoError(e),
-        })?;
+    let read_path = path.clone();
+    let bytes = tokio::task::spawn_blocking(move || {
+        crate::infra::secure_fs::read_private_limited(&read_path, 4 * 1024 * 1024)
+    })
+    .await
+    .map_err(|error| SmlError::InfraError(format!("config reader join 실패: {error}")))?
+    .map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => SmlError::Config(ConfigError::NotFound),
+        std::io::ErrorKind::PermissionDenied => SmlError::Config(ConfigError::ParseFailure(
+            format!("파일 접근 권한 없음: {}", path.display()),
+        )),
+        _ => SmlError::IoError(e),
+    })?;
+    let content = String::from_utf8(bytes).map_err(|error| {
+        SmlError::Config(ConfigError::ParseFailure(format!(
+            "config.toml이 UTF-8이 아닙니다: {error}"
+        )))
+    })?;
 
     let settings: PersistedSettings = toml::from_str(&content)
         .map_err(|e| SmlError::Config(ConfigError::ParseFailure(e.to_string())))?;
