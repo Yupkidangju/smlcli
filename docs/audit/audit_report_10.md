@@ -4,12 +4,12 @@
 - **원 감사:** `docs/multi_audit/1/final_audit_report_1.md`
 - **원 finding:** FIN-F001~FIN-F025 (Critical 5, Major 19, Minor 1)
 - **감사 기준:** `AI_AUDIT_DOC_STANDARD.md`
-- **재감사 일시:** 2026-08-23 (Asia/Seoul)
-- **Git 기준:** `main` / `55d1c33` + 미커밋 remediation worktree
+- **재감사 일시:** 2026-08-23; FIN-F024 Re-audit #2 2026-08-24 (Asia/Seoul)
+- **Git 기준:** Re-audit #1 `main` / `55d1c33` + remediation worktree; FIN-F024 hosted-tested `3daac4f8cb531bcb1f202cce773efe8e4665686e`
 - **도구체인:** rustc/cargo 1.94.1, Linux 7.0.0-29-generic x86_64
-- **최종 판정:** **HOLD**
+- **최종 판정:** **PASS**
 
-> 코드·문서 remediation과 호스트 품질 게이트는 완료되었다. 25개 원 finding 중 24개는 `Verified`이며, FIN-F024는 musl/MSVC hosted runner와 실제 provenance publication이 아직 실행되지 않아 `Hold`다. 이 환경 공백을 PASS 또는 Accepted Risk로 환산하지 않는다.
+> 코드·문서 remediation과 로컬/hosted 품질 게이트가 완료되었다. 25개 원 finding은 모두 `Verified`다. FIN-F024는 commit `3daac4f8cb531bcb1f202cce773efe8e4665686e`의 Linux musl/Windows MSVC build·smoke, checksum/SPDX 검증, Sigstore provenance/SBOM 생성·검증 성공으로 종료했다.
 
 ## 1. Audit Scope
 
@@ -24,16 +24,15 @@
 - CI/release target, action provenance, SBOM/checksum/attestation, package scope
 - 원 감사 baseline과 remediation 후 명령 결과 비교
 
-최종 read-only pass는 마지막 README 계약 보정 후 수행했다. Git commit, push, tag, release 또는 운영 데이터 변경은 수행하지 않았다.
+Re-audit #1의 최종 read-only pass는 마지막 README 계약 보정 후 수행했으며 당시 commit/push는 하지 않았다. FIN-F024 Re-audit #2에서는 현재 변경을 검토·커밋·push하고 hosted gate를 실행했다. tag, GitHub Release 게시 또는 운영 데이터 변경은 수행하지 않았다.
 
 ## 2. Excluded Scope
 
 - 실제 유료/외부 LLM credential 전송과 public DNS/redirect 실서비스 호출
-- GitHub-hosted `ubuntu-24.04` 및 `windows-2025` workflow 실행
-- release tag/upload와 공개 attestation 조회
+- release tag/upload와 GitHub Release 게시
 - 물리 TTY 및 여러 terminal emulator의 수동 시각 검증
 
-외부 provider는 deterministic transport/parser/recorder-equivalent 테스트로 대체했다. 반면 canonical release target은 실제 runner 결과가 지원 계약의 일부이므로 FIN-F024에 대해 제외 범위를 PASS로 간주하지 않았다.
+외부 provider는 deterministic transport/parser/recorder-equivalent 테스트로 대체했다. canonical release target은 Re-audit #2에서 실제 GitHub-hosted runner와 공개 attestation으로 검증했다. tag 전용 게시 job은 `main` 검증에서 설계대로 skipped 되었고 실제 release publication은 이번 FIN-F024 범위가 아니다.
 
 ## 3. Evidence Summary
 
@@ -52,6 +51,10 @@
 | SPDX 2.3 + SHA-256 verification | Not Covered | PASS |
 | local musl build | Not Covered | target 설치 후 `x86_64-linux-musl-gcc` 부재로 환경 차단 |
 | local MSVC check | Not Covered | target 설치 후 Windows SDK `lib.exe` 부재로 환경 차단 |
+| hosted CI / pre-release quality gate | Not Covered | PASS, commit `3daac4f8cb531bcb1f202cce773efe8e4665686e` |
+| hosted Linux musl build + smoke | Not Covered | PASS, job `97220472471` |
+| hosted Windows MSVC build + smoke | Not Covered | PASS, job `97220472469` |
+| hosted checksum/SPDX + Sigstore provenance/SBOM | Not Covered | PASS, 두 target 생성 및 self-verification |
 
 `cargo deny`의 transitive duplicate 경고는 `getrandom`, `hashbrown`, `windows-sys` 세 계열이며 advisory/license/source 위반은 아니다. 후속 dependency convergence 후보로만 남긴다.
 
@@ -234,12 +237,26 @@
 ### [FIN-F024] Re-audit #2 — hosted cross-target/provenance execution
 
 - **Re-audit date:** 2026-08-24 (Asia/Seoul)
-- **Status:** **In Progress**
-- **Hosted attempt:** commit `a518a99e65eee20c722b5c05240ea46d4b83d5ea`, [Release run 32648622100](https://github.com/Yupkidangju/smlcli/actions/runs/32648622100), [CI run 32648622085](https://github.com/Yupkidangju/smlcli/actions/runs/32648622085).
-- **Verified partial evidence:** CI와 pre-release quality gate는 성공했다. [Linux musl job 97217553725](https://github.com/Yupkidangju/smlcli/actions/runs/32648622100/job/97217553725)는 build, `--version`/`--help` smoke, checksum/SPDX 2.3, Sigstore provenance/SBOM 생성·검증 및 artifact upload를 모두 통과했다.
-- **Fail-closed evidence:** [Windows MSVC job 97217553777](https://github.com/Yupkidangju/smlcli/actions/runs/32648622100/job/97217553777)는 release build에서 실패해 이후 smoke/checksum/SBOM/attestation이 모두 skipped 되었다. `RUSTFLAGS='-D warnings' cargo build --release --locked --target x86_64-pc-windows-gnu`로 동일 Windows cfg 경고 4건을 재현했다.
-- **Root cause / corrective plan:** `src/infra/secure_fs.rs`의 Unix 전용 parameter 사용과 `OpenOptions` mutation이 non-Unix compile에서 unused/unused-mut 경고가 되고 workflow의 `-D warnings`로 오류 승격된다. cfg별 구조를 분리해 경고를 제거하고 같은 local Windows cross-build와 hosted MSVC 전체 gate를 재실행한다.
-- **Interim verdict:** Windows 실행 증거가 완성될 때까지 FIN-F024와 전체 판정은 `Hold`를 유지한다.
+- **Original Severity / Prior Status:** Major / Hold
+- **Status:** **Verified**
+- **Tested commit:** `3daac4f8cb531bcb1f202cce773efe8e4665686e`
+- **Workflow runs:** [Release verification 32649830458](https://github.com/Yupkidangju/smlcli/actions/runs/32649830458) — `success`; [CI 32649830514](https://github.com/Yupkidangju/smlcli/actions/runs/32649830514) — `success`.
+- **Linux musl evidence:** [job 97220472471](https://github.com/Yupkidangju/smlcli/actions/runs/32649830458/job/97220472471) — release build, `--version`/`--help` smoke, SHA-256, SPDX 2.3, provenance/SBOM attestation 생성·검증, artifact upload가 모두 `success`다.
+- **Windows MSVC evidence:** [job 97220472469](https://github.com/Yupkidangju/smlcli/actions/runs/32649830458/job/97220472469) — release build, `--version`/`--help` smoke, SHA-256, SPDX 2.3, provenance/SBOM attestation 생성·검증, artifact upload가 모두 `success`다.
+- **Artifacts:** Linux `package-x86_64-unknown-linux-musl` ID `9495998376`, archive `sha256:f818b68ca93a3f004ebff1cd2b23d42d55cc6dc71d6490210e818e6400726e49`; Windows `package-x86_64-pc-windows-msvc` ID `9496037980`, archive `sha256:a1e2593fc6ad55647149fea3c3cb0e2197f741584a197a0a0b116f3a0daf7782`.
+
+| Target | Predicate | Public attestation | Binary SHA-256 |
+| --- | --- | --- | --- |
+| Linux musl | SLSA provenance v1 | [42435164](https://github.com/Yupkidangju/smlcli/attestations/42435164) | `306b66b073818d83ae05d9d6cf80b48a172e2968c8370ba872a58a1899018a8a` |
+| Linux musl | SPDX 2.3 SBOM | [42435169](https://github.com/Yupkidangju/smlcli/attestations/42435169) | `306b66b073818d83ae05d9d6cf80b48a172e2968c8370ba872a58a1899018a8a` |
+| Windows MSVC | SLSA provenance v1 | [42435368](https://github.com/Yupkidangju/smlcli/attestations/42435368) | `86429858e02d643ad86ceaa3d6b224d799067e9cc205f7da30d4109690e9c387` |
+| Windows MSVC | SPDX 2.3 SBOM | [42435370](https://github.com/Yupkidangju/smlcli/attestations/42435370) | `86429858e02d643ad86ceaa3d6b224d799067e9cc205f7da30d4109690e9c387` |
+
+- **Attested companions:** Linux provenance는 `.sha256` `5c65cdbb733560e93add5ff9de7c8cf3df5aafadaba497cfb5d1a5779fe9369e`와 `.spdx.json` `3ed04f5788077ea49d111f7e75c1175bbf06050235733dd91c646b4a6be34286`을 포함한다. Windows provenance는 `.sha256` `649670c10ae55e6a2c787fa6f85b22c3ce99b290bef999fe00975003f1de1f72`와 `.spdx.json` `b00ebc7f60e04b3762fb05cd738eb46b9be0a3c32b656703ae9d2f325db7425f`을 포함한다.
+- **Verification:** workflow 내부 `gh attestation verify`의 provenance/SPDX predicate 검증이 두 target에서 성공했다. subject-digest REST 조회가 위 네 Sigstore bundle을 반환했고 공개 URL은 모두 HTTP 200이다.
+- **Fail-closed history:** 최초 remediation commit `d35f452d52d6384fb83df4bbc68eafa6eae3ab46`의 hosted gate는 fresh RustSec `RUSTSEC-2026-0258`을 차단했다. `h2 0.4.16` 보정 commit `a518a99e65eee20c722b5c05240ea46d4b83d5ea`의 [Release run 32648622100](https://github.com/Yupkidangju/smlcli/actions/runs/32648622100)은 Linux 전체 gate를 통과했지만 Windows cfg 경고를 `-D warnings`로 차단했다. 해당 경고 4건을 local Windows GNU cross-release build로 재현·구조적으로 보정한 뒤 최종 commit에서 두 target이 통과했다.
+- **Publication boundary:** `main` 검증이므로 tag 전용 [Publish verified GitHub Release job 97221294827](https://github.com/Yupkidangju/smlcli/actions/runs/32649830458/job/97221294827)은 설계대로 `skipped`다. tag와 GitHub Release는 생성하지 않았다.
+- **Residual risk:** FIN-F024 범위 내 없음.
 
 ## 6. Pass 3: Security Re-audit
 
@@ -303,19 +320,16 @@
 
 - **Related finding:** FIN-F024
 - **Pass 1/3 evidence:** 문서, workflow, permissions, action SHA, checksum/SBOM/attestation control은 일치하고 정적 검사를 통과한다.
-- **Pass 2 evidence:** canonical musl/MSVC artifact가 실제 hosted runner에서 생성·smoke·attest된 증거는 없다.
-- **Resolution:** 낮은 판정을 우선해 FIN-F024와 전체 결론을 `Hold`로 유지한다.
+- **Pass 2 evidence:** commit `3daac4f8cb531bcb1f202cce773efe8e4665686e`의 canonical musl/MSVC artifact가 hosted runner에서 생성·smoke·checksum/SPDX 검증·attest되었고 공개 Sigstore bundle과 workflow self-verification이 일치한다.
+- **Resolution:** **Resolved**. FIN-F024를 `Verified`로 종료한다.
 
 ## 8. Required Fixes Before PASS
 
-코드상 새 Critical/Major 수정 요구는 발견되지 않았다. PASS 전 필요한 실행 게이트는 다음 하나다.
-
-1. 현재 tree를 검토·커밋한 뒤 GitHub-hosted CI/release workflow에서 Linux musl 및 Windows MSVC build+smoke를 성공시킨다.
-2. 생성된 checksum, SPDX SBOM, Sigstore attestation을 검증하고 workflow run URL/commit SHA를 `Re-audit #2`에 기록한다.
+없음. FIN-F024의 Linux musl/Windows MSVC build·smoke와 checksum/SPDX/Sigstore 실행 게이트는 Re-audit #2에서 충족했다.
 
 ## 9. Accepted Risks
 
-- 없음. FIN-F024를 risk acceptance로 면제하지 않았다.
+- 없음. FIN-F024는 risk acceptance가 아니라 실제 hosted 실행·attestation 증거로 `Verified`다.
 
 ## 10. Needs Spec Clarification
 
@@ -334,16 +348,16 @@
 | FIN-F011~FIN-F015 | 5 Verified |
 | FIN-F016~FIN-F020 | 5 Verified |
 | FIN-F021~FIN-F023 | 3 Verified |
-| FIN-F024 | 1 Hold |
+| FIN-F024 | 1 Verified |
 | FIN-F025 | 1 Verified |
 | New findings | 0 |
 
 ## 13. Final Decision
 
-**HOLD**
+**PASS**
 
-원 감사의 5개 Critical은 모두 해소되었고, 총 24개 finding이 문서·코드·회귀·호스트 실행 증거에서 `Verified`다. 그러나 원 Major FIN-F024의 canonical release artifact 실행 증거가 남아 있다. 표준상 검증되지 않은 build/release gate를 PASS로 해석할 수 없으므로 현재 제품 remediation은 완료 상태이지만 릴리스 판정은 HOLD다.
+원 감사의 5개 Critical을 포함한 총 25개 finding이 문서·코드·회귀·로컬 및 hosted 실행 증거에서 모두 `Verified`다. FIN-F024는 commit `3daac4f8cb531bcb1f202cce773efe8e4665686e`의 Linux musl/Windows MSVC build·smoke, checksum/SPDX 검증 및 Sigstore provenance/SBOM attestation 생성·검증 성공으로 종료되었다.
 
 ## 14. Coder / Release Handoff
 
-후속 작업은 추가 코드 수정이 아니라 현재 변경 검토 및 hosted release gate 실행이다. 기준 보고서는 이 파일이며, 성공한 workflow의 commit SHA, run URL, 두 target smoke 결과와 attestation URL을 첨부해 FIN-F024 Re-audit #2만 수행하면 된다.
+FIN-F024 Re-audit #2가 완료되었다. hosted 검증 대상 commit, workflow/job URL, artifact digest 및 attestation URL은 위 절에 기록했다. 실제 tag와 GitHub Release 게시에는 별도 릴리스 승인이 필요하며 이번 재감사에서는 수행하지 않았다.
